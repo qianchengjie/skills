@@ -121,6 +121,12 @@ const REVIEW_VERDICT_STATUSES = new Set([
   'not-applicable',
 ]);
 const REVIEW_VERDICT_SEVERITIES = new Set(['critical', 'major', 'minor', 'not-applicable']);
+const PROJECT_RULES_EVIDENCE_KIND = {
+  CITED: 'cited',
+  NOT_APPLICABLE: 'not-applicable',
+  MISSING: 'missing',
+  INVALID: 'invalid',
+};
 const WHOLE_REVIEW_VERDICTS = [
   'Global Constraints Compliance',
   'Cross-slice Interface Consistency',
@@ -466,20 +472,35 @@ function getCanonicalReviewVerdict(verdict) {
   return REVIEW_VERDICT_ALIASES.get(verdict) ?? verdict;
 }
 
-function hasProjectRulesEvidence(evidence) {
+function classifyProjectRulesEvidence(evidence) {
   const value = evidence ?? '';
-  if (hasTemplatePlaceholder(value)) return false;
-  if (
-    /(缺少|缺失|未检查|未引用|未提供|没有|不存在|\bmissing\b|\bunchecked\b|\bnot checked\b|\bnot found\b|\babsent\b)/i.test(value)
-    && /#?项目规范|\bproject rules?\b/i.test(value)
-  ) {
-    return false;
-  }
-  return /#项目规范(?:$|[\s,，.;；:：。、)）\]])/.test(value)
-    || /不适用/i.test(value)
+  if (hasTemplatePlaceholder(value)) return PROJECT_RULES_EVIDENCE_KIND.INVALID;
+  if (isMissingProjectRulesEvidence(value)) return PROJECT_RULES_EVIDENCE_KIND.MISSING;
+  if (hasProjectRulesAnchor(value)) return PROJECT_RULES_EVIDENCE_KIND.CITED;
+  if (isProjectRulesNotApplicable(value)) return PROJECT_RULES_EVIDENCE_KIND.NOT_APPLICABLE;
+  return PROJECT_RULES_EVIDENCE_KIND.INVALID;
+}
+
+function isMissingProjectRulesEvidence(value) {
+  return /(缺少|缺失|未检查|未引用|未提供|不存在|没有[^，,。；;\r\n]*证据|\bmissing\b|\bunchecked\b|\bnot checked\b|\bnot found\b|\babsent\b)/i.test(value)
+    && /#?项目规范|\bproject rules?\b/i.test(value);
+}
+
+function hasProjectRulesAnchor(value) {
+  return /#项目规范(?:$|[\s,，.;；:：。、)）\]])/.test(value);
+}
+
+function isProjectRulesNotApplicable(value) {
+  return /不适用/i.test(value)
     || /\bnot[-\s]?applicable\b/i.test(value)
     || /(^|[^A-Za-z0-9])n\s*\/\s*a([^A-Za-z0-9]|$)/i.test(value)
     || /(^|[^A-Za-z0-9])na([^A-Za-z0-9]|$)/i.test(value);
+}
+
+function hasProjectRulesEvidence(evidence) {
+  const kind = classifyProjectRulesEvidence(evidence);
+  return kind === PROJECT_RULES_EVIDENCE_KIND.CITED
+    || kind === PROJECT_RULES_EVIDENCE_KIND.NOT_APPLICABLE;
 }
 
 function parseWholeReviewVerdicts(plan) {

@@ -1674,7 +1674,14 @@ test('validate rejects AI Review passed when ordinary words contain na', async (
 });
 
 test('validate rejects AI Review passed with invalid project rules keyword evidence', async () => {
-  const evidences = ['缺少项目规范', '未检查项目规范', '<项目规范>', '缺少 review-packages/S1.md#项目规范'];
+  const evidences = [
+    '缺少项目规范',
+    '未检查项目规范',
+    '<项目规范>',
+    '缺少 review-packages/S1.md#项目规范',
+    '没有项目规范证据',
+    '没有违反项目规范',
+  ];
   for (const [index, evidence] of evidences.entries()) {
     await withTempRepo(async () => {
       const planDir = path.join('dev-plans', `2026-06-10-review-project-rules-invalid-${index}`);
@@ -1697,6 +1704,8 @@ test('validate accepts AI Review passed with project rules anchor separators', a
     'review-packages/S1.md#项目规范: AGENTS.md',
     'review-packages/S1.md#项目规范。AGENTS.md',
     'review-packages/S1.md#项目规范、AGENTS.md',
+    'review-packages/S1.md#项目规范：没有新增依赖',
+    'review-packages/S1.md#项目规范：没有违反项目规范',
   ];
   for (const [index, evidence] of evidences.entries()) {
     await withTempRepo(async () => {
