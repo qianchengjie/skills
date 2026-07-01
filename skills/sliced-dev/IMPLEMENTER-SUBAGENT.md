@@ -56,6 +56,7 @@ Task brief：<dev-plans/.../task-briefs/<S-id>.md>
 - task brief 存在且切片号一致。
 - task brief 内没有阻塞本片的 open D。
 - 必读上下文足够支持实现。
+- 已按 task brief 的 `项目规范` 判断本片规则；若缺失或不够判断则 blocked。
 - 预计改动不会越过 task brief 的允许修改范围，也不会命中禁止修改。
 - 没有发现新分叉、风险升级或验证方式变化。
 

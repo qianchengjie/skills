@@ -91,6 +91,8 @@ dev-plans/
 
 - 需理解：待执行前补充。
 - 必读上下文：待执行前补充。
+- 项目规范:
+  - 待执行前补充。
 - 允许修改：
   - 待执行前补充。
 - 禁止修改：
@@ -181,6 +183,7 @@ dev-plans/
 
 - `需理解`：本片必须理解的业务、调用链、项目风格或旧行为。
 - `必读上下文`：执行前必须读取的文件、搜索关键词或证据；只列必要上下文，不复述全项目。
+- `项目规范`：本片必须遵守并供 review 引用的项目规则入口或摘录；无则写 `无`。
 - `允许修改`：本片允许改动的文件、目录或 glob。`diff-check` 会读取该列表。
 - `禁止修改`：本片禁止改动的文件、目录或 glob。`diff-check` 会读取该列表。
 - `禁止词`：可选的禁止新增词 / 命名同义词 / 高风险模式；无则写 `无`。
@@ -190,7 +193,7 @@ dev-plans/
 
 `允许修改` 不允许长期写宽泛的“全部”。若执行中发现需要越界改动，不能直接改，应先停止并说明为什么当前切片边界不足。
 
-当切片头部写 `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 必须是已填写内容，不得仍为 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`禁止修改` 也必须显式存在，但可以写 `无`。
+当切片头部写 `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 必须是已填写内容，不得仍为 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规范` 和 `禁止修改` 也必须显式存在，但可以写 `无`。
 
 ## 接口契约
 
@@ -262,9 +265,10 @@ dev-plans/
 
 `task-briefs/<S-id>.md` 和 `task-reports/<S-id>.md` 由脚本生成，是实现与审查的临时交接文件，不写入 `plan.md` 正文，也不作为 durable 状态真源。
 
-- task brief 从当前切片、`全局约束`、`上下文预检`（含 `禁止词` / `基线脏文件`）、`接口契约`、关联 D/A 和门禁记录提取窄上下文；修改运行时逻辑时，implementer subagent 必须补直接相关测试，或在 task report 说明不适用原因。
+- task brief 从当前切片、`全局约束`、`上下文预检`（含 `项目规范` / `禁止词` / `基线脏文件`）、`接口契约`、关联 D/A 和门禁记录提取窄上下文；修改运行时逻辑时，implementer subagent 必须补直接相关测试，或在 task report 说明不适用原因。
 - task report 由 implementer subagent 填写实际完成、改动文件、验证、偏离风险和 `Implementer 结论`；控制器不得代写 ready report。
 - `review-package` 只接受 `Implementer 结论：ready-for-review` 的 task report。
+- `review-package` 必须包含 `项目规范`；第三 verdict 的 Evidence 必须引用该小节或明确说明本片不适用，否则不能 `passed`。
 
 ## AI Review 结论
 
@@ -274,7 +278,7 @@ dev-plans/
 
 - `Requirement Compliance`：需求与验收是否被当前 diff 满足。
 - `Slice Boundary / Interface Compliance`：是否遵守上下文预检、非目标、禁止修改、全局约束与接口契约。
-- `Code Quality / AI Contamination Check`：是否覆盖 maintainability、test quality、unnecessary complexity、project style consistency、performance footguns、error handling consistency，以及无领域语义 helper、无证据 fallback、新同义词、过早抽象、吞非法状态等 AI 污染。旧记录中的 `AI Contamination Check` 仅作兼容。
+- `Code Quality / AI Contamination Check`：是否覆盖 maintainability、test quality、unnecessary complexity、project style consistency、project rules compliance、performance footguns、error handling consistency，以及无领域语义 helper、无证据 fallback、新同义词、过早抽象、吞非法状态等 AI 污染。旧记录中的 `AI Contamination Check` 仅作兼容。
 
 表格格式：
 
@@ -285,7 +289,7 @@ dev-plans/
 | --- | --- | --- | --- |
 | Requirement Compliance | passed | not-applicable | review-packages/S1.md#... |
 | Slice Boundary / Interface Compliance | passed | not-applicable | review-packages/S1.md#... |
-| Code Quality / AI Contamination Check | passed | not-applicable | review-packages/S1.md#... |
+| Code Quality / AI Contamination Check | passed | not-applicable | review-packages/S1.md#项目规范 |
 ```
 
 `Status` 只允许：
@@ -411,7 +415,7 @@ dev-plans/
 - 切片 `用户验收`：`pending` / `passed` / `issues` / `skipped` 开头，可追加中文说明；`skipped` 必须写明用户明确跳过原因
 - AI Review verdict `Status`：`passed` / `failed` / `cannot-verify-from-package` / `not-applicable`
 - AI Review verdict `Severity`：`critical` / `major` / `minor` / `not-applicable`
-- `上下文预检：ready`：必填预检字段不得是占位内容；`禁止修改` 可显式写 `无`
+- `上下文预检：ready`：必填预检字段不得是占位内容；`项目规范` / `禁止修改` 可显式写 `无`
 - `AI Review：issues/blocked`：必须有非占位头部摘要 / 原因，或有带非占位 Evidence 的阻塞 verdict 证据
 - `AI Review：passed`：必须有完整三 verdict，且不得出现 `failed` / `cannot-verify-from-package` / `critical`；第三 verdict 正式名称为 `Code Quality / AI Contamination Check`，旧 `AI Contamination Check` 仅作兼容
 - `用户验收：pending/issues`：阻塞切片 `done`；用户不满意且不改变范围 / 口径时进入本片有限修复，改变范围 / 口径时转 D 分叉

@@ -112,7 +112,7 @@ task brief 只从 `plan.md`、`decisions.md`、`audits.md` 抽取必要上下文
 
 - 当前切片标题和 `任务内容`。
 - `全局约束`。
-- `上下文预检` 中的 `需理解`、`必读上下文`、`允许修改`、`禁止修改`、`禁止词`、`基线脏文件`、`非目标`、`停止条件`。
+- `上下文预检` 中的 `需理解`、`必读上下文`、`项目规范`、`允许修改`、`禁止修改`、`禁止词`、`基线脏文件`、`非目标`、`停止条件`。
 - `接口契约` 的 `produces` / `consumes`。
 - 当前切片关联的 D/A 正文。
 - 门禁要求、“必须写 task report”的输出要求，以及运行时逻辑变更必须补直接相关测试的要求。
@@ -152,6 +152,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs review-package dev-plans/YYYY-M
 - Task brief 和 task report。
 - 当前切片块：头部字段、关联项、上下文预检、接口契约、任务内容、验收。
 - `全局约束`。
+- `项目规范`。
 - 关联 `D*` / `A*` 正文。
 - 当前 git dirty file inventory、diff stat 和 diff。
 - 门禁记录。
@@ -229,6 +230,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs review-prompt dev-plans/YYYY-MM
 - test quality。
 - unnecessary complexity。
 - project style consistency。
+- project rules compliance；Evidence 必须引用 `项目规范` 或说明本片不适用。
 - performance footguns。
 - error handling consistency。
 - 无领域语义 helper。
@@ -260,7 +262,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/YYYY-MM-D
 - 当前 working tree 中除当前计划记录、`review-packages/**`、`task-briefs/**`、`task-reports/**` 和 `dev-plans/.gitignore` 外的 dirty files，必须落在所有 done slices 的 `允许修改` 范围 union 内，且不得命中任一 done slice 的 `禁止修改`。
 - 当前策略不是 strict clean：in-scope uncommitted business files 不会单独阻塞 close-check；若项目要求最终 clean，应在外层 git / CI gate 或未来显式 strict mode 中执行。
 - 每个 `done` slice 必须在 `#### 门禁记录` 中有 `diff-check` 结构化记录，`Status` 必须为 `passed`，`Command` 和 `Evidence` 必须非空、非占位。
-- 每个 `done` 且 `AI Review：passed` 的 slice 必须存在非空 task brief、`Implementer 结论：ready-for-review` 的非空 task report、非空 review-package；review-package 必须包含 Task Brief、Task Report、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID。
+- 每个 `done` 且 `AI Review：passed` 的 slice 必须存在非空 task brief、`Implementer 结论：ready-for-review` 的非空 task report、非空 review-package；review-package 必须包含 Task Brief、Task Report、项目规范、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。
 - 计算是否需要 whole review：切片数 > 1、任一切片 `风险：B/C`、任一切片有真实 `#### 接口契约`、任一切片关联 `D*`、任一切片 `允许修改` 跨模块。
 - 需要 whole review 时，`Whole Review` 必须是 `passed`；不需要时可为 `not-required`。
@@ -336,8 +338,8 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - `硬门禁` 只允许 `pending` / `passed` / `failed` / `blocked` / `skipped` 开头。
 - `AI Review` 只允许 `pending` / `passed` / `issues` / `blocked` / `skipped` 开头。
 - `修复次数` 必须是 `当前次数/最大次数`，最大次数大于 0，当前次数不超过最大次数。
-- `上下文预检` 必须包含 `需理解`、`必读上下文`、`允许修改`、`禁止修改`、`非目标`、`停止条件`。
-- `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不能是 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`禁止修改` 可显式写 `无`。
+- `上下文预检` 必须包含 `需理解`、`必读上下文`、`项目规范`、`允许修改`、`禁止修改`、`非目标`、`停止条件`。
+- `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不能是 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规范` / `禁止修改` 可显式写 `无`。
 - 若切片存在 `#### 接口契约`，必须包含 `消费`、`产出`，且每项必须显式写 `无` 或可解析条目；`无` 不得和真实条目混写。
 - `产出` 中的 `I*` 接口 ID 必须全局唯一；`消费` 只允许 `I* from S*`，且必须匹配对应切片的 `产出`。
 - 消费接口的切片必须在头部 `依赖` 字段中声明生产切片。

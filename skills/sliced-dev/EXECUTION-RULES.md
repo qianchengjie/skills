@@ -74,6 +74,7 @@ REPORT_AND_NEXT
 - 风险：A / B
 - 需理解：<一行>
 - 必读：<文件 / 搜索词，读完才动手>
+- 规范：<项目规则入口 / 摘录；无则写无>
 - 允许修改：<文件 / 目录>
 - 不碰：<排除范围，特别是 requests / 路由 / 公共导出>
 - 验证：<具体命令>
@@ -103,14 +104,15 @@ REPORT_AND_NEXT
 
 ## 上下文预检
 
-每个切片在执行前必须先做上下文预检。它不是实现方案，也不是长篇分析；只回答六件事：
+每个切片在执行前必须先做上下文预检。它不是实现方案，也不是长篇分析；只回答七件事：
 
 1. 本片风险等级是 A / B / C。
 2. 本片必须理解哪些上下文。
 3. 必须读取哪些文件、搜索哪些关键词或查看哪些旧行为。
-4. 本片是否触碰 `全局约束` 或当前切片 `接口契约`。
-5. 本片允许 / 禁止改哪些文件。
-6. 哪些情况必须停止。
+4. 本片必须遵守哪些项目规范入口或摘录；无则写 `无`。
+5. 本片是否触碰 `全局约束` 或当前切片 `接口契约`。
+6. 本片允许 / 禁止改哪些文件。
+7. 哪些情况必须停止。
 
 输出必须写回当前切片的 `#### 上下文预检`，并同步切片字段：
 
@@ -118,7 +120,7 @@ REPORT_AND_NEXT
 - `执行：自动/需确认/待判定`
 - `上下文预检：ready/blocked/skipped`
 
-写 `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不得仍是占位内容；`禁止修改` 必须显式存在，可写 `无`。
+写 `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不得仍是占位内容；`项目规范` 和 `禁止修改` 必须显式存在，可写 `无`。
 
 ### 上下文预检输出限制
 
@@ -132,7 +134,7 @@ REPORT_AND_NEXT
 ### 必读上下文读取规则
 
 - `必读上下文` 读完之前，不允许进入实现。
-- `全局约束` 是每片默认继承的约束；当前片声明 `#### 接口契约` 时，执行前必须读取该小节。
+- `全局约束` 是每片默认继承的约束；`项目规范` 是执行与 AI Review 的拒收依据；当前片声明 `#### 接口契约` 时，执行前必须读取该小节。
 - 读完后发现原判断错误，必须更新 `上下文预检` 和风险等级。
 - 需要修改 `允许修改` 外的文件，必须停止并说明原因；不能先改再补记录。
 - 上下文不足时写 `上下文预检：blocked（原因）`，并把切片 `状态` 置为 `blocked` 或记录 D 分叉。
@@ -286,7 +288,9 @@ reviewer subagent 调用模板和权限边界见 [REVIEWER-SUBAGENT.md](REVIEWER
 
 - `Requirement Compliance`：当前 diff 是否满足本片 `任务内容` / 验收。
 - `Slice Boundary / Interface Compliance`：是否遵守全局约束、上下文预检、非目标、禁止修改和接口契约。
-- `Code Quality / AI Contamination Check`：是否覆盖 maintainability、test quality、unnecessary complexity、project style consistency、performance footguns、error handling consistency，以及无领域语义 helper、无证据 null / fallback、新同义词、主流程切碎、过早抽象或吞非法状态。旧记录中的 `AI Contamination Check` 仅作兼容。
+- `Code Quality / AI Contamination Check`：是否覆盖 maintainability、test quality、unnecessary complexity、project style consistency、project rules compliance、performance footguns、error handling consistency，以及无领域语义 helper、无证据 null / fallback、新同义词、主流程切碎、过早抽象或吞非法状态。旧记录中的 `AI Contamination Check` 仅作兼容。
+
+第三 verdict 的 Evidence 必须引用 review-package 的 `项目规范`，或明确说明本片不适用；缺证据时输出 `cannot-verify-from-package`，不得 passed。
 
 `Status` 只允许 `passed` / `failed` / `cannot-verify-from-package` / `not-applicable`。`Severity` 只允许 `critical` / `major` / `minor` / `not-applicable`。
 
@@ -344,7 +348,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/<date-slu
 
 - 当前 working tree 中除当前计划记录、`review-packages/**`、`task-briefs/**`、`task-reports/**` 和 `dev-plans/.gitignore` 外的 dirty files，必须落在所有 done slices 的 `允许修改` 范围 union 内，且不得命中任一 done slice 的 `禁止修改`。
 - 每个 done slice 必须有 `diff-check` gate evidence，且 `Status=passed`、`Command` / `Evidence` 非空、非占位、`Command` 指向当前计划目录和当前切片。
-- 每个 done + `AI Review：passed` slice 必须有非空 task brief、`Implementer 结论：ready-for-review` 的非空 task report、非空 review-package；review-package 必须包含 Task Brief、Task Report、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID。
+- 每个 done + `AI Review：passed` slice 必须有非空 task brief、`Implementer 结论：ready-for-review` 的非空 task report、非空 review-package；review-package 必须包含 Task Brief、Task Report、项目规范、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。
 - `ledger.md` 必须存在，`Current Checkpoint` 必须有非占位 checkpoint，且每个 done slice 至少有一条 durable checkpoint。
 
