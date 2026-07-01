@@ -290,7 +290,7 @@ reviewer subagent 调用模板和权限边界见 [REVIEWER-SUBAGENT.md](REVIEWER
 - `Slice Boundary / Interface Compliance`：是否遵守全局约束、上下文预检、非目标、禁止修改和接口契约。
 - `Code Quality / AI Contamination Check`：是否覆盖 maintainability、test quality、unnecessary complexity、project style consistency、project rules compliance、performance footguns、error handling consistency，以及无领域语义 helper、无证据 null / fallback、新同义词、主流程切碎、过早抽象或吞非法状态。旧记录中的 `AI Contamination Check` 仅作兼容。
 
-第三 verdict 的 Evidence 必须引用 review-package 的 `项目规范`，或明确说明本片不适用；缺证据时输出 `cannot-verify-from-package`，不得 passed。
+AI Review 结论表必须使用 `Verdict | Status | Severity | Evidence | Note` 五列格式。第三 verdict 的 Evidence 只能填写当前切片的 `review-packages/<S-id>.md#项目规范` 或固定不适用标记（`N/A` / `NA` / `not applicable` / `不适用`）；缺证据时输出 `cannot-verify-from-package`，不得 passed。自然语言判断说明写 Note，不得写入 Evidence。
 
 `Status` 只允许 `passed` / `failed` / `cannot-verify-from-package` / `not-applicable`。`Severity` 只允许 `critical` / `major` / `minor` / `not-applicable`。
 
@@ -305,7 +305,7 @@ AI Review 结果写回：
 - 无法判断 / 需要人判：`AI Review：blocked（<原因>）`。
 - A 类低风险且用户允许跳过：`AI Review：skipped（<原因>）`。
 
-`AI Review：issues` / `AI Review：blocked` 必须在头部括号中写非占位摘要 / 原因；若头部未写原因，`#### AI Review 结论` 中必须有对应 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Evidence 非空、非占位。占位包括 `TBD`、`TODO`、`暂无`、`待补充`、`未填写`、`pending`、`待执行前补充`。
+`AI Review：issues` / `AI Review：blocked` 必须在头部括号中写非占位摘要 / 原因；若头部未写原因，`#### AI Review 结论` 中必须有对应 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位。占位包括 `TBD`、`TODO`、`暂无`、`待补充`、`未填写`、`pending`、`待执行前补充`。
 
 阻塞规则：任一 verdict 为 `failed`、任一 `Severity=critical`、或仍有 `cannot-verify-from-package`，都阻塞 `AI Review：passed` 和 `状态：done`；只要头部已写 `AI Review：passed`，三 verdict 必须完整且无阻塞项。
 

@@ -160,7 +160,7 @@ dev-plans/
 - `执行`：`待判定` / `自动` / `需确认`。正式执行模式在切片前分叉审查通过、上下文预检完成后写回；`风险：C` 不允许 `执行：自动`。
 - `上下文预检`：`pending` / `ready` / `blocked` / `skipped` 开头，可追加中文说明。
 - `硬门禁`：`pending` / `passed` / `failed` / `blocked` / `skipped` 开头，可追加中文说明。
-- `AI Review`：`pending` / `passed` / `issues` / `blocked` / `skipped` 开头，可追加中文说明；`issues` / `blocked` 必须有非占位头部摘要 / 原因，或在 `#### AI Review 结论` 中有带非占位 Evidence 的 `failed` / `cannot-verify-from-package` / `Severity=major|critical` verdict。
+- `AI Review`：`pending` / `passed` / `issues` / `blocked` / `skipped` 开头，可追加中文说明；`issues` / `blocked` 必须有非占位头部摘要 / 原因，或在 `#### AI Review 结论` 中有带非占位 Note 的 `failed` / `cannot-verify-from-package` / `Severity=major|critical` verdict。
 - `用户验收`：`pending` / `passed` / `issues` / `skipped` 开头，可追加中文说明；`skipped` 必须写明用户明确跳过原因。
 - `修复次数`：`当前次数/最大次数`，例如 `0/2`、`1/2`，统计本切片的自动修复总次数，不按门禁分别计数。次数用尽后任一门禁仍失败则停止，不继续自动修。
 
@@ -268,11 +268,11 @@ dev-plans/
 - task brief 从当前切片、`全局约束`、`上下文预检`（含 `项目规范` / `禁止词` / `基线脏文件`）、`接口契约`、关联 D/A 和门禁记录提取窄上下文；修改运行时逻辑时，implementer subagent 必须补直接相关测试，或在 task report 说明不适用原因。
 - task report 由 implementer subagent 填写实际完成、改动文件、验证、偏离风险和 `Implementer 结论`；控制器不得代写 ready report。
 - `review-package` 只接受 `Implementer 结论：ready-for-review` 的 task report。
-- `review-package` 必须包含 `项目规范`；第三 verdict 的 Evidence 必须引用该小节或明确说明本片不适用，否则不能 `passed`。
+- `review-package` 必须包含 `项目规范`；第三 verdict 的 Evidence 只能填写 `review-packages/<S-id>.md#项目规范` 或固定不适用标记，否则不能 `passed`；自然语言判断写 Note。
 
 ## AI Review 结论
 
-`#### AI Review 结论` 是 AI Review 的结构化输出。执行前可省略；生成 `review-package` 并完成 AI Review 后再写入。`AI Review` 头部字段仍是真源状态：有可修问题写 `issues`，无法判断写 `blocked`，三项 verdict 收口后才写 `passed`；一旦头部写 `AI Review：passed`，本表必须存在且三项 verdict 完整。`AI Review：issues` / `AI Review：blocked` 必须在头部写非占位摘要 / 原因；若头部未写原因，本表必须提供对应 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Evidence 非空、非占位的证据。
+`#### AI Review 结论` 是 AI Review 的结构化输出。执行前可省略；生成 `review-package` 并完成 AI Review 后再写入。`AI Review` 头部字段仍是真源状态：有可修问题写 `issues`，无法判断写 `blocked`，三项 verdict 收口后才写 `passed`；一旦头部写 `AI Review：passed`，本表必须存在且三项 verdict 完整。`AI Review：issues` / `AI Review：blocked` 必须在头部写非占位摘要 / 原因；若头部未写原因，本表必须提供对应 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位的说明。Evidence 是机器门禁字段，只写 review-package 章节引用或固定不适用标记；自然语言说明写 Note。
 
 固定三项 verdict：
 
@@ -285,12 +285,14 @@ dev-plans/
 ```markdown
 #### AI Review 结论
 
-| Verdict | Status | Severity | Evidence |
-| --- | --- | --- | --- |
-| Requirement Compliance | passed | not-applicable | review-packages/S1.md#... |
-| Slice Boundary / Interface Compliance | passed | not-applicable | review-packages/S1.md#... |
-| Code Quality / AI Contamination Check | passed | not-applicable | review-packages/S1.md#项目规范 |
+| Verdict | Status | Severity | Evidence | Note |
+| --- | --- | --- | --- | --- |
+| Requirement Compliance | passed | not-applicable | review-packages/S1.md#... | 覆盖验收 |
+| Slice Boundary / Interface Compliance | passed | not-applicable | review-packages/S1.md#... | 遵守边界 |
+| Code Quality / AI Contamination Check | passed | not-applicable | review-packages/S1.md#项目规范 | 没有新增依赖 |
 ```
+
+第三 verdict 的 Evidence 必须精确填写当前切片的 `review-packages/<S-id>.md#项目规范`，或固定不适用标记（`N/A` / `NA` / `not applicable` / `不适用`）。`没有新增依赖`、`没有违反项目规范` 等判断说明写入 Note，不得写入 Evidence。
 
 `Status` 只允许：
 
@@ -416,7 +418,7 @@ dev-plans/
 - AI Review verdict `Status`：`passed` / `failed` / `cannot-verify-from-package` / `not-applicable`
 - AI Review verdict `Severity`：`critical` / `major` / `minor` / `not-applicable`
 - `上下文预检：ready`：必填预检字段不得是占位内容；`项目规范` / `禁止修改` 可显式写 `无`
-- `AI Review：issues/blocked`：必须有非占位头部摘要 / 原因，或有带非占位 Evidence 的阻塞 verdict 证据
+- `AI Review：issues/blocked`：必须有非占位头部摘要 / 原因，或有带非占位 Note 的阻塞 verdict 说明
 - `AI Review：passed`：必须有完整三 verdict，且不得出现 `failed` / `cannot-verify-from-package` / `critical`；第三 verdict 正式名称为 `Code Quality / AI Contamination Check`，旧 `AI Contamination Check` 仅作兼容
 - `用户验收：pending/issues`：阻塞切片 `done`；用户不满意且不改变范围 / 口径时进入本片有限修复，改变范围 / 口径时转 D 分叉
 - `Whole Review：passed`：必须有完整五 verdict，且不得出现 `failed` / `cannot-verify-from-package` / `blocked` / `critical`

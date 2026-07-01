@@ -50,7 +50,7 @@ Review package：<dev-plans/.../review-packages/<S-id>.md>
 
 证据不足：
 - 若 review package 不足以判断某 verdict，输出 cannot-verify-from-package。
-- 若缺少 `项目规范`，或第三 verdict 无法引用 `项目规范` / 无法说明本片不适用，输出 cannot-verify-from-package。
+- 若缺少 `项目规范`，或第三 verdict 的 Evidence 无法填写 `review-packages/<S-id>.md#项目规范` / 固定不适用标记，输出 cannot-verify-from-package。
 - 不要靠猜测、控制器口头说明或扩大审查范围改成 passed。
 
 必须输出固定三项 verdict：
@@ -61,9 +61,10 @@ Review package：<dev-plans/.../review-packages/<S-id>.md>
 每项必须包含：
 - Status：passed / failed / cannot-verify-from-package / not-applicable
 - Severity：critical / major / minor / not-applicable
-- Evidence：具体证据或缺失证据说明
+- Evidence：机器可校验证据 token；第三 verdict 只能填写 `review-packages/<S-id>.md#项目规范` 或固定不适用标记
+- Note：自然语言说明、缺失证据说明或残余风险
 
-第三 verdict 的 Evidence 必须引用 review package 中的 `项目规范`，或明确说明本片不适用。
+第三 verdict 的 Evidence 必须精确填写 `review-packages/<S-id>.md#项目规范`，或填写固定不适用标记（`N/A` / `NA` / `not applicable` / `不适用`）；`没有新增依赖`、`没有违反项目规范` 等判断说明写入 Note，不得写入 Evidence。
 
 final summary 只输出三 verdict 表和必要的 open questions / residual risk，不写回文件。
 ```

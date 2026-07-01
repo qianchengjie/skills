@@ -230,7 +230,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs review-prompt dev-plans/YYYY-MM
 - test quality。
 - unnecessary complexity。
 - project style consistency。
-- project rules compliance；Evidence 必须引用 `项目规范` 或说明本片不适用。
+- project rules compliance；Evidence 只能填写当前切片的 `review-packages/<S-id>.md#项目规范` 或固定不适用标记，判断说明写 Note。
 - performance footguns。
 - error handling consistency。
 - 无领域语义 helper。
@@ -347,7 +347,8 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - 切片被其他切片头部 `依赖` 字段声明为前置时，被依赖方必须在 `#### 接口契约` 写真实 `产出`，或写非占位 `无契约原因`。
 - `消费` 不能引用当前切片；`依赖` 不能声明当前切片自身。
 - 只要切片头部写 `AI Review：passed`，就必须有 `#### AI Review 结论`，且包含三个固定 verdict：`Requirement Compliance`、`Slice Boundary / Interface Compliance`、`Code Quality / AI Contamination Check`。旧记录中的 `AI Contamination Check` 仍兼容。
-- `AI Review：issues` / `AI Review：blocked` 必须有非占位头部原因，或在 `#### AI Review 结论` 中有 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Evidence 非空、非占位。
+- `#### AI Review 结论` 必须使用 `Verdict | Status | Severity | Evidence | Note` 五列格式；旧四列格式会被判为无效表格。
+- `AI Review：issues` / `AI Review：blocked` 必须有非占位头部原因，或在 `#### AI Review 结论` 中有 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位。
 - verdict `Status` 只允许 `passed` / `failed` / `cannot-verify-from-package` / `not-applicable`；`Severity` 只允许 `critical` / `major` / `minor` / `not-applicable`。
 - `AI Review：passed` 或 `状态：done` 的切片中，任一 verdict 为 `failed`、`cannot-verify-from-package` 或 `Severity=critical` 都非法。
 - `状态：done` 的切片必须满足 `上下文预检：ready/skipped`、`硬门禁：passed/skipped`、`AI Review：passed/skipped`；`风险` / `执行` 不得为 `待判定`；`风险：B/C` 不允许三项门禁为 `skipped`。
