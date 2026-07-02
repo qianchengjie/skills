@@ -1,6 +1,6 @@
 # 切片开发 · plan.md 文件
 
-本文只描述目录化完整档中的 `plan.md`。`decisions.md` 见 [DECISIONS-FILE.md](DECISIONS-FILE.md)，`audits.md` 见 [AUDITS-FILE.md](AUDITS-FILE.md)。
+本文主要描述目录化完整档中的 `plan.md`，以及与切片状态绑定的结构化 sidecar。`decisions.md` 见 [DECISIONS-FILE.md](DECISIONS-FILE.md)，`audits.md` 见 [AUDITS-FILE.md](AUDITS-FILE.md)。
 
 ## 命名
 
@@ -14,6 +14,8 @@ dev-plans/
     decisions.md
     audits.md
     ledger.md        # durable checkpoint ledger
+    claims/          # 每个切片的结构化 Claim / Evidence / Status 真源，提交入库
+      S1.json
     task-briefs/      # 生成文件，gitignore
     task-reports/     # 生成文件，gitignore
     review-packages/  # 生成文件，gitignore
@@ -46,6 +48,7 @@ dev-plans/
 | [decisions.md](./decisions.md) | 分叉正文 |
 | [audits.md](./audits.md) | 长审计、证据矩阵、diff inventory |
 | [ledger.md](./ledger.md) | durable checkpoint ledger |
+| [claims/S*.json](./claims/) | 每个切片的结构化 Claim / Evidence / Status 真源 |
 
 ## 目标
 
@@ -145,13 +148,13 @@ dev-plans/
 
 顶部 `Whole Review` 只允许：
 
-- `not-required`：当前计划不满足 whole review 触发条件。
+- `not-required`：控制器明确不做 whole review。
 - `pending`：尚未生成整任务审查包或尚未进入整任务审查。
 - `package-generated`：已生成 `review-packages/whole-task.md`，等待把整任务审查结论写回。
 - `passed`：整任务审查已通过，且 `## Whole Review 结论` 有完整固定 verdict 表。
-- `blocked`：整任务审查阻塞；必须在 `## Whole Review 结论` 表的 Evidence 中说明阻塞证据。
+- `blocked`：整任务审查阻塞；`## Whole Review 结论` 表的 Evidence 填写 review-package 章节名、文件路径或固定不适用标记，阻塞说明写在顶部 `Whole Review` 状态摘要或正文说明中，不写入 Evidence。
 
-需要 whole review 的条件由 `close-check` 按 plan 内容计算，命中任一条即需要：切片数 > 1、任一切片 `风险：B/C`、任一切片存在真实 `#### 接口契约`、任一切片关联 `D*`、任一切片 `允许修改` 跨模块。
+是否需要 whole review 由控制器 / reviewer 判断；`close-check` 只按顶部 `Whole Review` 状态校验对应格式。
 
 - `风险`：`待判定` / `A` / `B` / `C`。
   - `A`：低风险机械任务，可自动跑到底。
@@ -245,8 +248,66 @@ dev-plans/
 ## 门禁记录
 
 每个切片必须有 `#### 门禁记录`，记录 diff-check 结果、接收门禁和门禁执行摘要（如每次修复改了什么）。硬门禁、AI Review、修复次数的状态唯一真源是切片头部字段，不在本小节重复记录同名状态行；详细失败信息仍放在本切片 `验证备注` 或 `audits.md` 的长证据中。`状态：done` 时，`close-check` 要求 diff-check 记录为结构化表格，且 command / evidence 非空、非占位；command 中的 `diff-check <planDir> <S-id>` 必须指向当前计划目录和当前切片。
+## Claims / Evidence / Status
 
-`close-check` 的最终 dirty guard 使用所有 done slices 的 `允许修改` union：非 generated dirty files 必须落在 union 内，且不得命中任一 done slice 的 `禁止修改`。它不是 strict clean；in-scope uncommitted business files 不会单独阻塞 close-check，最终 clean 由外层 git / CI gate 或未来显式 strict mode 处理。
+`claims/S*.json` 是每个切片的 Claim / Evidence / Status 结构化真源。`plan.md` 继续承载切片叙事、上下文预检、门禁状态和 AI Review 结论；不要把完整 claims 状态双写进 Markdown 表格。task brief、task report、review-package 和 whole-review-package 只渲染或回传 claims 信息。
+
+每个可执行切片建议在实现前生成 claims 文件：
+
+```bash
+node <sliced-dev-skill-dir>/scripts/dev-plan.mjs claims-template dev-plans/YYYY-MM-DD-<slug> S1
+```
+
+最小结构：
+
+```json
+{
+  "schemaVersion": "sliced-dev.claims.v1",
+  "sliceId": "S1",
+  "claims": [
+    {
+      "id": "C1",
+      "type": "behavior",
+      "priority": "P0",
+      "text": "S1 的可观察业务行为已实现。",
+      "status": "proposed",
+      "evidence": [],
+      "note": ""
+    }
+  ]
+}
+```
+
+Claim 字段规则：
+
+- `id`：使用 `C1`、`C2`、`C3`，在当前切片内唯一。
+- `type`：推荐使用 `behavior` / `scope` / `validation` / `risk`。
+- `priority`：推荐使用 `P0` / `P1` / `P2`。
+- `text`：必须是可验证声明，不写实现步骤，不写“完成本片”这类粗声明。
+- `status`：推荐使用 `proposed` / `implemented` / `verified` / `failed` / `blocked` / `waived`。
+- `evidence`：证据数组，优先使用机器证据。
+- `note`：用于 waiver 原因、阻塞说明或必要补充。
+
+Evidence 字段规则：
+
+- `kind`：推荐使用 `test` / `command` / `diff-check` / `code` / `ci` / `manual` / `ai-statement`。
+- `status`：推荐使用 `passed` / `failed` / `blocked` / `skipped` / `not-applicable`。
+- 可选字段：`command`、`file`、`symbol`、`uri`、`summary`、`artifact`；其中 `symbol` 只能作为辅助定位，不能单独满足证据明细要求。
+- 脚本只校验 evidence 是数组，条目是对象，已知可选字段为字符串；证据是否足够由控制器和 reviewer 判断。
+
+状态职责边界：
+
+- `proposed`：实现前声明。
+- `implemented`：实现者建议已完成，但尚未被控制器验证。
+- `verified`：控制器依据测试、命令、diff-check、CI、代码证据或人工验证确认成立。
+- `failed`：有证据证明声明不成立。
+- `blocked`：无法验证或需要人工裁决。
+- `waived`：明确豁免。
+
+`done` 切片的 claims 格式约束由 `close-check` 执行：必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确。`validate` 会校验已有 claims 文件的 JSON / 字段形状和孤儿文件，但为了兼容草稿 / 未执行切片，不强制每个非 done 切片提前存在 claims 文件。
+
+
+`close-check` 不读取当前 git dirty 状态；边界检查由显式 `diff-check` 门禁记录承载。
 
 建议字段：
 
@@ -265,14 +326,14 @@ dev-plans/
 
 `task-briefs/<S-id>.md` 和 `task-reports/<S-id>.md` 由脚本生成，是实现与审查的临时交接文件，不写入 `plan.md` 正文，也不作为 durable 状态真源。
 
-- task brief 从当前切片、`全局约束`、`上下文预检`（含 `项目规范` / `禁止词` / `基线脏文件`）、`接口契约`、关联 D/A 和门禁记录提取窄上下文；修改运行时逻辑时，implementer subagent 必须补直接相关测试，或在 task report 说明不适用原因。
-- task report 由 implementer subagent 填写实际完成、改动文件、验证、偏离风险和 `Implementer 结论`；控制器不得代写 ready report。
+- task brief 从当前切片、`全局约束`、`上下文预检`（含 `项目规范` / `禁止词` / `基线脏文件`）、`接口契约`、关联 D/A、门禁记录和 `claims/<S-id>.json` 提取窄上下文；修改运行时逻辑时，implementer subagent 必须补直接相关测试，或在 task report 说明不适用原因。
+- task report 由 implementer subagent 填写实际完成、改动文件、验证、偏离风险、`Claim Updates` 和 `Implementer 结论`；控制器不得代写 ready report。
 - `review-package` 只接受 `Implementer 结论：ready-for-review` 的 task report。
-- `review-package` 必须包含 `项目规范`；第三 verdict 的 Evidence 只能填写 `review-packages/<S-id>.md#项目规范` 或固定不适用标记，否则不能 `passed`；自然语言判断写 Note。
+- `review-package` 必须包含 `项目规范`；Evidence 填写 review-package 章节名、文件路径或固定不适用标记；自然语言判断写 Note。
 
 ## AI Review 结论
 
-`#### AI Review 结论` 是 AI Review 的结构化输出。执行前可省略；生成 `review-package` 并完成 AI Review 后再写入。`AI Review` 头部字段仍是真源状态：有可修问题写 `issues`，无法判断写 `blocked`，三项 verdict 收口后才写 `passed`；一旦头部写 `AI Review：passed`，本表必须存在且三项 verdict 完整。`AI Review：issues` / `AI Review：blocked` 必须在头部写非占位摘要 / 原因；若头部未写原因，本表必须提供对应 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位的说明。Evidence 是机器门禁字段，只写 review-package 章节引用或固定不适用标记；自然语言说明写 Note。
+`#### AI Review 结论` 是 AI Review 的结构化输出。执行前可省略；生成 `review-package` 并完成 AI Review 后再写入。`AI Review` 头部字段仍是真源状态：有可修问题写 `issues`，无法判断写 `blocked`，三项 verdict 收口后才写 `passed`；一旦头部写 `AI Review：passed`，本表必须存在且三项 verdict 完整。`AI Review：issues` / `AI Review：blocked` 必须在头部写非占位摘要 / 原因；若头部未写原因，本表必须提供对应 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位的说明。Evidence 填写 review-package 章节名、文件路径或固定不适用标记；自然语言说明写 Note。
 
 固定三项 verdict：
 
@@ -287,12 +348,12 @@ dev-plans/
 
 | Verdict | Status | Severity | Evidence | Note |
 | --- | --- | --- | --- | --- |
-| Requirement Compliance | passed | not-applicable | review-packages/S1.md#... | 覆盖验收 |
-| Slice Boundary / Interface Compliance | passed | not-applicable | review-packages/S1.md#... | 遵守边界 |
-| Code Quality / AI Contamination Check | passed | not-applicable | review-packages/S1.md#项目规范 | 没有新增依赖 |
+| Requirement Compliance | passed | not-applicable | Task Brief / Git Diff | 覆盖验收 |
+| Slice Boundary / Interface Compliance | passed | not-applicable | 上下文预检 / Git Diff | 遵守边界 |
+| Code Quality / AI Contamination Check | passed | not-applicable | 项目规范 / Git Diff | 没有新增依赖 |
 ```
 
-第三 verdict 的 Evidence 必须精确填写当前切片的 `review-packages/<S-id>.md#项目规范`，或固定不适用标记（`N/A` / `NA` / `not applicable` / `不适用`）。`没有新增依赖`、`没有违反项目规范` 等判断说明写入 Note，不得写入 Evidence。
+Evidence 必须非空；可填写 review-package 章节名、文件路径或固定不适用标记（`N/A` / `NA` / `not applicable` / `不适用`）。`没有新增依赖`、`没有违反项目规范` 等判断说明写入 Note。
 
 `Status` 只允许：
 
@@ -312,7 +373,7 @@ dev-plans/
 
 ## Whole Review 结论
 
-`## Whole Review 结论` 是整任务收口审查的结构化输出。`Whole Review：passed` 或 `Whole Review：blocked` 时必须填写完整固定表；`pending`、`package-generated`、`not-required` 可先保留占位。
+`## Whole Review 结论` 是整任务收口审查的结构化输出。`Whole Review：passed` 或 `Whole Review：blocked` 时必须填写完整固定表；`pending`、`package-generated`、`not-required` 可先保留占位。控制器判断不需要整审时写 `Whole Review：not-required`。
 
 固定五项 verdict：
 
@@ -321,14 +382,14 @@ dev-plans/
 
 | Verdict | Status | Severity | Evidence |
 | --- | --- | --- | --- |
-| Global Constraints Compliance | passed | not-applicable | ... |
-| Cross-slice Interface Consistency | passed | not-applicable | ... |
-| Non-goals / Boundary Regression | passed | not-applicable | ... |
-| Requirement Closure | passed | not-applicable | ... |
-| Residual Risk / Release Readiness | passed | not-applicable | ... |
+| Global Constraints Compliance | passed | not-applicable | 全局约束 / 切片概览 |
+| Cross-slice Interface Consistency | passed | not-applicable | 接口契约 / Task Reports |
+| Non-goals / Boundary Regression | passed | not-applicable | 非目标 / Git Diff |
+| Requirement Closure | passed | not-applicable | Claims 概览 / AI Review |
+| Residual Risk / Release Readiness | passed | not-applicable | D/A 摘要 / 残余风险 |
 ```
 
-`Whole Review：passed` 时不得出现 `failed`、`cannot-verify-from-package`、`blocked` 或 `critical`。`Whole Review：blocked` 时必须保留完整表，并在 Evidence 写明阻塞依据。
+`Whole Review：passed` 时不得出现 `failed`、`cannot-verify-from-package`、`blocked` 或 `critical`；Evidence 必须非空。`Whole Review：blocked` 时必须保留完整表，阻塞说明写在顶部状态摘要或正文说明中。
 
 ## Progress Ledger
 
@@ -421,7 +482,7 @@ dev-plans/
 - `AI Review：issues/blocked`：必须有非占位头部摘要 / 原因，或有带非占位 Note 的阻塞 verdict 说明
 - `AI Review：passed`：必须有完整三 verdict，且不得出现 `failed` / `cannot-verify-from-package` / `critical`；第三 verdict 正式名称为 `Code Quality / AI Contamination Check`，旧 `AI Contamination Check` 仅作兼容
 - `用户验收：pending/issues`：阻塞切片 `done`；用户不满意且不改变范围 / 口径时进入本片有限修复，改变范围 / 口径时转 D 分叉
-- `Whole Review：passed`：必须有完整五 verdict，且不得出现 `failed` / `cannot-verify-from-package` / `blocked` / `critical`
+- `Whole Review：passed`：必须有完整五 verdict，且不得出现 `failed` / `cannot-verify-from-package` / `blocked` / `critical`；不需要整审时不得写 `passed`
 - 切片 `修复次数`：`当前次数/最大次数`，最大次数必须大于 0，当前次数不能超过最大次数
 - 切片 `验证`：`pending` / `passed` / `failed` / `blocked` / `skipped` 开头，可追加中文说明
 

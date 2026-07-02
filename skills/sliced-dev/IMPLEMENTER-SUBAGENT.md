@@ -11,6 +11,7 @@
 - 当前切片已完成切片前分叉审查，且没有开放分叉。
 - 当前切片 `上下文预检：ready`。
 - `task-briefs/<S-id>.md` 已由 `task-brief` 命令生成。
+- 当前片已有 `claims/<S-id>.json`，且 task brief 已渲染 Claims 概览。
 - 需确认片已在当前连续流程内完成执行确认；若确认后未派发即中断，续跑时必须重新预告并重新确认。
 
 派发时必须使用 `spawn_agent`，参数固定：
@@ -29,6 +30,7 @@ subagent 返回后，控制器先做接收门禁：
 
 - 读取 subagent final summary。
 - 读取 `task-reports/<S-id>.md`，确认 `Implementer 结论：ready-for-review`。
+- 读取 `Claim Updates` 可解析记录；implementer 只能建议状态和证据，不能最终裁定 `verified`。
 - 检查实际改动文件落在 task brief 的 `允许修改` 范围内，且未命中 `禁止修改`。
 - 确认 subagent 未报告 blocked、新分叉、风险升级、验证方式变化或越界需求。
 
@@ -48,7 +50,7 @@ Task brief：<dev-plans/.../task-briefs/<S-id>.md>
 - 只允许读取 task brief 及 task brief 中列出的必读上下文。
 - 禁止读取完整 plan.md、其他切片、未关联 D/A、与 task brief 无关的仓库区域。
 - 禁止直接询问用户；任何需要用户确认的问题都 blocked 回控制器。
-- 禁止修改 plan.md、decisions.md、audits.md、ledger.md 或切片状态。
+- 禁止修改 plan.md、decisions.md、audits.md、ledger.md、claims/S*.json 或切片状态。
 - 禁止提交 commit。
 - 不要 revert 其他人改动；如果遇到已有脏改动，按 task brief 的基线脏文件和允许范围处理。
 
@@ -57,6 +59,7 @@ Task brief：<dev-plans/.../task-briefs/<S-id>.md>
 - task brief 内没有阻塞本片的 open D。
 - 必读上下文足够支持实现。
 - 已按 task brief 的 `项目规范` 判断本片规则；若缺失或不够判断则 blocked。
+- 已理解 task brief 中的 Claims；每条 claim 都能映射到实现、验证、blocked 或风险说明。
 - 预计改动不会越过 task brief 的允许修改范围，也不会命中禁止修改。
 - 没有发现新分叉、风险升级或验证方式变化。
 
@@ -70,9 +73,11 @@ Task brief：<dev-plans/.../task-briefs/<S-id>.md>
 - 可以新增当前切片直接相关测试，但路径必须落在允许修改范围内。
 - 可以运行 task brief 明确列出的 focused 验证命令。
 - 可以修复自己本次实现直接造成的 lint/test 失败；需要越界或改变方案时立即 blocked。
+- 不要把 claim 自行写成最终 `verified`；只在 task report 的 `Claim Updates` 中提出 `implemented` / `blocked` / `failed` 等建议和证据。
 
 输出要求：
 - 必须填写 task-reports/<S-id>.md。
+- 必须填写 `Claim Updates`：逐条说明建议状态、证据、缺口或 blocked 原因。
 - Implementer 结论只能是 ready-for-review 或 blocked。
-- final summary 只写：结论、改动文件、验证命令结果、是否 blocked 及原因。
+- final summary 只写：结论、改动文件、验证命令结果、Claim Updates 摘要、是否 blocked 及原因。
 ```
