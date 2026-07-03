@@ -325,14 +325,14 @@ Evidence 字段规则：
 
 ## Task Brief / Task Report
 
-`task-briefs/<S-id>.md` 和 `task-reports/<S-id>.json` 由脚本生成，是实现与审查的临时交接文件，不写入 `plan.md` 正文。`task-reports/<S-id>.json` 是 implementer 的结构化交付报告 / update request，不是 Claim / Evidence / Status 的最终真源；只有 legacy `task-reports/<S-id>.md` 存在时才按旧格式兼容。
+`task-briefs/<S-id>.md` 和 `task-reports/<S-id>.json` 由脚本生成，是实现与审查的注意力收束视图，不写入 `plan.md` 正文。task brief 限制 implementer 的默认上下文；task report 是 implementer 的结构化交付报告 / update request，不是 Claim / Evidence / Status 的最终真源；只有 legacy `task-reports/<S-id>.md` 存在时才按旧格式兼容。
 
 - task brief 从当前切片、`全局约束`、`上下文预检`（含 `项目规范` / `禁止词` / `基线脏文件`）、`接口契约`、关联 D/A、门禁记录和 `claims/<S-id>.json` 提取窄上下文；修改运行时逻辑时，implementer subagent 必须补直接相关测试，或在 task report 说明不适用原因。
 - task report 由 implementer subagent 填写 `completed`、`changedFiles`、`briefConsistency`、`claimUpdates`、`validation`、`risks`、`reviewFocus` 和 `conclusion`；控制器不得代写 ready report。
 - `claimUpdates[*].proposedStatus` 只允许 `proposed` / `implemented` / `blocked` / `failed`，不得写 `verified` / `waived`。
 - `conclusion: ready-for-review` 时，所有 P0/P1 claims 的 `claimUpdates` 必须是 `implemented`，并提供 evidence 或 note。
 - `review-package` 只接受 `conclusion: ready-for-review` 的 task report。
-- `review-package` 必须包含 `项目规范`；Evidence 填写 review-package 章节名、文件路径或固定不适用标记；自然语言判断写 Note。
+- `review-package` 是 reviewer 的注意力入口，不是事实真源；它必须包含 `项目规范`，Evidence 填写 review-package 章节名、文件路径或固定不适用标记；自然语言判断写 Note。若 P0/P1 claim、边界或证据无法从 package 判断，reviewer 必须 focused 回源检查，或输出 `cannot-verify-from-package`。
 
 ## AI Review 结论
 

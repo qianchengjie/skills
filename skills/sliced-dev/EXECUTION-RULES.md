@@ -281,7 +281,7 @@ done slice 的 `#### 门禁记录` 必须保留 diff-check 的结构化证据；
 
 ## AI Review
 
-硬门禁后必须先生成当前片 review-package，再做 AI Review。生成 package 前脚本必须先跑 `validate`；失败时停止并输出 validator 明细。脚本还会读取 `task-briefs/<S-id>.md` 和 task report；优先读取 `task-reports/<S-id>.json`，没有 JSON 时兼容读取 legacy `task-reports/<S-id>.md`。缺任一文件或 task report 结论不是 `ready-for-review` 时直接失败。reviewer subagent 以 review-package 为主输入；允许针对具名风险做 focused Read / `rg` / focused test，但禁止运行 `git diff` / `git log` / `git status` 重新构造审查范围。`review-packages/**`、`task-briefs/**`、`task-reports/**` 是临时输入，脚本会维护 `dev-plans/.gitignore` 的对应模式，并从 diff-check 和 package inventory 中排除；审计结论必须由控制器写回 plan / D/A。
+硬门禁后必须先生成当前片 review-package，再做 AI Review。生成 package 前脚本必须先跑 `validate`；失败时停止并输出 validator 明细。脚本还会读取 `task-briefs/<S-id>.md` 和 task report；优先读取 `task-reports/<S-id>.json`，没有 JSON 时兼容读取 legacy `task-reports/<S-id>.md`。缺任一文件或 task report 结论不是 `ready-for-review` 时直接失败。reviewer subagent 以 review-package 为主输入；package 是注意力收束视图，不是事实真源。允许针对 P0/P1 claim、具名风险、边界或证据缺口做 focused Read / `rg` / focused test，但禁止运行 `git diff` / `git log` / `git status` 重新构造审查范围。`review-packages/**`、`task-briefs/**`、`task-reports/**` 是临时输入，脚本会维护 `dev-plans/.gitignore` 的对应模式，并从 diff-check 和 package inventory 中排除；审计结论必须由控制器写回 plan / D/A。
 
 生成 package：
 

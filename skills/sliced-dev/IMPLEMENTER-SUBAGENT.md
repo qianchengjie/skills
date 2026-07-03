@@ -4,7 +4,7 @@
 
 ## 控制器流程
 
-控制器负责分叉、拷问、上下文预检、执行确认、生成 task brief、接收门禁、硬门禁、review-package、用户验收和提交。implementer subagent 只负责在自己的 forked workspace 实现当前切片；控制器接收结果后再集成和验证。
+控制器负责分叉、拷问、上下文预检、执行确认、生成 task brief、接收门禁、硬门禁、review-package、用户验收和提交。implementer subagent 只负责在自己的 forked workspace 实现当前切片；控制器接收结果后再集成和验证。task brief 是注意力收束视图，不是真源；若 brief 不足以判断实现、边界或验证，implementer 必须 blocked 回控制器，不得自行扩大上下文。
 
 派发前必须满足：
 
