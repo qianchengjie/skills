@@ -30,7 +30,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs init <slug> --title "<任务标
 - 创建 `dev-plans/YYYY-MM-DD-<slug>/`。
 - 固定生成 `plan.md`、`decisions.md`、`audits.md`，并创建 `claims/` 目录。
 - 创建或维护 `dev-plans/.gitignore`，确保至少包含 `*/review-packages/**`、`*/task-briefs/**`、`*/task-reports/**`。
-- `plan.md` 顶部默认写 `计划一致性预检：pending` 和 `Whole Review：pending`。
+- `plan.md` 顶部默认写 `计划一致性预检：pending`；整任务审查默认不启用。
 - `<slug>` 只允许小写字母、数字和连字符。
 - 目标目录已存在时报错，不覆盖、不合并。
 - 不从中文标题自动生成 slug。
@@ -189,7 +189,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs review-package dev-plans/YYYY-M
 node <sliced-dev-skill-dir>/scripts/dev-plan.mjs whole-review-package dev-plans/YYYY-MM-DD-<slug>
 ```
 
-作用：生成 `dev-plans/YYYY-MM-DD-<slug>/review-packages/whole-task.md`，用于需要 Whole Review 的任务收口前跨切片审查。生成前先运行 `validate`，并维护 `dev-plans/.gitignore`。生成后命令会提示把 `plan.md` 顶部 `Whole Review` 更新为 `package-generated`。
+作用：生成 `dev-plans/YYYY-MM-DD-<slug>/review-packages/whole-task.md`，用于需要整任务审查的任务收口前跨切片审查。生成前先运行 `validate`，并维护 `dev-plans/.gitignore`。生成后命令会提示在 `plan.md` 顶部添加 `整任务审查：package-generated` 和 `## 整任务审查结论`。
 
 package 必须汇总：
 
@@ -201,7 +201,7 @@ package 必须汇总：
 - 所有切片 AI Review 结论。
 - git dirty file inventory、diff stat 和 diff。
 - task reports 摘要，包括每片 conclusion、validation、risks、reviewFocus 和 P0/P1 claim update 覆盖情况。
-- Whole Review 固定 verdict 模板。
+- 整任务审查固定 verdict 模板。
 
 高风险任务仍提示转 `rules-review deep / cross-slice`，不得静默当成自动门禁通过。
 
@@ -283,7 +283,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/YYYY-MM-D
 - 每个 `done` slice 必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确；最终 claim 状态必须是 `verified` 或 `waived`，不会因为 task report 建议 `implemented` 就视为完成。
 - 每个 `done` 且 `AI Review：passed` 的 slice 必须存在非空 task brief、结论为 `ready-for-review` 的非空 task report、非空 review-package；JSON report 必须 schema valid，legacy `.md` report 继续按旧格式检查；review-package 必须包含 Task Brief、Task Report、Claims、项目规范、Git Diff 统计、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID；Git Diff 统计必须使用 `text` fence，Git Diff 必须使用 `diff` fence，允许无当前 dirty diff。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。
-- `Whole Review：passed` 或 `Whole Review：blocked` 时，`review-packages/whole-task.md` 必须存在、非空，且包含 `whole-review-package` 生成器承诺的顶层章节，包括 Reviewer Instructions、计划头、全局约束、切片概览、切片交接、Claims 概览、D/A 摘要与全文、切片 AI Review、Task Reports、变更文件、Git Diff 和 Whole Review verdict 模板；`Whole Review：not-required（<原因>）` 表示控制器明确不做整审，原因必须非占位。
+- `整任务审查：passed` 或 `整任务审查：blocked` 时，`review-packages/whole-task.md` 必须存在、非空，且包含 `whole-review-package` 生成器承诺的顶层章节，包括 Reviewer Instructions、计划头、全局约束、切片概览、切片交接、Claims 概览、D/A 摘要与全文、切片 AI Review、Task Reports、变更文件、Git Diff 和整任务审查结论模板；`整任务审查：package-generated` 和 `整任务审查：blocked` 都阻塞 `close-check`。
 ## show
 
 从仓库根目录执行：
@@ -295,7 +295,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs show dev-plans/YYYY-MM-DD-<slug
 
 作用：只取需要的部分，避免整篇读 `plan.md`。
 
-- `current`：打印计划头（标题、`档位 / 状态 / 上游依据 / 计划一致性预检 / Whole Review / 拆分拷问`、`阶段 / 当前切片 / 下一步`）和「当前切片」指向的那一片完整块；指针为 `待定` / `无` / 缺失或指向不存在切片时，打印计划头并附 `（无可加载的当前切片：<指针>）`，退出 0。
+- `current`：打印计划头（标题、`档位 / 状态 / 上游依据 / 计划一致性预检 / 拆分拷问`，启用时追加 `整任务审查`；以及 `阶段 / 当前切片 / 下一步`）和「当前切片」指向的那一片完整块；指针为 `待定` / `无` / 缺失或指向不存在切片时，打印计划头并附 `（无可加载的当前切片：<指针>）`，退出 0。
 - `<S-id>`：只打印该切片块原文（头部字段 + 关联项 + 上下文预检 + 门禁记录 + 任务内容 + 验收），不带计划头。
 - 切片 ID 不存在时按参数错误退出（exit 2）。
 
@@ -330,11 +330,11 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - 若存在 `claims/S*.json`，会校验 schema、sliceId、claim ID、type、priority、status、evidence 和孤儿文件；非 done 切片可暂不创建 claims 文件。
 - 若存在 `task-reports/S*.json`，会校验 `sliced-dev.taskReport.v1` schema、枚举、claim 引用、ready-for-review 的 P0/P1 覆盖和孤儿 JSON report；只有 legacy `task-reports/S*.md` 时保留旧兼容路径，不套 JSON schema。
 - `plan.md` 的 `档位` 固定为 `完整`。
-- `plan.md` 的 `状态`、`阶段`、`计划一致性预检`、`Whole Review`、`拆分拷问` 使用固定枚举；`Whole Review：not-required` 必须带非占位原因。
+- `plan.md` 的 `状态`、`阶段`、`计划一致性预检`、可选 `整任务审查`、`拆分拷问` 使用固定枚举；`整任务审查` 只允许缺席或 `package-generated` / `passed` / `blocked`。
 - `计划一致性预检` 允许 `pending` / `passed` / `blocked` 开头；`pending` 只能停在 `状态：draft`、`阶段：slicing`、`拆分拷问：pending-grill`；`blocked` 必须引用至少一个存在且仍为 `open` 的 D，且不能进入拆分拷问或执行。
-- `Whole Review：passed` 时，必须有完整 `## Whole Review 结论` 五 verdict 表，且不得出现 `failed` / `cannot-verify-from-package` / `blocked` / `critical`；Evidence 必须非空。
-- `Whole Review：blocked` 时，必须有完整 `## Whole Review 结论` 五 verdict 表；Evidence 仍按机器 token 填写，阻塞说明写在顶部状态摘要或正文说明中。
-- `plan.md` 只允许固定二级标题（含 `## 全局约束`、`## Whole Review 结论`）和 `### S*` 切片标题。
+- `整任务审查：passed` 时，必须有完整 `## 整任务审查结论` 五 verdict 表，且不得出现 `failed` / `cannot-verify-from-package` / `blocked` / `critical`；Evidence 必须非空。
+- `整任务审查：blocked` 时，必须有完整 `## 整任务审查结论` 五 verdict 表；Evidence 仍按机器 token 填写，阻塞说明写在正文说明中。
+- `plan.md` 只允许固定二级标题（含 `## 全局约束`、可选 `## 整任务审查结论`）和 `### S*` 切片标题。
 - `plan.md` 的顶层元信息只从 H1 后、首个 `##` 前读取；正文 blockquote 不能顶替。
 - 未闭合 fenced code block 会报错；标题、章节、子节解析忽略已闭合围栏内内容。
 - `### S*` 切片标题只允许出现在 `## 切片` 章节内，章节外重复 ID 也会报错。

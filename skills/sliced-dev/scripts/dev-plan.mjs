@@ -9,8 +9,6 @@ const PLAN_STATUSES = new Set(['draft', 'executing', 'paused', 'done']);
 const PHASES = new Set(['slicing', 'executing', 'blocked', 'closing', 'done']);
 const PLAN_CONSISTENCY_PREFLIGHT_STATUSES = new Set(['pending', 'passed', 'blocked']);
 const WHOLE_REVIEW_STATUSES = new Set([
-  'not-required',
-  'pending',
   'package-generated',
   'passed',
   'blocked',
@@ -69,7 +67,8 @@ const DECISION_REF_RE = /(?<![A-Za-z0-9])D\d+(?:\.\d+)*(?![A-Za-z0-9.])/g;
 const AUDIT_REF_RE = /(?<![A-Za-z0-9])A\d+(?![A-Za-z0-9.])/g;
 const SLICE_REF_RE = /(?<![A-Za-z0-9])S\d+(?:\.\d+)*(?![A-Za-z0-9.])/g;
 const PLAN_GLOBAL_CONSTRAINTS_SECTION = '全局约束';
-const PLAN_WHOLE_REVIEW_VERDICTS_SECTION = 'Whole Review 结论';
+const PLAN_WHOLE_REVIEW_FIELD = '整任务审查';
+const PLAN_WHOLE_REVIEW_VERDICTS_SECTION = '整任务审查结论';
 const SLICE_CONTEXT_PREFLIGHT_SECTION = '上下文预检';
 const LEGACY_SLICE_INTERFACES_SECTION = '接口契约';
 const SLICE_HANDOFF_SECTION = '切片交接';
@@ -90,7 +89,6 @@ const PLAN_REQUIRED_SECTION_TITLES = new Set([
   '文件索引',
   '目标',
   PLAN_GLOBAL_CONSTRAINTS_SECTION,
-  PLAN_WHOLE_REVIEW_VERDICTS_SECTION,
   '切片',
 ]);
 const EXPLICIT_NONE_LIST_ITEM_RE = /^(无|none|n\/a|na)[。.]?$/i;
@@ -167,7 +165,7 @@ const REQUIRED_WHOLE_REVIEW_PACKAGE_SECTIONS = [
   'Git Diff',
   '分叉记录全文',
   '审计记录全文',
-  'Whole Review Verdict 模板',
+  '整任务审查结论模板',
   '审查重点',
 ];
 const REQUIRED_SLICE_REVIEW_PACKAGE_SECTIONS = [
@@ -855,7 +853,7 @@ function validateWholeReviewVerdicts(plan, wholeReviewStatus, errors) {
   const verdicts = parseWholeReviewVerdicts(plan);
   if (verdicts.missing) {
     if (wholeReviewStatus === 'passed' || wholeReviewStatus === 'blocked') {
-      errors.push(`plan.md: Whole Review ${wholeReviewStatus} requires ${PLAN_WHOLE_REVIEW_VERDICTS_SECTION}`);
+      errors.push(`plan.md: ${PLAN_WHOLE_REVIEW_FIELD} ${wholeReviewStatus} requires ${PLAN_WHOLE_REVIEW_VERDICTS_SECTION}`);
     }
     return;
   }
@@ -871,11 +869,11 @@ function validateWholeReviewVerdicts(plan, wholeReviewStatus, errors) {
   const seen = new Set();
   for (const item of verdicts.items) {
     if (!WHOLE_REVIEW_VERDICTS.includes(item.verdict)) {
-      errors.push(`plan.md: unknown Whole Review verdict ${item.verdict}`);
+      errors.push(`plan.md: unknown ${PLAN_WHOLE_REVIEW_FIELD} verdict ${item.verdict}`);
       continue;
     }
     if (seen.has(item.verdict)) {
-      errors.push(`plan.md: duplicate Whole Review verdict ${item.verdict}`);
+      errors.push(`plan.md: duplicate ${PLAN_WHOLE_REVIEW_FIELD} verdict ${item.verdict}`);
       continue;
     }
     seen.add(item.verdict);
@@ -892,40 +890,44 @@ function validateWholeReviewVerdicts(plan, wholeReviewStatus, errors) {
 
   for (const verdict of WHOLE_REVIEW_VERDICTS) {
     if (!seen.has(verdict)) {
-      errors.push(`plan.md: missing Whole Review verdict ${verdict}`);
+      errors.push(`plan.md: missing ${PLAN_WHOLE_REVIEW_FIELD} verdict ${verdict}`);
     }
   }
 
   if (wholeReviewStatus === 'passed') {
     for (const item of verdicts.items) {
       if (item.status === 'failed') {
-        errors.push(`plan.md: ${item.verdict} failed blocks Whole Review passed`);
+        errors.push(`plan.md: ${item.verdict} failed blocks ${PLAN_WHOLE_REVIEW_FIELD} passed`);
       }
       if (item.status === 'cannot-verify-from-package') {
-        errors.push(`plan.md: ${item.verdict} cannot-verify-from-package blocks Whole Review passed`);
+        errors.push(`plan.md: ${item.verdict} cannot-verify-from-package blocks ${PLAN_WHOLE_REVIEW_FIELD} passed`);
       }
       if (item.status === 'blocked') {
-        errors.push(`plan.md: ${item.verdict} blocked status blocks Whole Review passed`);
+        errors.push(`plan.md: ${item.verdict} blocked status blocks ${PLAN_WHOLE_REVIEW_FIELD} passed`);
       }
       if (item.severity === 'critical') {
-        errors.push(`plan.md: ${item.verdict} critical severity blocks Whole Review passed`);
+        errors.push(`plan.md: ${item.verdict} critical severity blocks ${PLAN_WHOLE_REVIEW_FIELD} passed`);
       }
     }
   }
 }
 
 function validateWholeReviewStatus(plan, errors) {
-  const wholeReview = getMeta(plan, 'Whole Review');
-  const wholeReviewStatus = getStatusPrefix(wholeReview);
-  if (wholeReviewStatus === 'not-required') {
-    if (isPlaceholderText(getStatusReason(wholeReview))) {
-      errors.push('plan.md: Whole Review not-required requires non-placeholder reason');
-    }
-    validateWholeReviewVerdicts(plan, wholeReviewStatus, errors);
+  const wholeReview = getMeta(plan, PLAN_WHOLE_REVIEW_FIELD);
+  const hasVerdictsSection = hasSection(plan, PLAN_WHOLE_REVIEW_VERDICTS_SECTION);
+
+  if (!wholeReview && !hasVerdictsSection) return;
+
+  if (!wholeReview) {
+    errors.push(`plan.md: ${PLAN_WHOLE_REVIEW_VERDICTS_SECTION} requires ${PLAN_WHOLE_REVIEW_FIELD}`);
+    return;
+  }
+  if (!hasVerdictsSection) {
+    errors.push(`plan.md: ${PLAN_WHOLE_REVIEW_FIELD} requires ## ${PLAN_WHOLE_REVIEW_VERDICTS_SECTION}`);
     return;
   }
   if (!WHOLE_REVIEW_STATUSES.has(wholeReview)) {
-    errors.push(`plan.md: invalid Whole Review ${wholeReview ?? '<missing>'}`);
+    errors.push(`plan.md: invalid ${PLAN_WHOLE_REVIEW_FIELD} ${wholeReview ?? '<missing>'}`);
     return;
   }
   validateWholeReviewVerdicts(plan, wholeReview, errors);
@@ -2694,26 +2696,26 @@ function isFencedSection(section, language) {
 
 function validateWholePackageGeneratedShape(content, errors) {
   const planHead = getSection(content, '计划头').trim();
-  if (!/^# .+\n\n/.test(planHead) || !planHead.includes('Whole Review：')) {
-    errors.push(`close-check: whole review package 计划头 section must look generated; regenerate whole-review-package`);
+  if (!/^# .+\n\n/.test(planHead)) {
+    errors.push(`close-check: 整任务审查包 计划头 section must look generated; regenerate whole-review-package`);
   }
   const changedFiles = getSection(content, '变更文件').trim();
   if (!/^- /m.test(changedFiles)) {
-    errors.push(`close-check: whole review package 变更文件 section must be generated list content; regenerate whole-review-package`);
+    errors.push(`close-check: 整任务审查包 变更文件 section must be generated list content; regenerate whole-review-package`);
   }
   const sliceOverview = getSection(content, '切片概览').trim();
   if (!sliceOverview.startsWith('| 切片 | 状态 | 风险 | 执行 |')) {
-    errors.push(`close-check: whole review package 切片概览 section must be generated table content; regenerate whole-review-package`);
+    errors.push(`close-check: 整任务审查包 切片概览 section must be generated table content; regenerate whole-review-package`);
   }
   const sliceReviewVerdicts = getSection(content, '切片 AI Review 结论').trim();
   if (!sliceReviewVerdicts.startsWith('| 切片 | Verdict | Status | Severity | Evidence | Note |')) {
-    errors.push(`close-check: whole review package 切片 AI Review 结论 section must be generated table content; regenerate whole-review-package`);
+    errors.push(`close-check: 整任务审查包 切片 AI Review 结论 section must be generated table content; regenerate whole-review-package`);
   }
   if (!isFencedSection(getSection(content, 'Git Diff 统计'), 'text')) {
-    errors.push(`close-check: whole review package Git Diff 统计 section must be fenced text output; regenerate whole-review-package`);
+    errors.push(`close-check: 整任务审查包 Git Diff 统计 section must be fenced text output; regenerate whole-review-package`);
   }
   if (!isFencedSection(getSection(content, 'Git Diff'), 'diff')) {
-    errors.push(`close-check: whole review package Git Diff section must be fenced diff output; regenerate whole-review-package`);
+    errors.push(`close-check: 整任务审查包 Git Diff section must be fenced diff output; regenerate whole-review-package`);
   }
 }
 
@@ -2721,24 +2723,24 @@ async function validateWholeReviewPackageForClose(planDir) {
   const packagePath = getWholeTaskReviewPackagePath(planDir);
   try {
     const content = await fs.readFile(packagePath, 'utf8');
-    if (!content.trim()) return [`close-check: whole review package must be non-empty`];
+    if (!content.trim()) return [`close-check: 整任务审查包 must be non-empty`];
     const errors = [];
     errors.push(...validatePackageTopLevelSections(
       content,
       REQUIRED_WHOLE_REVIEW_PACKAGE_SECTIONS,
-      'whole review package',
+      '整任务审查包',
       'whole-review-package',
     ));
     for (const label of REQUIRED_WHOLE_REVIEW_PACKAGE_SECTIONS) {
       if (!getSection(content, label).trim()) {
-        errors.push(`close-check: whole review package missing ${label}`);
+        errors.push(`close-check: 整任务审查包 missing ${label}`);
       }
     }
     validateWholePackageGeneratedShape(content, errors);
     return errors;
   } catch (error) {
     if (error.code === 'ENOENT') {
-      return [`close-check: missing whole review package: ${packagePath}`];
+      return [`close-check: missing 整任务审查包: ${packagePath}`];
     }
     throw error;
   }
@@ -2932,7 +2934,7 @@ ${renderMarkdownBlock(decisionsMarkdown)}
 
 ${renderMarkdownBlock(auditsMarkdown)}
 
-## Whole Review Verdict 模板
+## 整任务审查结论模板
 
 ${renderWholeReviewVerdictTemplate()}
 
@@ -2969,9 +2971,15 @@ async function closeCheckPlan(planDir) {
   }
 
   const slices = getBlocks(getSection(plan, '切片'), SLICE_ID_RE);
-  const wholeReviewStatus = getMeta(plan, 'Whole Review');
+  const wholeReviewStatus = getMeta(plan, PLAN_WHOLE_REVIEW_FIELD);
   if (wholeReviewStatus === 'passed' || wholeReviewStatus === 'blocked') {
     errors.push(...await validateWholeReviewPackageForClose(planDir));
+  }
+  if (wholeReviewStatus === 'package-generated') {
+    errors.push(`close-check: ${PLAN_WHOLE_REVIEW_FIELD} package-generated blocks close`);
+  }
+  if (wholeReviewStatus === 'blocked') {
+    errors.push(`close-check: ${PLAN_WHOLE_REVIEW_FIELD} blocked blocks close`);
   }
 
   for (const [id, block] of slices) {
@@ -3034,7 +3042,6 @@ function planTemplate({ title, upstream }) {
 > 状态：draft
 > 上游依据：${upstream}
 > 计划一致性预检：pending
-> Whole Review：pending
 > 拆分拷问：pending-grill
 
 ## 当前状态
@@ -3058,10 +3065,6 @@ function planTemplate({ title, upstream }) {
 ## 全局约束
 
 - 暂无。
-
-## Whole Review 结论
-
-待 whole review 后填写。
 
 ## 切片
 
@@ -3689,8 +3692,13 @@ Evidence 只写 review-package 内的章节名、文件路径或固定不适用�
 
 function renderPlanHead(plan) {
   const title = getMarkdownHeadings(plan, 1)[0]?.text ?? '(无标题)';
-  const meta = ['档位', '状态', '上游依据', '计划一致性预检', 'Whole Review', '拆分拷问']
-    .map((name) => `${name}：${getMeta(plan, name) ?? '?'}`)
+  const meta = ['档位', '状态', '上游依据', '计划一致性预检', PLAN_WHOLE_REVIEW_FIELD, '拆分拷问']
+    .map((name) => {
+      const value = getMeta(plan, name);
+      if (name === PLAN_WHOLE_REVIEW_FIELD && value === undefined) return undefined;
+      return `${name}：${value ?? '?'}`;
+    })
+    .filter(Boolean)
     .join(' / ');
   const currentState = getSection(plan, '当前状态');
   const state = ['阶段', '当前切片', '下一步']
@@ -3876,7 +3884,7 @@ async function main(argv = process.argv.slice(2)) {
     }
     const target = await writeWholeTaskReviewPackage(first);
     console.log(`Wrote ${target}`);
-    console.log('请将 plan.md 顶部 `Whole Review` 更新为 `package-generated`，完成整任务审查后再写回 passed/blocked 和固定 verdict 表。');
+    console.log('请在 plan.md 顶部添加 `整任务审查：package-generated`，并添加 `## 整任务审查结论`；完成整任务审查后再写回 passed/blocked 和固定 verdict 表。');
     return 0;
   }
 
