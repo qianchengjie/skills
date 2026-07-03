@@ -29,7 +29,7 @@ const EXECUTION_MODES = new Set(['待判定', '自动', '需确认']);
 const PREFLIGHT_STATUSES = new Set(['pending', 'ready', 'blocked', 'skipped']);
 const HARD_GATE_STATUSES = new Set(['pending', 'passed', 'failed', 'blocked', 'skipped']);
 const AI_REVIEW_STATUSES = new Set(['pending', 'passed', 'issues', 'blocked', 'skipped']);
-const USER_ACCEPTANCE_STATUSES = new Set(['pending', 'passed', 'issues', 'skipped']);
+const USER_ACCEPTANCE_STATUSES = new Set(['pending', 'passed', 'issues', 'skipped', 'not-required']);
 const DECISION_STATUSES = new Set(['open', 'decided']);
 const AUDIT_STATUSES = new Set(['pending', 'active', 'done']);
 const PLAN_VALIDATION_STATUSES = new Set(['pending', 'passed', 'failed', 'blocked', 'skipped']);
@@ -49,6 +49,7 @@ const BRIEF_CONSISTENCY_STATUSES = new Set(['matched', 'deviated', 'blocked']);
 const TASK_REPORT_PROPOSED_STATUSES = new Set(['proposed', 'implemented', 'blocked', 'failed']);
 const VALIDATION_STATUSES = new Set(['passed', 'failed', 'not-run', 'skipped']);
 const RISK_SEVERITIES = new Set(['low', 'medium', 'high', 'critical']);
+const CLAIM_STATUSES = new Set(['proposed', 'implemented', 'verified', 'failed', 'blocked', 'waived']);
 const CLAIM_EVIDENCE_KINDS = new Set([
   'test',
   'command',
@@ -974,6 +975,23 @@ function validateWholeReviewVerdicts(plan, wholeReviewStatus, errors) {
   }
 }
 
+function validateWholeReviewStatus(plan, errors) {
+  const wholeReview = getMeta(plan, 'Whole Review');
+  const wholeReviewStatus = getStatusPrefix(wholeReview);
+  if (wholeReviewStatus === 'not-required') {
+    if (isPlaceholderText(getStatusReason(wholeReview))) {
+      errors.push('plan.md: Whole Review not-required requires non-placeholder reason');
+    }
+    validateWholeReviewVerdicts(plan, wholeReviewStatus, errors);
+    return;
+  }
+  if (!WHOLE_REVIEW_STATUSES.has(wholeReview)) {
+    errors.push(`plan.md: invalid Whole Review ${wholeReview ?? '<missing>'}`);
+    return;
+  }
+  validateWholeReviewVerdicts(plan, wholeReview, errors);
+}
+
 function normalizeRepoPath(value) {
   return value.replace(/`/g, '').trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+/g, '/');
 }
@@ -1615,6 +1633,9 @@ function claimValidationErrors(sliceId, claimsData) {
         errors.push(`${itemPrefix}: ${field} must be a string`);
       }
     }
+    if (typeof claim.status === 'string' && !CLAIM_STATUSES.has(claim.status)) {
+      errors.push(`${itemPrefix}: status must be one of ${[...CLAIM_STATUSES].join(' / ')}`);
+    }
     if (claim.note !== undefined && typeof claim.note !== 'string') {
       errors.push(`${itemPrefix}: note must be a string`);
     }
@@ -1629,11 +1650,30 @@ function claimValidationErrors(sliceId, claimsData) {
         errors.push(`${evidencePrefix}: evidence must be an object`);
         continue;
       }
+      if (evidence.kind !== undefined && !CLAIM_EVIDENCE_KINDS.has(evidence.kind)) {
+        errors.push(`${evidencePrefix}: kind must be one of ${[...CLAIM_EVIDENCE_KINDS].join(' / ')}`);
+      }
       for (const field of ['kind', 'status', 'command', 'file', 'symbol', 'uri', 'summary', 'artifact']) {
         if (evidence[field] !== undefined && typeof evidence[field] !== 'string') {
           errors.push(`${evidencePrefix}: ${field} must be a string`);
         }
       }
+    }
+    if (claim.status === 'waived') {
+      if (!['risk', 'scope'].includes(claim.type)) {
+        errors.push(`${itemPrefix}: waived status is only allowed for risk or scope claims`);
+      }
+      if (isPlaceholderText(claim.note)) {
+        errors.push(`${itemPrefix}: waived status requires non-placeholder note`);
+      }
+    }
+    if (
+      claim.status === 'verified'
+      && (claim.priority === 'P0' || claim.priority === 'P1')
+      && ['behavior', 'scope', 'validation'].includes(claim.type)
+      && !claim.evidence.some((item) => item?.kind && item.kind !== 'ai-statement')
+    ) {
+      errors.push(`${itemPrefix}: verified ${claim.priority} ${claim.type} claim requires evidence beyond ai-statement`);
     }
   }
 
@@ -3331,12 +3371,7 @@ function validatePlanMarkdown(plan, decisions, audits, errors) {
     errors.push('plan.md: missing 上游依据');
   }
   const planConsistencyPreflight = getMeta(plan, '计划一致性预检');
-  const wholeReview = getMeta(plan, 'Whole Review');
-  if (!WHOLE_REVIEW_STATUSES.has(wholeReview)) {
-    errors.push(`plan.md: invalid Whole Review ${wholeReview ?? '<missing>'}`);
-  } else {
-    validateWholeReviewVerdicts(plan, wholeReview, errors);
-  }
+  validateWholeReviewStatus(plan, errors);
   const splitGate = getMeta(plan, '拆分拷问');
   if (!GATES.has(splitGate)) {
     errors.push(`plan.md: invalid 拆分拷问 ${splitGate ?? '<missing>'}`);
@@ -3490,8 +3525,17 @@ function validateSliceBlock(id, body, slices, decisions, audits, interfaceProduc
   if (!statusStartsWithAllowed(userAcceptance, USER_ACCEPTANCE_STATUSES)) {
     errors.push(`plan.md:${id}: invalid 用户验收 ${userAcceptance ?? '<missing>'}`);
   }
-  if (getStatusPrefix(userAcceptance) === 'skipped' && isPlaceholderText(getStatusReason(userAcceptance))) {
+  const userAcceptanceStatus = getStatusPrefix(userAcceptance);
+  if (userAcceptanceStatus === 'skipped' && isPlaceholderText(getStatusReason(userAcceptance))) {
     errors.push(`plan.md:${id}: 用户验收 skipped requires reason`);
+  }
+  if (userAcceptanceStatus === 'not-required') {
+    if (execution !== '自动') {
+      errors.push(`plan.md:${id}: 用户验收 not-required only allowed for 执行：自动`);
+    }
+    if (isPlaceholderText(getStatusReason(userAcceptance))) {
+      errors.push(`plan.md:${id}: 用户验收 not-required requires reason`);
+    }
   }
   const repair = validateRepairAttempts(repairAttempts);
   if (!repair.valid) errors.push(`plan.md:${id}: invalid 修复次数 ${repairAttempts ?? '<missing>'}`);
@@ -3661,7 +3705,7 @@ function validateSliceBlock(id, body, slices, decisions, audits, interfaceProduc
     const preflightDone = new Set(['ready', 'skipped']);
     const hardGateDone = new Set(['passed', 'skipped']);
     const aiReviewDone = new Set(['passed', 'skipped']);
-    const userAcceptanceDone = new Set(['passed', 'skipped']);
+    const userAcceptanceDone = new Set(['passed', 'skipped', 'not-required']);
     if (risk === '待判定' || execution === '待判定') {
       errors.push(`plan.md:${id}: done slice must have definite 风险 and 执行`);
     }
@@ -3675,7 +3719,7 @@ function validateSliceBlock(id, body, slices, decisions, audits, interfaceProduc
       errors.push(`plan.md:${id}: done slice must have AI Review passed/skipped`);
     }
     if (!userAcceptanceDone.has(getStatusPrefix(userAcceptance))) {
-      errors.push(`plan.md:${id}: done slice must have 用户验收 passed/skipped`);
+      errors.push(`plan.md:${id}: done slice must have 用户验收 passed/skipped/not-required`);
     }
     if (risk === 'B' || risk === 'C') {
       if (getStatusPrefix(preflight) === 'skipped') {

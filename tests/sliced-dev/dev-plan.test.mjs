@@ -785,6 +785,30 @@ test('validate rejects invalid plan consistency preflight metadata', async () =>
   });
 });
 
+test('validate requires reason for Whole Review not-required', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-whole-review-not-required');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8')).replace('> Whole Review：pending', '> Whole Review：not-required'),
+      'utf8',
+    );
+
+    let errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('Whole Review not-required requires non-placeholder reason')));
+
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8')).replace('> Whole Review：not-required', '> Whole Review：not-required（单片自动任务，无跨切片接口或残余风险）'),
+      'utf8',
+    );
+    errors = await validatePlan(planDir);
+    assert(!errors.some((error) => error.includes('Whole Review not-required')));
+  });
+});
+
 test('validate rejects execution before plan consistency preflight passes', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-pending-plan-preflight');
@@ -1724,6 +1748,58 @@ test('validate rejects skipped user acceptance without reason', async () => {
   });
 });
 
+test('validate accepts automatic done slice with not-required user acceptance', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-user-acceptance-not-required');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withClosedDoneSlice(await fs.readFile(planPath, 'utf8'), planDir)
+        .replace('- 用户验收：passed', '- 用户验收：not-required（自动片，完成报告暴露验证和风险）'),
+      'utf8',
+    );
+
+    assert.deepEqual(await validatePlan(planDir), []);
+  });
+});
+
+test('validate rejects not-required user acceptance outside automatic slices', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-user-acceptance-not-required-blocked');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8'))
+        .replace('- 执行：待判定', '- 执行：需确认')
+        .replace('- 用户验收：pending', '- 用户验收：not-required（自动片，完成报告暴露验证和风险）'),
+      'utf8',
+    );
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('用户验收 not-required only allowed for 执行：自动')));
+  });
+});
+
+test('validate rejects not-required user acceptance without reason', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-user-acceptance-not-required-reason');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8'))
+        .replace('- 执行：待判定', '- 执行：自动')
+        .replace('- 用户验收：pending', '- 用户验收：not-required'),
+      'utf8',
+    );
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('用户验收 not-required requires reason')));
+  });
+});
+
 test('validate accepts skipped gates on done A slices', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-done-a-skipped');
@@ -2412,6 +2488,59 @@ test('CLI review-package accepts task brief with earlier proposed claim statuses
 
     const result = runDevPlanCli(['review-package', 'dev-plans/2026-06-10-review-package-proposed-brief', 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
+  });
+});
+
+test('validate rejects waived behavior or validation claims', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-claim-waived-behavior');
+    await writeValidExecutingPlan(planDir);
+    await writeVerifiedClaimsFixture(planDir, 'S1');
+    const claimsPath = path.join(planDir, 'claims', 'S1.json');
+    const claims = JSON.parse(await fs.readFile(claimsPath, 'utf8'));
+    claims.claims[0].status = 'waived';
+    claims.claims[0].note = '测试 fixture 中错误豁免 behavior claim。';
+    await fs.writeFile(claimsPath, `${JSON.stringify(claims, null, 2)}\n`, 'utf8');
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('waived status is only allowed for risk or scope claims')));
+  });
+});
+
+test('validate rejects waived claims without note', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-claim-waived-note');
+    await writeValidExecutingPlan(planDir);
+    await writeVerifiedClaimsFixture(planDir, 'S1');
+    const claimsPath = path.join(planDir, 'claims', 'S1.json');
+    const claims = JSON.parse(await fs.readFile(claimsPath, 'utf8'));
+    const riskClaim = claims.claims.find((claim) => claim.type === 'risk');
+    riskClaim.note = '';
+    await fs.writeFile(claimsPath, `${JSON.stringify(claims, null, 2)}\n`, 'utf8');
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('waived status requires non-placeholder note')));
+  });
+});
+
+test('validate rejects verified key claims with only ai-statement evidence', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-claim-ai-statement-only');
+    await writeValidExecutingPlan(planDir);
+    await writeVerifiedClaimsFixture(planDir, 'S1');
+    const claimsPath = path.join(planDir, 'claims', 'S1.json');
+    const claims = JSON.parse(await fs.readFile(claimsPath, 'utf8'));
+    claims.claims[0].evidence = [
+      {
+        kind: 'ai-statement',
+        status: 'passed',
+        summary: 'agent 自述已验证。',
+      },
+    ];
+    await fs.writeFile(claimsPath, `${JSON.stringify(claims, null, 2)}\n`, 'utf8');
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('verified P0 behavior claim requires evidence beyond ai-statement')));
   });
 });
 

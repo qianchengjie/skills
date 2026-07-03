@@ -115,7 +115,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs claims-template dev-plans/YYYY-
 - `C3 validation P1`：本切片验收已通过测试、命令或明确人工验证。
 - `C4 risk P1`：本切片已知残余风险已记录，或确认无需要保留的残余风险。
 
-控制器可以在实现前细化 claims 文本、拆分 claim、调整 priority；实现者只在 task report 的 `claimUpdates` 中建议状态和证据，最终 `verified` / `waived` 由控制器写回 `claims/<S-id>.json`。
+控制器可以在实现前细化 claims 文本、拆分 claim、调整 priority；实现者只在 task report 的 `claimUpdates` 中建议状态和证据，最终 `verified` / `waived` 由控制器写回 `claims/<S-id>.json`。`waived` 只允许 `risk` / `scope` claim，必须有非占位 note；P0/P1 `behavior`、`scope`、`validation` claim 写 `verified` 时必须有 `ai-statement` 之外的 evidence。
 
 ## task-brief
 
@@ -285,7 +285,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/YYYY-MM-D
 - 每个 `done` slice 必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确；最终 claim 状态必须是 `verified` 或 `waived`，不会因为 task report 建议 `implemented` 就视为完成。
 - 每个 `done` 且 `AI Review：passed` 的 slice 必须存在非空 task brief、结论为 `ready-for-review` 的非空 task report、非空 review-package；JSON report 必须 schema valid，legacy `.md` report 继续按旧格式检查；review-package 必须包含 Task Brief、Task Report、Claims、项目规范、Git Diff 统计、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID；Git Diff 统计必须使用 `text` fence，Git Diff 必须使用 `diff` fence，允许无当前 dirty diff。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。
-- `Whole Review：passed` 或 `Whole Review：blocked` 时，`review-packages/whole-task.md` 必须存在、非空，且包含 `whole-review-package` 生成器承诺的顶层章节，包括 Reviewer Instructions、计划头、全局约束、切片概览、接口契约、Claims 概览、D/A 摘要与全文、切片 AI Review、Task Reports、变更文件、Git Diff 和 Whole Review verdict 模板；`Whole Review：not-required` 表示控制器明确不做整审。
+- `Whole Review：passed` 或 `Whole Review：blocked` 时，`review-packages/whole-task.md` 必须存在、非空，且包含 `whole-review-package` 生成器承诺的顶层章节，包括 Reviewer Instructions、计划头、全局约束、切片概览、接口契约、Claims 概览、D/A 摘要与全文、切片 AI Review、Task Reports、变更文件、Git Diff 和 Whole Review verdict 模板；`Whole Review：not-required（<原因>）` 表示控制器明确不做整审，原因必须非占位。
 - 要求 `ledger.md` 存在，且至少包含 `## Current Checkpoint` 和 `## Slice Checkpoints`。
 - `## Current Checkpoint` 必须有非空、非占位 checkpoint。
 - 每个 `done` 切片必须在 ledger 的 `## Slice Checkpoints` 下至少有一条非占位 checkpoint。
@@ -336,7 +336,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - 若存在 `claims/S*.json`，会校验 schema、sliceId、claim ID、type、priority、status、evidence 和孤儿文件；非 done 切片可暂不创建 claims 文件。
 - 若存在 `task-reports/S*.json`，会校验 `sliced-dev.taskReport.v1` schema、枚举、claim 引用、ready-for-review 的 P0/P1 覆盖和孤儿 JSON report；只有 legacy `task-reports/S*.md` 时保留旧兼容路径，不套 JSON schema。
 - `plan.md` 的 `档位` 固定为 `完整`。
-- `plan.md` 的 `状态`、`阶段`、`计划一致性预检`、`Whole Review`、`拆分拷问` 使用固定枚举。
+- `plan.md` 的 `状态`、`阶段`、`计划一致性预检`、`Whole Review`、`拆分拷问` 使用固定枚举；`Whole Review：not-required` 必须带非占位原因。
 - `计划一致性预检` 允许 `pending` / `passed` / `blocked` 开头；`pending` 只能停在 `状态：draft`、`阶段：slicing`、`拆分拷问：pending-grill`；`blocked` 必须引用至少一个存在且仍为 `open` 的 D，且不能进入拆分拷问或执行。
 - `Whole Review：passed` 时，必须有完整 `## Whole Review 结论` 五 verdict 表，且不得出现 `failed` / `cannot-verify-from-package` / `blocked` / `critical`；Evidence 必须非空。
 - `Whole Review：blocked` 时，必须有完整 `## Whole Review 结论` 五 verdict 表；Evidence 仍按机器 token 填写，阻塞说明写在顶部状态摘要或正文说明中。
@@ -372,7 +372,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - `AI Review：issues` / `AI Review：blocked` 必须有非占位头部原因，或在 `#### AI Review 结论` 中有 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位。
 - verdict `Status` 只允许 `passed` / `failed` / `cannot-verify-from-package` / `not-applicable`；`Severity` 只允许 `critical` / `major` / `minor` / `not-applicable`。
 - `AI Review：passed` 或 `状态：done` 的切片中，任一 verdict 为 `failed`、`cannot-verify-from-package` 或 `Severity=critical` 都非法。
-- `状态：done` 的切片必须满足 `上下文预检：ready/skipped`、`硬门禁：passed/skipped`、`AI Review：passed/skipped`；`风险` / `执行` 不得为 `待判定`；`风险：B/C` 不允许三项门禁为 `skipped`。
+- `状态：done` 的切片必须满足 `上下文预检：ready/skipped`、`硬门禁：passed/skipped`、`AI Review：passed/skipped`、`用户验收：passed/skipped/not-required`；`风险` / `执行` 不得为 `待判定`；`风险：B/C` 不允许三项机器门禁为 `skipped`；`用户验收：not-required` 只允许 `执行：自动` 且必须带原因。
 - 依赖字段中出现的 `S*` 必须存在。
 - 关联项只能包含 `D*` 和 `A*`，ID 不能重复。
 - 关联项状态必须与对应正文块状态一致。
