@@ -66,7 +66,7 @@ REPORT_AND_NEXT
 
 ## 轻量档执行
 
-轻量档（规模小且全为「自动」片，A + 小规模 B）不建 dev-plans、不走门禁状态机、不自动 commit、不使用 subagent，但不豁免预检和拒收纪律。
+轻量档（当前 context 内可完成、全为「自动」片，且未命中完整档控制需求的 A + 小规模 B）不建 dev-plans、不走门禁状态机、不自动 commit、不使用 subagent，但不豁免预检和拒收纪律。
 
 ### 短版上下文预检
 
