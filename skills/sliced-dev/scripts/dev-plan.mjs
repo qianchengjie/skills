@@ -1009,7 +1009,6 @@ function isPathInsidePlanDir(file, planDir) {
   return normalizedFile === `${normalizedPlanDir}/plan.md`
     || normalizedFile === `${normalizedPlanDir}/decisions.md`
     || normalizedFile === `${normalizedPlanDir}/audits.md`
-    || normalizedFile === `${normalizedPlanDir}/ledger.md`
     || (insidePlanDir && /^claims\/S\d+(?:\.\d+)*\.json$/.test(normalizedFile.slice(normalizedPlanDir.length + 1)));
 }
 
@@ -1138,10 +1137,6 @@ function getTaskReportPath(planDir, sliceId) {
 
 function getWholeTaskReviewPackagePath(planDir) {
   return path.join(planDir, 'review-packages', 'whole-task.md');
-}
-
-function getLedgerPath(planDir) {
-  return path.join(planDir, 'ledger.md');
 }
 
 function getClaimsDir(planDir) {
@@ -2958,67 +2953,6 @@ async function writeWholeTaskReviewPackage(planDir) {
   return target;
 }
 
-function isDurableLedgerCheckpoint(item) {
-  return !isPlaceholderText(item);
-}
-
-function getDurableSectionItems(section) {
-  const items = [];
-  forEachMarkdownLineOutsideFences(section, (line) => {
-    const trimmed = line.trim();
-    if (!trimmed || /^#{1,6}\s+/.test(trimmed)) return;
-    if (/^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?$/.test(trimmed)) return;
-    const listItem = /^[-*]\s+(.+)$/.exec(trimmed)?.[1] ?? trimmed;
-    if (!isPlaceholderText(listItem)) items.push(listItem);
-  });
-  return items;
-}
-
-function hasSliceLedgerCheckpoint(ledger, sliceId) {
-  const sliceCheckpoints = getSection(ledger, 'Slice Checkpoints');
-  const checkpoints = getBlocks(sliceCheckpoints, SLICE_ID_RE);
-  const block = checkpoints.get(sliceId);
-  if (!block) return false;
-  const items = [];
-  forEachMarkdownLineOutsideFences(block.body, (line) => {
-    const match = /^-\s+(.+)$/.exec(line.trim());
-    if (match) items.push(match[1].trim());
-  });
-  return items.some((item) => isDurableLedgerCheckpoint(item));
-}
-
-async function validateLedgerForClose(planDir, slices) {
-  const errors = [];
-  const ledgerPath = getLedgerPath(planDir);
-  let ledger;
-  try {
-    ledger = await fs.readFile(ledgerPath, 'utf8');
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      return [`close-check: missing ledger.md`];
-    }
-    throw error;
-  }
-
-  if (!hasSection(ledger, 'Current Checkpoint')) {
-    errors.push('close-check: ledger.md missing ## Current Checkpoint');
-  } else if (getDurableSectionItems(getSection(ledger, 'Current Checkpoint')).length === 0) {
-    errors.push('close-check: Current Checkpoint must contain a durable checkpoint');
-  }
-  if (!hasSection(ledger, 'Slice Checkpoints')) {
-    errors.push('close-check: ledger.md missing ## Slice Checkpoints');
-  }
-
-  for (const [id, block] of slices) {
-    const status = getField(getSliceHeaderBlock(block.body), '状态');
-    if (status === 'done' && !hasSliceLedgerCheckpoint(ledger, id)) {
-      errors.push(`close-check:${id}: done slice must have at least one ledger checkpoint`);
-    }
-  }
-
-  return errors;
-}
-
 async function closeCheckPlan(planDir) {
   const errors = await validatePlan(planDir);
   if (errors.length > 0) return errors.map((error) => `validate failed before close-check: ${error}`);
@@ -3057,7 +2991,6 @@ async function closeCheckPlan(planDir) {
   }
 
   errors.push(...await validateClaimsForClose(planDir, slices));
-  errors.push(...await validateLedgerForClose(planDir, slices));
 
   return errors;
 }
@@ -3116,7 +3049,6 @@ function planTemplate({ title, upstream }) {
 | --- | --- |
 | [decisions.md](./decisions.md) | 分叉正文 |
 | [audits.md](./audits.md) | 长审计、证据矩阵、diff inventory |
-| [ledger.md](./ledger.md) | durable checkpoint ledger |
 | [claims/S*.json](./claims/) | 每个切片的结构化 Claim / Evidence / Status 真源 |
 
 ## 目标
@@ -3134,19 +3066,6 @@ function planTemplate({ title, upstream }) {
 ## 切片
 
 待拆分。
-`;
-}
-
-function ledgerTemplate() {
-  return `# Progress Ledger
-
-## Current Checkpoint
-
-- pending：尚未产生 durable checkpoint。
-
-## Slice Checkpoints
-
-暂无切片 checkpoint。
 `;
 }
 
@@ -3168,7 +3087,6 @@ export async function initPlan({ slug, title, date = formatDate(), upstream = '�
   await fs.writeFile(path.join(planDir, 'plan.md'), planTemplate({ title, upstream }), 'utf8');
   await fs.writeFile(path.join(planDir, 'decisions.md'), `# ${DECISIONS_DOCUMENT_TITLE}\n\n暂无分叉。\n`, 'utf8');
   await fs.writeFile(path.join(planDir, 'audits.md'), `# ${AUDITS_DOCUMENT_TITLE}\n\n暂无长证据。\n`, 'utf8');
-  await fs.writeFile(getLedgerPath(planDir), ledgerTemplate(), 'utf8');
 
   return planDir;
 }

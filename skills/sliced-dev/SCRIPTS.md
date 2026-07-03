@@ -28,7 +28,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs init <slug> --title "<任务标
 行为：
 
 - 创建 `dev-plans/YYYY-MM-DD-<slug>/`。
-- 固定生成 `plan.md`、`decisions.md`、`audits.md`、`ledger.md`，并创建 `claims/` 目录。
+- 固定生成 `plan.md`、`decisions.md`、`audits.md`，并创建 `claims/` 目录。
 - 创建或维护 `dev-plans/.gitignore`，确保至少包含 `*/review-packages/**`、`*/task-briefs/**`、`*/task-reports/**`。
 - `plan.md` 顶部默认写 `计划一致性预检：pending` 和 `Whole Review：pending`。
 - `<slug>` 只允许小写字母、数字和连字符。
@@ -63,7 +63,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs diff-check dev-plans/YYYY-MM-DD
 - 从当前切片 `禁止修改` 读取禁止改动的文件、目录或 glob。
 - 从当前切片 `禁止词` / `Forbidden terms` / `Deny terms` 读取禁止新增词或高风险模式；只检查新增内容（tracked 文件取 `git diff HEAD` 新增行，untracked 文件视为全文新增），已有存量词不报。
 - 从当前切片 `基线脏文件` / `Dirty baseline` 读取切片开始前已存在的无关脏文件；这些路径跳过全部检查。
-- 自动允许当前 `dev-plans/<date-slug>/plan.md`、`decisions.md`、`audits.md`、`ledger.md` 和 `claims/S*.json` 的记录更新。
+- 自动允许当前 `dev-plans/<date-slug>/plan.md`、`decisions.md`、`audits.md` 和 `claims/S*.json` 的记录更新。
 - 自动跳过 `dev-plans/<date-slug>/review-packages/**`、`dev-plans/<date-slug>/task-briefs/**`、`dev-plans/<date-slug>/task-reports/**` 和 `dev-plans/.gitignore`。
 - 通过 `git status --porcelain -uall` 读取 tracked / untracked dirty files；rename / copy（`旧路径 -> 新路径`）同时检查旧路径和新路径。
 
@@ -284,10 +284,6 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/YYYY-MM-D
 - 每个 `done` 且 `AI Review：passed` 的 slice 必须存在非空 task brief、结论为 `ready-for-review` 的非空 task report、非空 review-package；JSON report 必须 schema valid，legacy `.md` report 继续按旧格式检查；review-package 必须包含 Task Brief、Task Report、Claims、项目规范、Git Diff 统计、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID；Git Diff 统计必须使用 `text` fence，Git Diff 必须使用 `diff` fence，允许无当前 dirty diff。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。
 - `Whole Review：passed` 或 `Whole Review：blocked` 时，`review-packages/whole-task.md` 必须存在、非空，且包含 `whole-review-package` 生成器承诺的顶层章节，包括 Reviewer Instructions、计划头、全局约束、切片概览、切片交接、Claims 概览、D/A 摘要与全文、切片 AI Review、Task Reports、变更文件、Git Diff 和 Whole Review verdict 模板；`Whole Review：not-required（<原因>）` 表示控制器明确不做整审，原因必须非占位。
-- 要求 `ledger.md` 存在，且至少包含 `## Current Checkpoint` 和 `## Slice Checkpoints`。
-- `## Current Checkpoint` 必须有非空、非占位 checkpoint。
-- 每个 `done` 切片必须在 ledger 的 `## Slice Checkpoints` 下至少有一条非占位 checkpoint。
-
 ## show
 
 从仓库根目录执行：

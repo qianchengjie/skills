@@ -50,7 +50,7 @@ Task brief：<dev-plans/.../task-briefs/<S-id>.md>
 - 只允许读取 task brief 及 task brief 中列出的必读上下文。
 - 禁止读取完整 plan.md、其他切片、未关联 D/A、与 task brief 无关的仓库区域。
 - 禁止直接询问用户；任何需要用户确认的问题都 blocked 回控制器。
-- 禁止修改 plan.md、decisions.md、audits.md、ledger.md、claims/S*.json 或切片状态。
+- 禁止修改 plan.md、decisions.md、audits.md、claims/S*.json 或切片状态。
 - 禁止提交 commit。
 - 不要 revert 其他人改动；如果遇到已有脏改动，按 task brief 的基线脏文件和允许范围处理。
 

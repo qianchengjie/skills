@@ -45,7 +45,7 @@ async function writeValidExecutingPlan(planDir) {
 | --- | --- |
 | [decisions.md](./decisions.md) | 分叉正文 |
 | [audits.md](./audits.md) | 长审计、证据矩阵、diff inventory |
-| [ledger.md](./ledger.md) | durable checkpoint ledger |
+| [claims/S*.json](./claims/) | 每个切片的结构化 Claim / Evidence / Status 真源 |
 
 ## 目标
 
@@ -144,22 +144,6 @@ async function writeValidExecutingPlan(planDir) {
 - 关联：S1 / D1
 
 示例证据。
-`,
-    'utf8',
-  );
-  await fs.writeFile(
-    path.join(planDir, 'ledger.md'),
-    `# Progress Ledger
-
-## Current Checkpoint
-
-- initial：已创建示例完整档。
-
-## Slice Checkpoints
-
-### S1
-
-- completed：S1 已完成实现、硬门禁、AI Review 和用户验收。
 `,
     'utf8',
   );
@@ -685,10 +669,7 @@ test('init creates directory plan files', async () => {
     assert.equal(await fs.readFile(path.join(planDir, 'audits.md'), 'utf8'), '# 审计记录\n\n暂无长证据。\n');
     const claimsDir = await fs.stat(path.join(planDir, 'claims'));
     assert.equal(claimsDir.isDirectory(), true);
-    const ledger = await fs.readFile(path.join(planDir, 'ledger.md'), 'utf8');
-    assert.match(ledger, /^# Progress Ledger/m);
-    assert.match(ledger, /## Current Checkpoint/);
-    assert.match(ledger, /## Slice Checkpoints/);
+    await assert.rejects(fs.readFile(path.join(planDir, 'ledger.md'), 'utf8'), { code: 'ENOENT' });
     const plan = await fs.readFile(path.join(planDir, 'plan.md'), 'utf8');
     assert.match(plan, /^# 合并旧 entry/m);
     assert.match(plan, /> 状态：draft/);
@@ -3250,59 +3231,6 @@ test('workflow eval close-check rejects duplicate top-level whole review package
   });
 });
 
-test('workflow eval close-check rejects missing ledger', async () => {
-  await withTempRepo(async () => {
-    const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
-    const planDir = path.join('dev-plans', '2026-06-10-close-check-missing-ledger');
-    await writeValidExecutingPlan(planDir);
-    const planPath = path.join(planDir, 'plan.md');
-    await fs.writeFile(
-      planPath,
-      withPassedWholeReview(withClosedDoneSlice(await fs.readFile(planPath, 'utf8'), planDir)),
-      'utf8',
-    );
-    await fs.rm(path.join(planDir, 'ledger.md'), { force: true });
-
-    const result = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-missing-ledger']);
-    assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /missing ledger\.md/);
-  });
-});
-
-test('workflow eval close-check rejects done slice without ledger checkpoint', async () => {
-  await withTempRepo(async () => {
-    const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
-    const planDir = path.join('dev-plans', '2026-06-10-close-check-ledger-checkpoint');
-    await writeValidExecutingPlan(planDir);
-    const planPath = path.join(planDir, 'plan.md');
-    await fs.writeFile(
-      planPath,
-      withPassedWholeReview(withClosedDoneSlice(await fs.readFile(planPath, 'utf8'), planDir)),
-      'utf8',
-    );
-    await fs.writeFile(
-      path.join(planDir, 'ledger.md'),
-      `# Progress Ledger
-
-## Current Checkpoint
-
-- closing：准备收口。
-
-## Slice Checkpoints
-
-### S1
-
-- pending：待记录。
-`,
-      'utf8',
-    );
-
-    const result = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-ledger-checkpoint']);
-    assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /done slice must have at least one ledger checkpoint/);
-  });
-});
-
 test('workflow eval close-check requires diff-check gate evidence', async () => {
   await withTempRepo(async () => {
     const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
@@ -3645,42 +3573,6 @@ test('workflow eval close-check requires real project rules section in review pa
     const result = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-project-rules-section']);
     assert.equal(result.status, 1, result.stderr.toString());
     assert.match(result.stderr.toString(), /review package missing 项目规范/);
-  });
-});
-
-test('workflow eval close-check requires non-placeholder current checkpoint', async () => {
-  await withTempRepo(async () => {
-    const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
-    const planDir = path.join('dev-plans', '2026-06-10-close-check-current-checkpoint');
-    await writeValidExecutingPlan(planDir);
-    await writeCloseCheckHandoffFixtures('dev-plans/2026-06-10-close-check-current-checkpoint');
-    const planPath = path.join(planDir, 'plan.md');
-    await fs.writeFile(
-      planPath,
-      withPassedWholeReview(withClosedDoneSlice(await fs.readFile(planPath, 'utf8'), planDir)),
-      'utf8',
-    );
-    await fs.writeFile(
-      path.join(planDir, 'ledger.md'),
-      `# Progress Ledger
-
-## Current Checkpoint
-
-- pending：尚未产生 durable checkpoint。
-
-## Slice Checkpoints
-
-### S1
-
-- completed：S1 已完成实现、硬门禁和 AI Review。
-`,
-      'utf8',
-    );
-    initGitRepo();
-
-    const result = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-current-checkpoint']);
-    assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /Current Checkpoint must contain a durable checkpoint/);
   });
 });
 
