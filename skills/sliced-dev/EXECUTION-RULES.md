@@ -60,7 +60,7 @@ REPORT_AND_NEXT
 - `RUN_HARD_GATES`：执行 lint / type-check / test / `diff-check` 等确定性门禁；控制器依据真实证据更新 `claims/<S-id>.json`，不要让 implementer 自行最终裁定 `verified`。
 - `AI_REVIEW_PACKAGE_AND_REVIEW`：生成当前片 review-package，再按 [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md) 派发 reviewer subagent 输出三 verdict；第三 verdict 必须覆盖普通 code quality 与 AI contamination。
 - `FIX_OR_STOP`：每个切片最多自动修复两次；次数用尽仍失败则停止并报告。
-- `USER_ACCEPTANCE`：AI Review 通过后按 [PLAN-FILE.md](PLAN-FILE.md) 的 `用户验收` 字段收口；自动片默认不逐片停下，需确认片 / C 类片必须停下给用户验收。阻塞状态不得提交或标记 done；标记 done 前，当前片所有 claims 必须是 `verified` 或 `waived`。
+- `USER_ACCEPTANCE`：AI Review 通过后按 [PLAN-FILE.md](PLAN-FILE.md) 的 `用户验收` 条件字段收口；自动片默认不逐片停下，靠完成报告、验证、AI Review 和 close-check 收口；需确认片 / C 类片必须停下给用户验收。阻塞状态不得提交或标记 done；标记 done 前，当前片所有 claims 必须是 `verified` 或 `waived`。
 
 低风险 A 类可压缩状态机，但仍必须能说明改动范围和验证结果。B/C 类不得跳过上下文预检、硬门禁和 AI Review；C 类在方案形成后必须停下等人工确认。
 
@@ -324,7 +324,7 @@ AI Review 结果写回：
 
 ## 用户验收
 
-AI Review 通过后，按执行模式处理用户验收；字段枚举、合法条件和 done 约束见 [PLAN-FILE.md](PLAN-FILE.md) 的切片字段规则。自动片默认不逐片停下，在完成报告中给出 review-package 路径、实际改动和验证摘要后继续提交；若用户明确要求逐片验收，则写 `用户验收：pending` 并停下。需确认片 / C 类片必须先写 `用户验收：pending`，报告 review-package 路径、实际改动和验证摘要，然后停下等用户验收本 slice。
+AI Review 通过后，按执行模式处理用户验收；字段枚举、合法条件和 done 约束见 [PLAN-FILE.md](PLAN-FILE.md) 的切片字段规则。自动片默认不写 `用户验收`、不逐片停下，在完成报告中给出 review-package 路径、实际改动和验证摘要后继续提交；若用户明确要求逐片验收，则写 `用户验收：pending` 并停下。需确认片 / C 类片必须先写 `用户验收：pending`，报告 review-package 路径、实际改动和验证摘要，然后停下等用户验收本 slice。
 
 用户不满意但不改变范围 / 口径时进入本片有限修复循环；用户反馈改变范围、验收口径、非目标或风险等级时，不直接修，转 `D* open` 分叉并回到分叉处理协议。返工后必须重跑受影响硬门禁和 AI Review，再次进入用户验收判定。
 
@@ -387,11 +387,11 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs whole-review-package dev-plans/
 
 ## 完成报告
 
-每片用户验收收口后先报告，再进入下一片：
+每片收口后先报告，再进入下一片：
 
 - 实际完成内容。
 - 实际影响范围。
-- 验证结果、硬门禁结果、AI Review 结果、用户验收结果；失败 / 跳过说明原因和风险。
+- 验证结果、硬门禁结果、AI Review 结果，以及启用时的用户验收结果；失败 / 跳过说明原因和风险。
 - task report 结论、review-package 路径和三项 verdict 摘要。
 - 修复次数；如果触发有限修复，说明每次修了什么。
 - plan 内 `Commit` 状态、提交后的 commit hash 或无变更说明；commit hash 只放在完成报告或外部提交记录，不写回 plan。
@@ -404,7 +404,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs whole-review-package dev-plans/
 
 ### 代码提交（每片）
 
-每个切片完成验证、AI Review 和用户验收后，自动收口本片代码提交边界：
+每个切片完成验证、AI Review 和必要的用户验收后，自动收口本片代码提交边界：
 
 - 切片执行前记录 `git status --short -uall` 作为提交边界基线，并把与本片无关的既有脏文件写入该片上下文预检的 `基线脏文件`；`diff-check` 据此跳过基线内路径。
 - 提交前更新该片 `dev-plans` 状态、验证字段和 `Commit：待提交` / `Commit：已提交` 状态；`Commit` 表示本片**代码**提交状态，不表示 `dev-plans` 自身是否已提交。标准验证通过只写切片摘要，失败 / 阻塞 / 跳过或非标准替代命令在切片内写简短 `验证备注`。

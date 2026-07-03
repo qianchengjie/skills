@@ -27,7 +27,7 @@ const EXECUTION_MODES = new Set(['待判定', '自动', '需确认']);
 const PREFLIGHT_STATUSES = new Set(['pending', 'ready', 'blocked', 'skipped']);
 const HARD_GATE_STATUSES = new Set(['pending', 'passed', 'failed', 'blocked', 'skipped']);
 const AI_REVIEW_STATUSES = new Set(['pending', 'passed', 'issues', 'blocked', 'skipped']);
-const USER_ACCEPTANCE_STATUSES = new Set(['pending', 'passed', 'issues', 'skipped', 'not-required']);
+const USER_ACCEPTANCE_STATUSES = new Set(['pending', 'passed', 'issues', 'skipped']);
 const DECISION_STATUSES = new Set(['open', 'decided']);
 const AUDIT_STATUSES = new Set(['pending', 'active', 'done']);
 const PLAN_VALIDATION_STATUSES = new Set(['pending', 'passed', 'failed', 'blocked', 'skipped']);
@@ -3357,20 +3357,13 @@ function validateSliceBlock(id, body, slices, decisions, audits, referencedDecis
   if (!statusStartsWithAllowed(aiReview, AI_REVIEW_STATUSES)) {
     errors.push(`plan.md:${id}: invalid AI Review ${aiReview ?? '<missing>'}`);
   }
-  if (!statusStartsWithAllowed(userAcceptance, USER_ACCEPTANCE_STATUSES)) {
+  const hasUserAcceptance = userAcceptance !== undefined;
+  if (hasUserAcceptance && !statusStartsWithAllowed(userAcceptance, USER_ACCEPTANCE_STATUSES)) {
     errors.push(`plan.md:${id}: invalid 用户验收 ${userAcceptance ?? '<missing>'}`);
   }
-  const userAcceptanceStatus = getStatusPrefix(userAcceptance);
+  const userAcceptanceStatus = hasUserAcceptance ? getStatusPrefix(userAcceptance) : undefined;
   if (userAcceptanceStatus === 'skipped' && isPlaceholderText(getStatusReason(userAcceptance))) {
     errors.push(`plan.md:${id}: 用户验收 skipped requires reason`);
-  }
-  if (userAcceptanceStatus === 'not-required') {
-    if (execution !== '自动') {
-      errors.push(`plan.md:${id}: 用户验收 not-required only allowed for 执行：自动`);
-    }
-    if (isPlaceholderText(getStatusReason(userAcceptance))) {
-      errors.push(`plan.md:${id}: 用户验收 not-required requires reason`);
-    }
   }
   const repair = validateRepairAttempts(repairAttempts);
   if (!repair.valid) errors.push(`plan.md:${id}: invalid 修复次数 ${repairAttempts ?? '<missing>'}`);
@@ -3509,7 +3502,8 @@ function validateSliceBlock(id, body, slices, decisions, audits, referencedDecis
     const preflightDone = new Set(['ready', 'skipped']);
     const hardGateDone = new Set(['passed', 'skipped']);
     const aiReviewDone = new Set(['passed', 'skipped']);
-    const userAcceptanceDone = new Set(['passed', 'skipped', 'not-required']);
+    const userAcceptanceDone = new Set(['passed', 'skipped']);
+    const requiresUserAcceptance = execution === '需确认' || risk === 'C';
     if (risk === '待判定' || execution === '待判定') {
       errors.push(`plan.md:${id}: done slice must have definite 风险 and 执行`);
     }
@@ -3522,8 +3516,11 @@ function validateSliceBlock(id, body, slices, decisions, audits, referencedDecis
     if (!aiReviewDone.has(getStatusPrefix(aiReview))) {
       errors.push(`plan.md:${id}: done slice must have AI Review passed/skipped`);
     }
-    if (!userAcceptanceDone.has(getStatusPrefix(userAcceptance))) {
-      errors.push(`plan.md:${id}: done slice must have 用户验收 passed/skipped/not-required`);
+    if (requiresUserAcceptance && !userAcceptanceDone.has(userAcceptanceStatus)) {
+      errors.push(`plan.md:${id}: done slice must have 用户验收 passed/skipped for 需确认/C`);
+    }
+    if (!requiresUserAcceptance && hasUserAcceptance && !userAcceptanceDone.has(userAcceptanceStatus)) {
+      errors.push(`plan.md:${id}: done slice cannot keep 用户验收 ${userAcceptanceStatus}`);
     }
     if (risk === 'B' || risk === 'C') {
       if (getStatusPrefix(preflight) === 'skipped') {
@@ -3539,9 +3536,6 @@ function validateSliceBlock(id, body, slices, decisions, audits, referencedDecis
   }
   if (getStatusPrefix(aiReview) === 'issues' && status === 'done') {
     errors.push(`plan.md:${id}: done slice cannot keep AI Review issues`);
-  }
-  if (getStatusPrefix(userAcceptance) === 'issues' && status === 'done') {
-    errors.push(`plan.md:${id}: done slice cannot keep 用户验收 issues`);
   }
 }
 

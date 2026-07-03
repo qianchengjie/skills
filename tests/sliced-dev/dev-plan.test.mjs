@@ -66,7 +66,6 @@ async function writeValidExecutingPlan(planDir) {
 - 上下文预检：pending
 - 硬门禁：pending
 - AI Review：pending
-- 用户验收：pending
 - 修复次数：0/2
 - 依赖：无
 - Commit：待提交
@@ -157,7 +156,6 @@ function createConsumerSliceBlock() {
 - 上下文预检：pending
 - 硬门禁：pending
 - AI Review：pending
-- 用户验收：pending
 - 修复次数：0/2
 - 依赖：S1
 - Commit：待提交
@@ -211,7 +209,6 @@ function createClosedConsumerSliceBlock() {
     .replace('- 上下文预检：pending', '- 上下文预检：ready')
     .replace('- 硬门禁：pending', '- 硬门禁：passed（标准流程）')
     .replace('- AI Review：pending', '- AI Review：skipped（A 类用户允许跳过）')
-    .replace('- 用户验收：pending', '- 用户验收：skipped（A 类用户明确跳过）')
     .replace('- Commit：待提交', '- Commit：已提交')
     .replace('- 验证：pending', '- 验证：passed（标准流程）')
     .replace('- 需理解：待执行前补充。', '- 需理解：S1 产出的切片交接。')
@@ -317,7 +314,6 @@ function withClosedDoneSlice(plan, planDir = 'dev-plans/2026-06-10-close-check',
     .replace('- 上下文预检：pending', '- 上下文预检：ready')
     .replace('- 硬门禁：pending', '- 硬门禁：passed（标准流程）')
     .replace('- AI Review：pending', '- AI Review：passed')
-    .replace('- 用户验收：pending', '- 用户验收：passed')
     .replace('- Commit：待提交', '- Commit：已提交')
     .replace('- 验证：pending', '- 验证：passed（标准流程）');
 }
@@ -915,7 +911,6 @@ test('validate rejects duplicate plan decision and audit ids', async () => {
 - 上下文预检：pending
 - 硬门禁：pending
 - AI Review：pending
-- 用户验收：pending
 - 修复次数：0/2
 - 依赖：无
 - Commit：待提交
@@ -1612,7 +1607,6 @@ test('validate rejects skipped gates on done B or C slices', async () => {
         .replace('- 上下文预检：pending', '- 上下文预检：ready')
         .replace('- 硬门禁：pending', '- 硬门禁：skipped（纯记录改动）')
         .replace('- AI Review：pending', '- AI Review：passed')
-        .replace('- 用户验收：pending', '- 用户验收：passed')
         .replace('- 验证：pending', '- 验证：passed（标准流程）'),
       'utf8',
     );
@@ -1639,7 +1633,6 @@ test('validate requires review verdicts before done slice with AI Review passed'
         .replace('- 上下文预检：pending', '- 上下文预检：ready')
         .replace('- 硬门禁：pending', '- 硬门禁：passed（标准流程）')
         .replace('- AI Review：pending', '- AI Review：passed')
-        .replace('- 用户验收：pending', '- 用户验收：passed')
         .replace('- 验证：pending', '- 验证：passed（标准流程）'),
       'utf8',
     );
@@ -1682,7 +1675,6 @@ test('validate blocks done slice on failed critical or cannot-verify review verd
       .replace('- 上下文预检：pending', '- 上下文预检：ready')
       .replace('- 硬门禁：pending', '- 硬门禁：passed（标准流程）')
       .replace('- AI Review：pending', '- AI Review：passed')
-      .replace('- 用户验收：pending', '- 用户验收：passed')
       .replace('- 验证：pending', '- 验证：passed（标准流程）');
 
     await fs.writeFile(
@@ -1711,7 +1703,7 @@ test('validate blocks done slice on failed critical or cannot-verify review verd
   });
 });
 
-test('validate rejects done slice without user acceptance', async () => {
+test('validate accepts automatic done slice without user acceptance', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-done-user-acceptance');
     await writeValidExecutingPlan(planDir);
@@ -1732,8 +1724,51 @@ test('validate rejects done slice without user acceptance', async () => {
       'utf8',
     );
 
+    assert.deepEqual(await validatePlan(planDir), []);
+  });
+});
+
+test('validate rejects automatic done slice with pending user acceptance', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-done-user-acceptance-pending');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = await fs.readFile(planPath, 'utf8');
+    await fs.writeFile(
+      planPath,
+      withClosedDoneSlice(plan, planDir)
+        .replace('- AI Review：passed', '- AI Review：passed\n- 用户验收：pending'),
+      'utf8',
+    );
+
     const errors = await validatePlan(planDir);
-    assert(errors.some((error) => error.includes('done slice must have 用户验收 passed/skipped')));
+    assert(errors.some((error) => error.includes('done slice cannot keep 用户验收 pending')));
+  });
+});
+
+test('validate rejects confirmation done slice without user acceptance', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-done-user-acceptance-required');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = await fs.readFile(planPath, 'utf8');
+    await fs.writeFile(
+      planPath,
+      withPassedReviewVerdicts(withFilledContextPreflight(plan))
+        .replace('> 状态：executing', '> 状态：done')
+        .replace('- 阶段：executing', '- 阶段：done')
+        .replace('- 当前切片：S1', '- 当前切片：无')
+        .replace('- 状态：not-started', '- 状态：done')
+        .replace('- 执行：待判定', '- 执行：需确认')
+        .replace('- 上下文预检：pending', '- 上下文预检：ready')
+        .replace('- 硬门禁：pending', '- 硬门禁：passed（标准流程）')
+        .replace('- AI Review：pending', '- AI Review：passed')
+        .replace('- 验证：pending', '- 验证：passed（标准流程）'),
+      'utf8',
+    );
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('done slice must have 用户验收 passed/skipped for 需确认/C')));
   });
 });
 
@@ -1743,62 +1778,31 @@ test('validate rejects skipped user acceptance without reason', async () => {
     await writeValidExecutingPlan(planDir);
     const planPath = path.join(planDir, 'plan.md');
     const plan = await fs.readFile(planPath, 'utf8');
-    await fs.writeFile(planPath, plan.replace('- 用户验收：pending', '- 用户验收：skipped'), 'utf8');
+    await fs.writeFile(
+      planPath,
+      plan.replace('- AI Review：pending', '- AI Review：pending\n- 用户验收：skipped'),
+      'utf8',
+    );
 
     const errors = await validatePlan(planDir);
     assert(errors.some((error) => error.includes('用户验收 skipped requires reason')));
   });
 });
 
-test('validate accepts automatic done slice with not-required user acceptance', async () => {
+test('validate rejects not-required user acceptance', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-user-acceptance-not-required');
     await writeValidExecutingPlan(planDir);
     const planPath = path.join(planDir, 'plan.md');
     await fs.writeFile(
       planPath,
-      withClosedDoneSlice(await fs.readFile(planPath, 'utf8'), planDir)
-        .replace('- 用户验收：passed', '- 用户验收：not-required（自动片，完成报告暴露验证和风险）'),
-      'utf8',
-    );
-
-    assert.deepEqual(await validatePlan(planDir), []);
-  });
-});
-
-test('validate rejects not-required user acceptance outside automatic slices', async () => {
-  await withTempRepo(async () => {
-    const planDir = path.join('dev-plans', '2026-06-10-user-acceptance-not-required-blocked');
-    await writeValidExecutingPlan(planDir);
-    const planPath = path.join(planDir, 'plan.md');
-    await fs.writeFile(
-      planPath,
       (await fs.readFile(planPath, 'utf8'))
-        .replace('- 执行：待判定', '- 执行：需确认')
-        .replace('- 用户验收：pending', '- 用户验收：not-required（自动片，完成报告暴露验证和风险）'),
+        .replace('- AI Review：pending', '- AI Review：pending\n- 用户验收：not-required（自动片，完成报告暴露验证和风险）'),
       'utf8',
     );
 
     const errors = await validatePlan(planDir);
-    assert(errors.some((error) => error.includes('用户验收 not-required only allowed for 执行：自动')));
-  });
-});
-
-test('validate rejects not-required user acceptance without reason', async () => {
-  await withTempRepo(async () => {
-    const planDir = path.join('dev-plans', '2026-06-10-user-acceptance-not-required-reason');
-    await writeValidExecutingPlan(planDir);
-    const planPath = path.join(planDir, 'plan.md');
-    await fs.writeFile(
-      planPath,
-      (await fs.readFile(planPath, 'utf8'))
-        .replace('- 执行：待判定', '- 执行：自动')
-        .replace('- 用户验收：pending', '- 用户验收：not-required'),
-      'utf8',
-    );
-
-    const errors = await validatePlan(planDir);
-    assert(errors.some((error) => error.includes('用户验收 not-required requires reason')));
+    assert(errors.some((error) => error.includes('invalid 用户验收 not-required')));
   });
 });
 
@@ -1820,7 +1824,6 @@ test('validate accepts skipped gates on done A slices', async () => {
         .replace('- 上下文预检：pending', '- 上下文预检：ready')
         .replace('- 硬门禁：pending', '- 硬门禁：skipped（纯文档改动）')
         .replace('- AI Review：pending', '- AI Review：skipped（A 类用户允许跳过）')
-        .replace('- 用户验收：pending', '- 用户验收：skipped（用户明确跳过）')
         .replace('- 验证：pending', '- 验证：passed（标准流程）'),
       'utf8',
     );
@@ -1845,7 +1848,6 @@ test('validate rejects done slice with undecided risk or execution', async () =>
         .replace('- 上下文预检：pending', '- 上下文预检：ready')
         .replace('- 硬门禁：pending', '- 硬门禁：passed（标准流程）')
         .replace('- AI Review：pending', '- AI Review：passed')
-        .replace('- 用户验收：pending', '- 用户验收：passed')
         .replace('- 验证：pending', '- 验证：passed（标准流程）'),
       'utf8',
     );
@@ -2780,7 +2782,6 @@ test('close-check does not treat task report claim updates as final claim truth'
         .replace('- 上下文预检：pending', '- 上下文预检：ready')
         .replace('- 硬门禁：pending', '- 硬门禁：passed（标准流程）')
         .replace('- AI Review：pending', '- AI Review：skipped（A 类用户允许跳过）')
-        .replace('- 用户验收：pending', '- 用户验收：passed')
         .replace('- Commit：待提交', '- Commit：已提交')
         .replace('- 验证：pending', '- 验证：passed（标准流程）'),
       'utf8',

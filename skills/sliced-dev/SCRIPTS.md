@@ -344,7 +344,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - draft 且未切片时允许 `## 切片` 为 `待拆分。`。
 - 切片产出后，`当前切片：待定` 非法；完成态必须写 `当前切片：无`；当前切片不能指向 `done` / `skipped` / `split`。
 - `paused` 不能停在 `slicing` 阶段；`done` 必须搭配 `阶段：done`。
-- 每个 `S*` 切片必须有状态、门禁、候选、风险、执行、上下文预检、硬门禁、AI Review、修复次数、依赖、Commit、验证、关联项、上下文预检小节、门禁记录、任务内容、验收；`#### 切片交接` 可选，旧 `#### 接口契约` 非法。
+- 每个 `S*` 切片必须有状态、门禁、候选、风险、执行、上下文预检、硬门禁、AI Review、修复次数、依赖、Commit、验证、关联项、上下文预检小节、门禁记录、任务内容、验收；`用户验收` 是条件字段；`#### 切片交接` 可选，旧 `#### 接口契约` 非法。
 - 执行控制字段只从切片头部（首个 `####` 子节前）读取；门禁记录等小节中的同名行不能顶替。
 - 切片 ID 必须匹配 `S<digits>(.<digits>)*`。
 - `风险` 只允许 `待判定` / `A` / `B` / `C`；`风险：C` 不允许 `执行：自动`。
@@ -352,6 +352,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - `上下文预检` 只允许 `pending` / `ready` / `blocked` / `skipped` 开头。
 - `硬门禁` 只允许 `pending` / `passed` / `failed` / `blocked` / `skipped` 开头。
 - `AI Review` 只允许 `pending` / `passed` / `issues` / `blocked` / `skipped` 开头。
+- 写入 `用户验收` 时只允许 `pending` / `passed` / `issues` / `skipped` 开头；`skipped` 必须写明用户明确跳过原因。
 - `修复次数` 必须是 `当前次数/最大次数`，最大次数大于 0，当前次数不超过最大次数。
 - `上下文预检` 必须包含 `需理解`、`必读上下文`、`项目规范`、`允许修改`、`禁止修改`、`非目标`、`停止条件`。
 - `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不能是 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规范` / `禁止修改` 可显式写 `无`。
@@ -362,7 +363,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - `AI Review：issues` / `AI Review：blocked` 必须有非占位头部原因，或在 `#### AI Review 结论` 中有 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位。
 - verdict `Status` 只允许 `passed` / `failed` / `cannot-verify-from-package` / `not-applicable`；`Severity` 只允许 `critical` / `major` / `minor` / `not-applicable`。
 - `AI Review：passed` 或 `状态：done` 的切片中，任一 verdict 为 `failed`、`cannot-verify-from-package` 或 `Severity=critical` 都非法。
-- `状态：done` 的切片必须满足 [PLAN-FILE.md](PLAN-FILE.md) 的完成态约束；`风险：B/C` 不允许三项机器门禁为 `skipped`。
+- `状态：done` 的切片必须满足 [PLAN-FILE.md](PLAN-FILE.md) 的完成态约束；`风险：B/C` 不允许三项机器门禁为 `skipped`；`执行：需确认` / `风险：C` 必须有 `用户验收：passed/skipped`。
 - 依赖字段中出现的 `S*` 必须存在。
 - 关联项只能包含 `D*` 和 `A*`，ID 不能重复。
 - 关联项状态必须与对应正文块状态一致。
