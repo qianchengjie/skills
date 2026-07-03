@@ -29,8 +29,7 @@
 subagent 返回后，控制器先做接收门禁：
 
 - 读取 subagent final summary。
-- 读取 `task-reports/<S-id>.json`，确认 `conclusion: ready-for-review`；只有 legacy `.md` report 存在时才按旧格式兼容。
-- 读取 `claimUpdates` 可解析记录；implementer 只能建议状态和证据，不能最终裁定 `verified` / `waived`。
+- 读取 `task-reports/<S-id>.json`，确认 `conclusion: ready-for-review` 且最小 handoff 字段已填写。
 - 检查实际改动文件落在 task brief 的 `允许修改` 范围内，且未命中 `禁止修改`。
 - 确认 subagent 未报告 blocked、新分叉、风险升级、验证方式变化或越界需求。
 
@@ -65,7 +64,7 @@ Task brief：<dev-plans/.../task-briefs/<S-id>.md>
 
 复核不通过时：
 - 不实现。
-- 填写 `task-reports/<S-id>.json`，`conclusion` 写 `blocked`，并在 `risks`、`reviewFocus` 或 `claimUpdates` 中说明阻塞原因。
+- 填写 `task-reports/<S-id>.json`，`conclusion` 写 `blocked`，并在 `blockedReason` 中说明阻塞原因。
 - final summary 说明 blocked 原因、需要控制器补什么。
 
 复核通过时：
@@ -73,14 +72,13 @@ Task brief：<dev-plans/.../task-briefs/<S-id>.md>
 - 可以新增当前切片直接相关测试，但路径必须落在允许修改范围内。
 - 可以运行 task brief 明确列出的 focused 验证命令。
 - 可以修复自己本次实现直接造成的 lint/test 失败；需要越界或改变方案时立即 blocked。
-- 不要把 claim 自行写成最终 `verified` / `waived`；只在 task report 的 `claimUpdates` 中提出 `proposed` / `implemented` / `blocked` / `failed` 等建议和证据。
+- 不要修改 `claims/S*.json`，也不要在 task report 中提出 claim 状态建议；claim 状态和证据由控制器写回。
 
 输出要求：
 - 必须填写 `task-reports/<S-id>.json`。
 - `conclusion` 默认保持 `blocked`；只有满足进入 review 的条件时才改为 `ready-for-review`。
-- `changedFiles` 必须逐项填写 `path`、`reason` 和 `claimIds`。
-- `claimUpdates` 必须覆盖所有 P0/P1 claims；`conclusion: ready-for-review` 时 P0/P1 的 `proposedStatus` 必须是 `implemented`，且有 evidence 或 note。
-- `proposedStatus` 只能是 `proposed` / `implemented` / `blocked` / `failed`，不能写 `verified` / `waived`。
-- `validation` 必须记录已运行、失败、跳过或未运行的命令。
-- final summary 只写：结论、改动文件、验证命令结果、claimUpdates 摘要、是否 blocked 及原因。
+- `changedFiles` 必须逐项填写 `path` 和 `reason`。
+- `validation` 必须记录已运行、失败、跳过或未运行的命令 / 检查，包含 `status` 和非占位 `summary`。
+- `blockedReason` 在 `blocked` 时必须填写；`ready-for-review` 时必须为空。
+- final summary 只写：结论、改动文件、验证命令结果、是否 blocked 及原因。
 ```

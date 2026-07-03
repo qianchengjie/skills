@@ -239,7 +239,7 @@ dev-plans/
 每个切片必须有 `#### 门禁记录`，记录 diff-check 结果、接收门禁和门禁执行摘要（如每次修复改了什么）。硬门禁、AI Review、修复次数的状态唯一真源是切片头部字段，不在本小节重复记录同名状态行；详细失败信息仍放在本切片 `验证备注` 或 `audits.md` 的长证据中。`状态：done` 时，`close-check` 要求 diff-check 记录为结构化表格，且 command / evidence 非空、非占位；command 中的 `diff-check <planDir> <S-id>` 必须指向当前计划目录和当前切片。
 ## Claims / Evidence / Status
 
-`claims/S*.json` 是每个切片的 Claim / Evidence / Status 结构化真源。`plan.md` 继续承载切片叙事、上下文预检、门禁状态和 AI Review 结论；不要把完整 claims 状态双写进 Markdown 表格，也不要在 `plan.md` 双写完整 task report 状态。task brief、task report、review-package 和 whole-review-package 只渲染或回传 claims 信息。
+`claims/S*.json` 是每个切片的 Claim / Evidence / Status 结构化真源。`plan.md` 继续承载切片叙事、上下文预检、门禁状态和 AI Review 结论；不要把完整 claims 状态双写进 Markdown 表格，也不要在 `plan.md` 双写完整 task report 状态。task brief、review-package 和 whole-review-package 会渲染 claims 信息；task report 只记录 implementer handoff。
 
 每个可执行切片建议在实现前生成 claims 文件：
 
@@ -314,13 +314,13 @@ Evidence 字段规则：
 
 ## Task Brief / Task Report
 
-`task-briefs/<S-id>.md` 和 `task-reports/<S-id>.json` 由脚本生成，是实现与审查的注意力收束视图，不写入 `plan.md` 正文。task brief 限制 implementer 的默认上下文；task report 是 implementer 的结构化交付报告 / update request，不是 Claim / Evidence / Status 的最终真源；只有 legacy `task-reports/<S-id>.md` 存在时才按旧格式兼容。
+`task-briefs/<S-id>.md` 和 `task-reports/<S-id>.json` 由脚本生成，是实现与审查的注意力收束视图，不写入 `plan.md` 正文。task brief 限制 implementer 的默认上下文；task report 是 implementer 的最小结构化 handoff，不是 Claim / Evidence / Status 的最终真源。
 
 - task brief 从当前切片、`全局约束`、`上下文预检`（含 `项目规范` / `禁止词` / `基线脏文件`）、`切片交接`、关联 D/A、门禁记录和 `claims/<S-id>.json` 提取窄上下文；修改运行时逻辑时，implementer subagent 必须补直接相关测试，或在 task report 说明不适用原因。
-- task report 由 implementer subagent 填写 `completed`、`changedFiles`、`briefConsistency`、`claimUpdates`、`validation`、`risks`、`reviewFocus` 和 `conclusion`；控制器不得代写 ready report。
-- `claimUpdates[*].proposedStatus` 只允许 `proposed` / `implemented` / `blocked` / `failed`，不得写 `verified` / `waived`。
-- `conclusion: ready-for-review` 时，所有 P0/P1 claims 的 `claimUpdates` 必须是 `implemented`，并提供 evidence 或 note。
-- `review-package` 只接受 `conclusion: ready-for-review` 的 task report。
+- task report 由 implementer subagent 填写 `conclusion`、`changedFiles`、`validation` 和 `blockedReason`；控制器不得代写 ready report。
+- task report 不写 claim 状态建议；claims 更新由控制器依据实现、硬门禁、diff-check、测试 / 命令结果和必要回源检查直接写入 `claims/<S-id>.json`。
+- `conclusion: ready-for-review` 时，`changedFiles` 和 `validation` 必须非空；`blockedReason` 必须为空。`conclusion: blocked` 时，`blockedReason` 必须非空。
+- `review-package` 只接受 `conclusion: ready-for-review` 的 task report；同时 P0/P1 claims 必须已由控制器写成 `implemented` / `verified` / 合法 `waived`，并带 evidence 或 note。
 - `review-package` 是 reviewer 的注意力入口，不是事实真源；它必须包含 `项目规范`，Evidence 填写 review-package 章节名、文件路径或固定不适用标记；自然语言判断写 Note。若 P0/P1 claim、边界或证据无法从 package 判断，reviewer 必须 focused 回源检查，或输出 `cannot-verify-from-package`。
 
 ## AI Review 结论
