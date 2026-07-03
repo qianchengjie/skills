@@ -32,7 +32,7 @@ const AI_REVIEW_STATUSES = new Set(['pending', 'passed', 'issues', 'blocked', 's
 const USER_ACCEPTANCE_STATUSES = new Set(['pending', 'passed', 'issues', 'skipped']);
 const DECISION_STATUSES = new Set(['open', 'decided']);
 const AUDIT_STATUSES = new Set(['pending', 'active', 'done']);
-const VALIDATION_STATUSES = new Set(['pending', 'passed', 'failed', 'blocked', 'skipped']);
+const PLAN_VALIDATION_STATUSES = new Set(['pending', 'passed', 'failed', 'blocked', 'skipped']);
 const COMMIT_STATUSES = new Set(['待提交', '已提交']);
 const DEV_PLANS_GITIGNORE = path.join('dev-plans', '.gitignore');
 const DEV_PLANS_GITIGNORE_PATTERNS = [
@@ -42,6 +42,22 @@ const DEV_PLANS_GITIGNORE_PATTERNS = [
 ];
 const CLAIM_SCHEMA_VERSION = 'sliced-dev.claims.v1';
 const CLAIM_ID_RE = /^C\d+$/;
+const READY_FOR_REVIEW_CONCLUSION = 'ready-for-review';
+const TASK_REPORT_SCHEMA_VERSION = 'sliced-dev.taskReport.v1';
+const TASK_REPORT_CONCLUSIONS = new Set([READY_FOR_REVIEW_CONCLUSION, 'blocked']);
+const BRIEF_CONSISTENCY_STATUSES = new Set(['matched', 'deviated', 'blocked']);
+const TASK_REPORT_PROPOSED_STATUSES = new Set(['proposed', 'implemented', 'blocked', 'failed']);
+const VALIDATION_STATUSES = new Set(['passed', 'failed', 'not-run', 'skipped']);
+const RISK_SEVERITIES = new Set(['low', 'medium', 'high', 'critical']);
+const CLAIM_EVIDENCE_KINDS = new Set([
+  'test',
+  'command',
+  'diff-check',
+  'code',
+  'ci',
+  'manual',
+  'ai-statement',
+]);
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const PLAN_DIR_RE = /^\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -176,7 +192,6 @@ const REQUIRED_SLICE_REVIEW_PACKAGE_SECTIONS = [
   '控制器证据',
 ];
 const TERMINAL_SLICE_STATUSES = new Set(['done', 'skipped', 'split']);
-const READY_FOR_REVIEW_CONCLUSION = 'ready-for-review';
 const IMPLEMENTER_CONCLUSIONS = new Set([READY_FOR_REVIEW_CONCLUSION, 'blocked']);
 
 function formatDate(date = new Date()) {
@@ -645,7 +660,7 @@ function isPlaceholderText(item, { allowExplicitNone = false } = {}) {
   const normalized = normalizePlaceholderItem(item ?? '');
   if (!normalized) return true;
   if (allowExplicitNone && /^(无|none|n\/a|na)$/i.test(normalized)) return false;
-  return /^(无|none|n\/a|na|tbd|todo|待补充|待执行前补充|未填写|暂无|待记录|pending)(?:$|[\s：:，,])/i.test(
+  return /^(无|none|n\/a|na|tbd|todo|待补充|待填写|待执行前补充|未填写|暂无|待记录|pending)(?:$|[\s：:，,])/i.test(
     normalized,
   );
 }
@@ -1152,8 +1167,16 @@ function getTaskBriefPath(planDir, sliceId) {
   return path.join(planDir, 'task-briefs', `${sliceId}.md`);
 }
 
-function getTaskReportPath(planDir, sliceId) {
+function getTaskReportJsonPath(planDir, sliceId) {
+  return path.join(planDir, 'task-reports', `${sliceId}.json`);
+}
+
+function getTaskReportMarkdownPath(planDir, sliceId) {
   return path.join(planDir, 'task-reports', `${sliceId}.md`);
+}
+
+function getTaskReportPath(planDir, sliceId) {
+  return getTaskReportMarkdownPath(planDir, sliceId);
 }
 
 function getWholeTaskReviewPackagePath(planDir) {
@@ -1208,6 +1231,31 @@ async function readRequiredSliceClaims(planDir, sliceId, commandName) {
     throw gateError(`${commandName}: claims/${sliceId}.json ${result.invalid}`);
   }
   return result;
+}
+
+async function readTaskReport(planDir, sliceId) {
+  const jsonPath = getTaskReportJsonPath(planDir, sliceId);
+  try {
+    const content = await fs.readFile(jsonPath, 'utf8');
+    try {
+      return { format: 'json', report: JSON.parse(content), invalid: undefined, path: jsonPath };
+    } catch (error) {
+      return { format: 'json', report: undefined, invalid: `invalid JSON: ${error.message}`, path: jsonPath };
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+
+  const markdownPath = getTaskReportMarkdownPath(planDir, sliceId);
+  try {
+    const content = await fs.readFile(markdownPath, 'utf8');
+    return { format: 'legacy-md', report: content, invalid: undefined, path: markdownPath };
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return { format: 'missing', report: undefined, invalid: undefined, path: jsonPath };
+    }
+    throw error;
+  }
 }
 
 function evidenceSummary(evidence) {
@@ -1323,6 +1371,214 @@ function validateClaimUpdates(taskReport) {
   return [];
 }
 
+function hasFilledString(value) {
+  return typeof value === 'string'
+    && value.trim() !== ''
+    && !isPlaceholderText(value)
+    && !hasTemplatePlaceholder(value);
+}
+
+function getClaimIdSet(claimsData) {
+  return new Set((Array.isArray(claimsData?.claims) ? claimsData.claims : [])
+    .map((claim) => claim?.id)
+    .filter((id) => typeof id === 'string'));
+}
+
+function validateClaimIdArray(value, claimIds, prefix, fieldName, errors) {
+  if (!Array.isArray(value)) {
+    errors.push(`${prefix}: ${fieldName} must be an array`);
+    return;
+  }
+  for (const claimId of value) {
+    if (typeof claimId !== 'string' || !claimIds.has(claimId)) {
+      errors.push(`${prefix}: ${fieldName} references unknown claim ${claimId ?? '<missing>'}`);
+    }
+  }
+}
+
+function validateTaskReportEvidence(value, prefix, errors) {
+  if (!Array.isArray(value)) {
+    errors.push(`${prefix}: evidence must be an array`);
+    return;
+  }
+  for (const [index, evidence] of value.entries()) {
+    const evidencePrefix = `${prefix}:evidence[${index}]`;
+    if (!isPlainObject(evidence)) {
+      errors.push(`${evidencePrefix}: evidence must be an object`);
+      continue;
+    }
+    if (!CLAIM_EVIDENCE_KINDS.has(evidence.kind)) {
+      errors.push(`${evidencePrefix}: kind must be one of ${[...CLAIM_EVIDENCE_KINDS].join(' / ')}`);
+    }
+    for (const field of ['kind', 'status', 'command', 'file', 'symbol', 'uri', 'summary', 'artifact']) {
+      if (evidence[field] !== undefined && typeof evidence[field] !== 'string') {
+        errors.push(`${evidencePrefix}: ${field} must be a string`);
+      }
+    }
+  }
+}
+
+function validateTaskReport(report, sliceId, claimsData) {
+  const errors = [];
+  const prefix = `task-reports/${sliceId}.json`;
+  if (!isPlainObject(report)) {
+    return [`${prefix}: root must be an object`];
+  }
+
+  const claims = Array.isArray(claimsData?.claims) ? claimsData.claims : [];
+  const claimIds = getClaimIdSet(claimsData);
+  if (claimIds.size === 0) {
+    errors.push(`${prefix}: requires non-empty claims/${sliceId}.json before validating task report`);
+  }
+
+  if (report.schemaVersion !== TASK_REPORT_SCHEMA_VERSION) {
+    errors.push(`${prefix}: schemaVersion must be ${TASK_REPORT_SCHEMA_VERSION}`);
+  }
+  if (report.sliceId !== sliceId) {
+    errors.push(`${prefix}: sliceId must be ${sliceId}, got ${report.sliceId ?? '<missing>'}`);
+  }
+  if (!TASK_REPORT_CONCLUSIONS.has(report.conclusion)) {
+    errors.push(`${prefix}: conclusion must be ready-for-review or blocked, got ${report.conclusion ?? '<missing>'}`);
+  }
+
+  if (!Array.isArray(report.completed)) {
+    errors.push(`${prefix}: completed must be an array`);
+  } else if (report.conclusion === READY_FOR_REVIEW_CONCLUSION && !report.completed.some(hasFilledString)) {
+    errors.push(`${prefix}: ready-for-review requires non-empty completed`);
+  }
+
+  if (!Array.isArray(report.changedFiles)) {
+    errors.push(`${prefix}: changedFiles must be an array`);
+  } else {
+    for (const [index, changedFile] of report.changedFiles.entries()) {
+      const itemPrefix = `${prefix}:changedFiles[${index}]`;
+      if (!isPlainObject(changedFile)) {
+        errors.push(`${itemPrefix}: changed file must be an object`);
+        continue;
+      }
+      if (!hasFilledString(changedFile.path)) {
+        errors.push(`${itemPrefix}: path must be non-empty`);
+      }
+      if (!hasFilledString(changedFile.reason)) {
+        errors.push(`${itemPrefix}: reason must be non-empty`);
+      }
+      validateClaimIdArray(changedFile.claimIds, claimIds, itemPrefix, 'claimIds', errors);
+    }
+  }
+
+  if (!isPlainObject(report.briefConsistency)) {
+    errors.push(`${prefix}: briefConsistency must be an object`);
+  } else {
+    if (!BRIEF_CONSISTENCY_STATUSES.has(report.briefConsistency.status)) {
+      errors.push(`${prefix}: briefConsistency.status must be matched / deviated / blocked`);
+    }
+    if (!Array.isArray(report.briefConsistency.notes)) {
+      errors.push(`${prefix}: briefConsistency.notes must be an array`);
+    }
+  }
+
+  if (!Array.isArray(report.claimUpdates)) {
+    errors.push(`${prefix}: claimUpdates must be an array`);
+  } else {
+    for (const [index, update] of report.claimUpdates.entries()) {
+      const itemPrefix = `${prefix}:claimUpdates[${index}]`;
+      if (!isPlainObject(update)) {
+        errors.push(`${itemPrefix}: claim update must be an object`);
+        continue;
+      }
+      if (!claimIds.has(update.claimId)) {
+        errors.push(`${itemPrefix}: claimId references unknown claim ${update.claimId ?? '<missing>'}`);
+      }
+      if (update.proposedStatus === 'verified' || update.proposedStatus === 'waived') {
+        errors.push(`${itemPrefix}: proposedStatus must not be ${update.proposedStatus}`);
+      } else if (!TASK_REPORT_PROPOSED_STATUSES.has(update.proposedStatus)) {
+        errors.push(`${itemPrefix}: proposedStatus must be proposed / implemented / blocked / failed`);
+      }
+      if (update.evidence !== undefined) {
+        validateTaskReportEvidence(update.evidence, itemPrefix, errors);
+      }
+      if (update.note !== undefined && typeof update.note !== 'string') {
+        errors.push(`${itemPrefix}: note must be a string`);
+      }
+      if (
+        ['implemented', 'failed', 'blocked'].includes(update.proposedStatus)
+        && !(Array.isArray(update.evidence) && update.evidence.length > 0)
+        && !hasFilledString(update.note)
+      ) {
+        errors.push(`${itemPrefix}: ${update.proposedStatus} requires evidence or note`);
+      }
+    }
+  }
+
+  if (!Array.isArray(report.validation)) {
+    errors.push(`${prefix}: validation must be an array`);
+  } else {
+    for (const [index, validation] of report.validation.entries()) {
+      const itemPrefix = `${prefix}:validation[${index}]`;
+      if (!isPlainObject(validation)) {
+        errors.push(`${itemPrefix}: validation item must be an object`);
+        continue;
+      }
+      if (validation.kind !== undefined && !CLAIM_EVIDENCE_KINDS.has(validation.kind)) {
+        errors.push(`${itemPrefix}: kind must be one of ${[...CLAIM_EVIDENCE_KINDS].join(' / ')}`);
+      }
+      if (!VALIDATION_STATUSES.has(validation.status)) {
+        errors.push(`${itemPrefix}: status must be passed / failed / not-run / skipped`);
+      }
+      validateClaimIdArray(validation.claimIds, claimIds, itemPrefix, 'claimIds', errors);
+    }
+  }
+
+  if (!Array.isArray(report.risks)) {
+    errors.push(`${prefix}: risks must be an array`);
+  } else {
+    for (const [index, risk] of report.risks.entries()) {
+      const itemPrefix = `${prefix}:risks[${index}]`;
+      if (!isPlainObject(risk)) {
+        errors.push(`${itemPrefix}: risk must be an object`);
+        continue;
+      }
+      if (!RISK_SEVERITIES.has(risk.severity)) {
+        errors.push(`${itemPrefix}: severity must be low / medium / high / critical`);
+      }
+      validateClaimIdArray(risk.claimIds, claimIds, itemPrefix, 'claimIds', errors);
+    }
+  }
+
+  if (!Array.isArray(report.reviewFocus)) {
+    errors.push(`${prefix}: reviewFocus must be an array`);
+  }
+
+  if (report.conclusion === READY_FOR_REVIEW_CONCLUSION && Array.isArray(report.claimUpdates)) {
+    for (const claim of claims) {
+      if (claim.priority !== 'P0' && claim.priority !== 'P1') continue;
+      const updates = report.claimUpdates.filter((update) => update?.claimId === claim.id);
+      if (updates.length === 0) {
+        errors.push(`${prefix}: ready-for-review claimUpdates must cover ${claim.priority} claim ${claim.id}`);
+        continue;
+      }
+      for (const update of updates) {
+        if (update.proposedStatus !== 'implemented') {
+          errors.push(`${prefix}: ready-for-review claimUpdates for ${claim.priority} claim ${claim.id} must be implemented`);
+        }
+      }
+    }
+  }
+
+  if (report.conclusion === 'blocked') {
+    const hasBlocker = (Array.isArray(report.risks) && report.risks.length > 0)
+      || (Array.isArray(report.reviewFocus) && report.reviewFocus.some(hasFilledString))
+      || (Array.isArray(report.claimUpdates) && report.claimUpdates.some((update) => (
+        ['blocked', 'failed'].includes(update?.proposedStatus) || hasFilledString(update?.note)
+      )));
+    if (!hasBlocker) {
+      errors.push(`${prefix}: blocked conclusion requires risks, reviewFocus, or claimUpdates blocker note`);
+    }
+  }
+
+  return errors;
+}
+
 function claimValidationErrors(sliceId, claimsData) {
   const errors = [];
   const prefix = `claims/${sliceId}.json`;
@@ -1421,6 +1677,46 @@ async function validateClaimsForPlan(planDir, slices) {
   return errors;
 }
 
+async function validateTaskReportsForPlan(planDir, slices) {
+  const errors = [];
+
+  for (const [sliceId] of slices) {
+    const reportResult = await readTaskReport(planDir, sliceId);
+    if (reportResult.format !== 'json') continue;
+    if (reportResult.invalid) {
+      errors.push(`task-reports/${sliceId}.json: ${reportResult.invalid}`);
+      continue;
+    }
+    const claimsResult = await readSliceClaims(planDir, sliceId);
+    if (claimsResult.missing) {
+      errors.push(`task-reports/${sliceId}.json: requires claims/${sliceId}.json before task report JSON`);
+      continue;
+    }
+    if (claimsResult.invalid) {
+      errors.push(`task-reports/${sliceId}.json: claims/${sliceId}.json ${claimsResult.invalid}`);
+      continue;
+    }
+    errors.push(...validateTaskReport(reportResult.report, sliceId, claimsResult.data));
+  }
+
+  try {
+    const entries = await fs.readdir(path.join(planDir, 'task-reports'), { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      const sliceId = entry.name.slice(0, -'.json'.length);
+      if (!SLICE_ID_RE.test(sliceId)) {
+        errors.push(`task-reports/${entry.name}: filename must be <S-id>.json`);
+      } else if (!slices.has(sliceId)) {
+        errors.push(`task-reports/${entry.name}: no matching slice ${sliceId} in plan.md`);
+      }
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+
+  return errors;
+}
+
 async function validateClaimsForClose(planDir, slices) {
   const errors = [];
   for (const [sliceId, block] of slices) {
@@ -1438,6 +1734,12 @@ async function validateClaimsForClose(planDir, slices) {
     }
     const validationErrors = claimValidationErrors(sliceId, result.data);
     errors.push(...validationErrors.map((error) => `close-check:${sliceId}: ${error}`));
+    const claims = Array.isArray(result.data?.claims) ? result.data.claims : [];
+    for (const claim of claims) {
+      if (claim.status !== 'verified' && claim.status !== 'waived') {
+        errors.push(`close-check:${sliceId}: claims/${sliceId}.json:${claim.id ?? '<missing>'} final status must be verified or waived, got ${claim.status ?? '<missing>'}`);
+      }
+    }
   }
   return errors;
 }
@@ -1609,7 +1911,7 @@ async function buildTaskBrief(planDir, sliceId) {
   const title = getSliceTitle(slice) || '(无标题)';
   const target = getSubsection(slice.body, SLICE_WHAT_SECTION);
   const briefPath = getTaskBriefPath(planDir, sliceId);
-  const reportPath = getTaskReportPath(planDir, sliceId);
+  const reportPath = getTaskReportJsonPath(planDir, sliceId);
   const claimsResult = await readRequiredSliceClaims(planDir, sliceId, 'task-brief');
 
   return `# Task Brief：${sliceId}
@@ -1653,7 +1955,7 @@ ${renderTaskBriefGateRequirements(slice.body)}
 ## 输出要求
 
 - Implementer 必须填写 task report：${reportPath}。
-- Implementer 必须在 task report 的 Claim Updates 中逐条更新 claims 的建议状态和证据。
+- Implementer 必须在 task report 的 claimUpdates 中逐条更新 claims 的建议状态和证据。
 - Implementer 结论只能是 ready-for-review 或 blocked；review-package 只接受 ready-for-review。
 - 修改运行时逻辑时必须补充或更新直接相关测试；若不适用，必须在 task report 的偏离 / 风险中说明原因。
 
@@ -1680,54 +1982,37 @@ async function buildTaskReportTemplate(planDir, sliceId) {
     throw usageError(`task-report-template: slice ${sliceId} does not exist`);
   }
   const claimsResult = await readRequiredSliceClaims(planDir, sliceId, 'task-report-template');
+  const claims = Array.isArray(claimsResult.data?.claims) ? claimsResult.data.claims : [];
 
-  return `# Task Report：${sliceId}
-
-## 实际完成
-
-- 待填写。
-
-## 实际改动文件
-
-- 待填写。
-
-## 与 brief 的一致性
-
-- 待填写。
-
-## Claim Updates
-
-${renderClaimUpdateTemplate(claimsResult)}
-
-说明：Implementer 只能建议 proposed / implemented / blocked / failed；不要自行把 claim 裁定为 verified。控制器根据测试、diff-check、CI 或人工验收把 claims/S-id.json 提升为 verified / waived。
-
-## 验证结果
-
-- 待填写。
-
-## 偏离 / 风险 / 未完成
-
-- 待填写。
-
-## 需要 reviewer 重点检查
-
-- 待填写。
-
-## Implementer 结论
-
-- blocked
-
-说明：只允许 ready-for-review / blocked。
-`;
+  return {
+    schemaVersion: TASK_REPORT_SCHEMA_VERSION,
+    sliceId,
+    conclusion: 'blocked',
+    completed: [],
+    changedFiles: [],
+    briefConsistency: {
+      status: 'matched',
+      notes: [],
+    },
+    claimUpdates: claims.map((claim) => ({
+      claimId: claim.id,
+      proposedStatus: 'proposed',
+      evidence: [],
+      note: '',
+    })),
+    validation: [],
+    risks: [],
+    reviewFocus: [],
+  };
 }
 
 async function writeTaskReportTemplate(planDir, sliceId) {
   await assertValidPlanForPackage(planDir, 'task-report-template');
   await ensureDevPlansGitignore();
   const content = await buildTaskReportTemplate(planDir, sliceId);
-  const target = getTaskReportPath(planDir, sliceId);
+  const target = getTaskReportJsonPath(planDir, sliceId);
   await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.writeFile(target, content, 'utf8');
+  await fs.writeFile(target, `${JSON.stringify(content, null, 2)}\n`, 'utf8');
   return target;
 }
 
@@ -1755,11 +2040,112 @@ function parseTaskReportConclusion(reportMarkdown) {
   return conclusion;
 }
 
+function renderTaskReportList(items) {
+  if (!Array.isArray(items) || items.length === 0) return '- 无';
+  return items.map((item) => `- ${escapeMarkdownTableCell(item)}`).join('\n');
+}
+
+function renderClaimIdsCell(claimIds) {
+  return Array.isArray(claimIds) && claimIds.length > 0
+    ? claimIds.map((claimId) => escapeMarkdownTableCell(claimId)).join(', ')
+    : '-';
+}
+
+function renderTaskReportEvidenceCell(evidence) {
+  if (!Array.isArray(evidence) || evidence.length === 0) return '-';
+  return evidence.map((item) => {
+    if (!isPlainObject(item)) return '<invalid evidence>';
+    const detail = item.command ?? item.file ?? item.uri ?? item.artifact ?? item.summary ?? '';
+    const status = item.status ? ` ${item.status}` : '';
+    return `${item.kind ?? '<kind>'}: ${detail}${status}`.trim();
+  }).join('; ');
+}
+
+function renderTaskReportTable(headers, rows) {
+  const header = `| ${headers.join(' | ')} |`;
+  const separator = `| ${headers.map(() => '---').join(' | ')} |`;
+  const body = rows.length > 0
+    ? rows.map((row) => `| ${row.map((cell) => escapeMarkdownTableCell(cell || '-')).join(' | ')} |`)
+    : [`| ${headers.map(() => '-').join(' | ')} |`];
+  return [header, separator, ...body].join('\n');
+}
+
+function renderTaskReportMarkdown(report) {
+  const changedFiles = Array.isArray(report.changedFiles) ? report.changedFiles : [];
+  const claimUpdates = Array.isArray(report.claimUpdates) ? report.claimUpdates : [];
+  const validation = Array.isArray(report.validation) ? report.validation : [];
+  const risks = Array.isArray(report.risks) ? report.risks : [];
+  const briefConsistency = isPlainObject(report.briefConsistency) ? report.briefConsistency : {};
+
+  return `### Conclusion
+
+${escapeMarkdownTableCell(report.conclusion ?? '<missing>')}
+
+### Completed
+
+${renderTaskReportList(report.completed)}
+
+### Changed Files
+
+${renderTaskReportTable(
+    ['File', 'Reason', 'Claims'],
+    changedFiles.map((item) => [
+      item.path ?? '<missing>',
+      item.reason ?? '<missing>',
+      renderClaimIdsCell(item.claimIds),
+    ]),
+  )}
+
+### Brief Consistency
+
+- Status: ${escapeMarkdownTableCell(briefConsistency.status ?? '<missing>')}
+- Notes:
+${renderTaskReportList(briefConsistency.notes).split('\n').map((line) => `  ${line}`).join('\n')}
+
+### Claim Updates
+
+${renderTaskReportTable(
+    ['Claim', 'Proposed Status', 'Evidence', 'Note'],
+    claimUpdates.map((item) => [
+      item.claimId ?? '<missing>',
+      item.proposedStatus ?? '<missing>',
+      renderTaskReportEvidenceCell(item.evidence),
+      item.note || '-',
+    ]),
+  )}
+
+### Validation
+
+${renderTaskReportTable(
+    ['Kind', 'Status', 'Command', 'Claims', 'Summary'],
+    validation.map((item) => [
+      item.kind ?? '-',
+      item.status ?? '<missing>',
+      item.command ?? '-',
+      renderClaimIdsCell(item.claimIds),
+      item.summary ?? '-',
+    ]),
+  )}
+
+### Risks
+
+${renderTaskReportTable(
+    ['Severity', 'Claims', 'Summary'],
+    risks.map((item) => [
+      item.severity ?? '<missing>',
+      renderClaimIdsCell(item.claimIds),
+      item.summary ?? '-',
+    ]),
+  )}
+
+### Review Focus
+
+${renderTaskReportList(report.reviewFocus)}`;
+}
+
 async function readRequiredTaskHandoff(planDir, sliceId) {
   const taskBriefPath = getTaskBriefPath(planDir, sliceId);
-  const taskReportPath = getTaskReportPath(planDir, sliceId);
   let taskBrief;
-  let taskReport;
 
   try {
     taskBrief = await fs.readFile(taskBriefPath, 'utf8');
@@ -1770,15 +2156,35 @@ async function readRequiredTaskHandoff(planDir, sliceId) {
     throw error;
   }
 
-  try {
-    taskReport = await fs.readFile(taskReportPath, 'utf8');
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      throw gateError(`review-package: missing task report: ${taskReportPath}`);
-    }
-    throw error;
+  const claimsResult = await readRequiredSliceClaims(planDir, sliceId, 'review-package');
+  const taskBriefErrors = validateTaskBriefClaims(taskBrief);
+  if (taskBriefErrors.length > 0) {
+    throw gateError(`review-package: ${taskBriefErrors.join('; ')}`);
   }
 
+  const taskReportResult = await readTaskReport(planDir, sliceId);
+  if (taskReportResult.format === 'missing') {
+    throw gateError(`review-package: missing task report: ${taskReportResult.path}`);
+  }
+  if (taskReportResult.format === 'json') {
+    if (taskReportResult.invalid) {
+      throw gateError(`review-package: task-reports/${sliceId}.json ${taskReportResult.invalid}`);
+    }
+    const reportErrors = validateTaskReport(taskReportResult.report, sliceId, claimsResult.data);
+    if (reportErrors.length > 0) {
+      throw gateError(`review-package: ${reportErrors.join('; ')}`);
+    }
+    if (taskReportResult.report.conclusion !== READY_FOR_REVIEW_CONCLUSION) {
+      throw gateError(`review-package: task report conclusion must be ready-for-review, got ${taskReportResult.report.conclusion}`);
+    }
+    return {
+      taskBrief,
+      taskReport: renderTaskReportMarkdown(taskReportResult.report),
+      taskReportFormat: 'json',
+    };
+  }
+
+  const taskReport = taskReportResult.report;
   const conclusion = parseTaskReportConclusion(taskReport);
   if (!IMPLEMENTER_CONCLUSIONS.has(conclusion)) {
     throw gateError(`review-package: task report Implementer 结论 must be ready-for-review or blocked, got ${conclusion ?? '<missing>'}`);
@@ -1786,17 +2192,12 @@ async function readRequiredTaskHandoff(planDir, sliceId) {
   if (conclusion !== READY_FOR_REVIEW_CONCLUSION) {
     throw gateError(`review-package: task report Implementer 结论 must be ready-for-review, got ${conclusion}`);
   }
-  await readRequiredSliceClaims(planDir, sliceId, 'review-package');
-  const taskBriefErrors = validateTaskBriefClaims(taskBrief);
-  if (taskBriefErrors.length > 0) {
-    throw gateError(`review-package: ${taskBriefErrors.join('; ')}`);
-  }
   const claimUpdateErrors = validateClaimUpdates(taskReport);
   if (claimUpdateErrors.length > 0) {
     throw gateError(`review-package: ${claimUpdateErrors.join('; ')}`);
   }
 
-  return { taskBrief, taskReport };
+  return { taskBrief, taskReport, taskReportFormat: 'legacy-md' };
 }
 
 function validateSliceReviewPackageFormat(reviewPackage) {
@@ -2058,6 +2459,40 @@ function getFirstSectionLine(markdown, title) {
   return result ?? '- 未填写';
 }
 
+function summarizeTaskReportValidation(report) {
+  if (!Array.isArray(report.validation) || report.validation.length === 0) return '-';
+  return report.validation
+    .map((item) => `${item.kind ?? '-'}:${item.status ?? '<missing>'}${item.command ? ` ${item.command}` : ''}`)
+    .join('; ');
+}
+
+function summarizeTaskReportRisks(report) {
+  if (!Array.isArray(report.risks) || report.risks.length === 0) return '-';
+  return report.risks
+    .map((item) => `${item.severity ?? '<missing>'}: ${item.summary ?? '-'}`)
+    .join('; ');
+}
+
+function summarizeTaskReportFocus(report) {
+  if (!Array.isArray(report.reviewFocus) || report.reviewFocus.length === 0) return '-';
+  return report.reviewFocus.join('; ');
+}
+
+function summarizeTaskReportClaimCoverage(report, claimsData) {
+  const claims = Array.isArray(claimsData?.claims) ? claimsData.claims : [];
+  const required = claims
+    .filter((claim) => claim.priority === 'P0' || claim.priority === 'P1')
+    .map((claim) => claim.id);
+  if (required.length === 0) return '-';
+  const updated = new Set(Array.isArray(report.claimUpdates)
+    ? report.claimUpdates.map((update) => update?.claimId)
+    : []);
+  const covered = required.filter((claimId) => updated.has(claimId));
+  const missing = required.filter((claimId) => !updated.has(claimId));
+  const suffix = missing.length > 0 ? `; missing ${missing.join(', ')}` : '';
+  return `${covered.length}/${required.length}${suffix}`;
+}
+
 function hasNonPlaceholderSectionContent(section, { allowExplicitNone = false } = {}) {
   let hasContent = false;
   forEachMarkdownLineOutsideFences(section, (line) => {
@@ -2075,18 +2510,35 @@ function hasNonPlaceholderSectionContent(section, { allowExplicitNone = false } 
 async function renderTaskReportSummaries(planDir, slices) {
   const rows = [];
   for (const [id] of slices) {
-    const reportPath = getTaskReportPath(planDir, id);
-    try {
-      const report = await fs.readFile(reportPath, 'utf8');
-      rows.push(`| ${id} | ${parseTaskReportConclusion(report) ?? '<missing>'} | ${getFirstSectionLine(report, '实际完成')} | ${getFirstSectionLine(report, '验证结果')} |`);
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-      rows.push(`| ${id} | <missing> | 缺少 ${reportPath} | - |`);
+    const reportResult = await readTaskReport(planDir, id);
+    if (reportResult.format === 'missing') {
+      rows.push(`| ${id} | <missing> | <missing> | 缺少 ${normalizeRepoPath(reportResult.path)} | - | - | - |`);
+      continue;
     }
+    if (reportResult.format === 'json') {
+      if (reportResult.invalid) {
+        rows.push(`| ${id} | json | <invalid> | ${escapeMarkdownTableCell(reportResult.invalid)} | - | - | - |`);
+        continue;
+      }
+      const claimsResult = await readSliceClaims(planDir, id);
+      rows.push(`| ${[
+        id,
+        'json',
+        reportResult.report.conclusion ?? '<missing>',
+        escapeMarkdownTableCell(summarizeTaskReportValidation(reportResult.report)),
+        escapeMarkdownTableCell(summarizeTaskReportRisks(reportResult.report)),
+        escapeMarkdownTableCell(summarizeTaskReportFocus(reportResult.report)),
+        escapeMarkdownTableCell(claimsResult.invalid ? claimsResult.invalid : summarizeTaskReportClaimCoverage(reportResult.report, claimsResult.data)),
+      ].join(' | ')} |`);
+      continue;
+    }
+
+    const report = reportResult.report;
+    rows.push(`| ${id} | legacy-md | ${parseTaskReportConclusion(report) ?? '<missing>'} | ${escapeMarkdownTableCell(getFirstSectionLine(report, '验证结果'))} | ${escapeMarkdownTableCell(getFirstSectionLine(report, '偏离 / 风险 / 未完成'))} | ${escapeMarkdownTableCell(getFirstSectionLine(report, '需要 reviewer 重点检查'))} | legacy Claim Updates |`);
   }
   return [
-    '| 切片 | Implementer 结论 | 实际完成 | 验证结果 |',
-    '| --- | --- | --- | --- |',
+    '| 切片 | Report | Conclusion | Validation | Risks | Review Focus | Claim Updates |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
     ...rows,
   ].join('\n');
 }
@@ -2214,7 +2666,6 @@ async function validateTaskHandoffForClose(planDir, sliceId, sliceBody) {
   if (aiReviewStatus !== 'passed') return errors;
 
   const taskBriefPath = getTaskBriefPath(planDir, sliceId);
-  const taskReportPath = getTaskReportPath(planDir, sliceId);
   const reviewPackagePath = getReviewPackagePath(planDir, sliceId);
 
   const taskBrief = await readNonEmptyFileForClose(taskBriefPath, 'task brief', sliceId);
@@ -2227,14 +2678,32 @@ async function validateTaskHandoffForClose(planDir, sliceId, sliceBody) {
       .map((error) => `close-check:${sliceId}: ${error}`));
   }
 
-  const taskReport = await readNonEmptyFileForClose(taskReportPath, 'task report', sliceId);
-  errors.push(...taskReport.errors);
-  if (taskReport.content) {
-    const conclusion = parseTaskReportConclusion(taskReport.content);
+  const taskReport = await readTaskReport(planDir, sliceId);
+  if (taskReport.format === 'missing') {
+    errors.push(`close-check:${sliceId}: missing task report: ${taskReport.path}`);
+  } else if (taskReport.format === 'json') {
+    if (taskReport.invalid) {
+      errors.push(`close-check:${sliceId}: task-reports/${sliceId}.json ${taskReport.invalid}`);
+    } else {
+      const claimsResult = await readSliceClaims(planDir, sliceId);
+      if (claimsResult.missing) {
+        errors.push(`close-check:${sliceId}: task report JSON requires claims/${sliceId}.json`);
+      } else if (claimsResult.invalid) {
+        errors.push(`close-check:${sliceId}: task report JSON cannot validate claims/${sliceId}.json ${claimsResult.invalid}`);
+      } else {
+        errors.push(...validateTaskReport(taskReport.report, sliceId, claimsResult.data)
+          .map((error) => `close-check:${sliceId}: ${error}`));
+      }
+      if (taskReport.report?.conclusion !== READY_FOR_REVIEW_CONCLUSION) {
+        errors.push(`close-check:${sliceId}: task report conclusion must be ready-for-review, got ${taskReport.report?.conclusion ?? '<missing>'}`);
+      }
+    }
+  } else {
+    const conclusion = parseTaskReportConclusion(taskReport.report);
     if (conclusion !== READY_FOR_REVIEW_CONCLUSION) {
       errors.push(`close-check:${sliceId}: task report Implementer 结论 must be ready-for-review, got ${conclusion ?? '<missing>'}`);
     }
-    errors.push(...validateClaimUpdates(taskReport.content)
+    errors.push(...validateClaimUpdates(taskReport.report)
       .map((error) => `close-check:${sliceId}: ${error}`));
   }
 
@@ -2320,7 +2789,7 @@ async function validateWholeReviewPackageForClose(planDir) {
   }
 }
 
-async function buildSliceReviewPackage(planDir, sliceId, { taskBrief, taskReport }) {
+async function buildSliceReviewPackage(planDir, sliceId, { taskBrief, taskReport, taskReportFormat }) {
   const [plan, decisionsMarkdown, auditsMarkdown] = await Promise.all([
     fs.readFile(path.join(planDir, 'plan.md'), 'utf8'),
     fs.readFile(path.join(planDir, 'decisions.md'), 'utf8'),
@@ -2361,7 +2830,7 @@ ${renderFencedCodeBlock('markdown', taskBrief.trimEnd())}
 
 ## Task Report
 
-${renderFencedCodeBlock('markdown', taskReport.trimEnd())}
+${taskReportFormat === 'legacy-md' ? renderFencedCodeBlock('markdown', taskReport.trimEnd()) : taskReport.trimEnd()}
 
 ## 全局约束
 
@@ -3035,7 +3504,7 @@ function validateSliceBlock(id, body, slices, decisions, audits, interfaceProduc
   } else if (!COMMIT_STATUSES.has(commit)) {
     errors.push(`plan.md:${id}: invalid Commit ${commit}; use 待提交 or 已提交`);
   }
-  if (!statusStartsWithAllowed(validation, VALIDATION_STATUSES)) {
+  if (!statusStartsWithAllowed(validation, PLAN_VALIDATION_STATUSES)) {
     errors.push(`plan.md:${id}: invalid 验证 ${validation ?? '<missing>'}`);
   }
   const associationResult = parseAssociationItems(body);
@@ -3303,6 +3772,7 @@ export async function validatePlan(planDir) {
 
   const slices = getBlocks(getSection(plan, '切片'), SLICE_ID_RE);
   errors.push(...await validateClaimsForPlan(planDir, slices));
+  errors.push(...await validateTaskReportsForPlan(planDir, slices));
 
   return errors;
 }

@@ -56,7 +56,7 @@ REPORT_AND_NEXT
 - `WRITE_TASK_BRIEF`：生成当前片 `task-briefs/<S-id>.md`，作为 implementer 的窄上下文入口；brief 必须渲染当前片 claims；需确认片必须先生成 brief，再发执行预告。
 - `CONFIRM_TASK`：仅需确认片使用；执行预告引用 task brief 路径和摘要，等待用户确认，不修改业务代码。用户确认后必须在同一连续流程内派发 implementer subagent；若确认后未派发即中断，续跑时重新预告并重新确认。
 - `IMPLEMENT_TASK`：控制器按 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 派发 `agent_type: worker`、`fork_context: false` 的 implementer subagent；完整档实现只能由 implementer subagent 执行，轻量档没有 task brief，不能使用 subagent。
-- `ACCEPT_IMPLEMENTER_REPORT`：控制器读取 subagent summary 和 `task-reports/<S-id>.md`，确认 `Implementer 结论：ready-for-review`、`Claim Updates` 已逐条说明建议状态和证据、实际改动未越过 `允许修改` / `禁止修改`、且 subagent 未报告 blocked / 新分叉 / 风险升级；不通过则停止或重新派发，不进入硬门禁。
+- `ACCEPT_IMPLEMENTER_REPORT`：控制器读取 subagent summary 和 `task-reports/<S-id>.json`，确认 `conclusion: ready-for-review`、`claimUpdates` 已逐条说明建议状态和证据、实际改动未越过 `允许修改` / `禁止修改`、且 subagent 未报告 blocked / 新分叉 / 风险升级；不通过则停止或重新派发，不进入硬门禁。只有 legacy `.md` report 存在时才按旧格式兼容读取。
 - `RUN_HARD_GATES`：执行 lint / type-check / test / `diff-check` 等确定性门禁；控制器依据真实证据更新 `claims/<S-id>.json`，不要让 implementer 自行最终裁定 `verified`。
 - `AI_REVIEW_PACKAGE_AND_REVIEW`：生成当前片 review-package，再按 [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md) 派发 reviewer subagent 输出三 verdict；第三 verdict 必须覆盖普通 code quality 与 AI contamination。
 - `FIX_OR_STOP`：每个切片最多自动修复两次；次数用尽仍失败则停止并报告。
@@ -145,9 +145,10 @@ REPORT_AND_NEXT
 
 - 完整档切片在生成 task brief 前，应存在 `claims/<S-id>.json`；没有时先运行 `claims-template`，再把模板 claim 改成当前片的可验证声明。
 - Claim 覆盖本片的核心行为、边界 / 非目标、验证口径和已知残余风险；单片通常 3-8 条，过多说明切片可能过大。
-- Claim 是执行约束，不是事后总结。实现者按 task brief 中的 Claims 逐条处理，在 task report 的 `Claim Updates` 建议状态和证据。
-- 控制器根据测试、命令、diff-check、CI、代码证据或用户验收判断 claim 状态；`implemented` 不等于 `verified`。
-- 脚本只校验 claims JSON 和 `Claim Updates` 表格形状；claim 是否充分验证由控制器和 reviewer 判断。
+- Claim 是执行约束，不是事后总结。实现者按 task brief 中的 Claims 逐条处理，在 task report 的 `claimUpdates` 建议状态和证据。
+- Implementer 只能在 report 中提出 claim update；`proposedStatus` 只能是 `proposed` / `implemented` / `blocked` / `failed`，不得写 `verified` / `waived`。
+- 控制器根据测试、命令、diff-check、CI、代码证据或用户验收判断 claim 状态并更新 `claims/<S-id>.json`；`implemented` 不等于 `verified`。
+- 脚本只校验 claims JSON 和 task report JSON 的结构、枚举与 claim 引用；claim 是否充分验证由控制器和 reviewer 判断。
 
 
 ## 切片前分叉审查
@@ -238,8 +239,8 @@ C 类切片的实现方案并入执行预告一起给出：上下文预检和读
 
 接收门禁至少检查：
 
-- `task-reports/<S-id>.md` 存在，且 `Implementer 结论：ready-for-review`。
-- `Claim Updates` 存在可解析记录；证据不足时不得伪装成 verified。
+- `task-reports/<S-id>.json` 存在，且 `conclusion: ready-for-review`；只有 legacy `.md` report 存在时才按旧格式兼容。
+- `claimUpdates` 存在可解析记录，并覆盖所有 P0/P1 claims；`conclusion: ready-for-review` 时这些 claim update 必须是 `implemented` 且有 evidence 或 note，证据不足时不得伪装成 `verified`。
 - 实际改动文件落在 task brief 的 `允许修改` 范围内，且未命中 `禁止修改`。
 - subagent 未报告 blocked、新分叉、风险升级、验证方式变化或越界需求。
 
@@ -258,7 +259,7 @@ C 类切片的实现方案并入执行预告一起给出：上下文预检和读
 硬门禁前后按切片状态维护交接文件：
 
 - 自动片实现前或需确认片执行预告前生成 `task-briefs/<S-id>.md`。
-- implementer subagent 必须填写 `task-reports/<S-id>.md`，`Implementer 结论` 只能是 `ready-for-review` 或 `blocked`。
+- implementer subagent 必须填写 `task-reports/<S-id>.json`，`conclusion` 只能是 `ready-for-review` 或 `blocked`。
 - `blocked` 表示不得生成 review-package，应先回到修复、补证或人工裁决。
 
 `diff-check` 只做确定性边界检查：当前 git dirty files 是否落在 `允许修改`，是否命中 `禁止修改` 或 `禁止词`。已写入本片 `基线脏文件` 的既有脏文件会被跳过；`dev-plans/<date-slug>/plan.md`、`decisions.md`、`audits.md`、`ledger.md`、`claims/S*.json`、`review-packages/**`、`task-briefs/**`、`task-reports/**` 和自动维护的 `dev-plans/.gitignore` 会被跳过；rename 会同时检查新旧两个路径。它不会判断 helper 是否有业务语义，也不会判断 null 判断是否必要。
@@ -280,7 +281,7 @@ done slice 的 `#### 门禁记录` 必须保留 diff-check 的结构化证据；
 
 ## AI Review
 
-硬门禁后必须先生成当前片 review-package，再做 AI Review。生成 package 前脚本必须先跑 `validate`；失败时停止并输出 validator 明细。脚本还会读取 `task-briefs/<S-id>.md` 和 `task-reports/<S-id>.md`，缺任一文件或 task report 的 `Implementer 结论` 不是 `ready-for-review` 时直接失败。reviewer subagent 以 review-package 为主输入；允许针对具名风险做 focused Read / `rg` / focused test，但禁止运行 `git diff` / `git log` / `git status` 重新构造审查范围。`review-packages/**`、`task-briefs/**`、`task-reports/**` 是临时输入，脚本会维护 `dev-plans/.gitignore` 的对应模式，并从 diff-check 和 package inventory 中排除；审计结论必须由控制器写回 plan / D/A。
+硬门禁后必须先生成当前片 review-package，再做 AI Review。生成 package 前脚本必须先跑 `validate`；失败时停止并输出 validator 明细。脚本还会读取 `task-briefs/<S-id>.md` 和 task report；优先读取 `task-reports/<S-id>.json`，没有 JSON 时兼容读取 legacy `task-reports/<S-id>.md`。缺任一文件或 task report 结论不是 `ready-for-review` 时直接失败。reviewer subagent 以 review-package 为主输入；允许针对具名风险做 focused Read / `rg` / focused test，但禁止运行 `git diff` / `git log` / `git status` 重新构造审查范围。`review-packages/**`、`task-briefs/**`、`task-reports/**` 是临时输入，脚本会维护 `dev-plans/.gitignore` 的对应模式，并从 diff-check 和 package inventory 中排除；审计结论必须由控制器写回 plan / D/A。
 
 生成 package：
 
@@ -359,8 +360,10 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/<date-slu
 `close-check` 还会检查格式闭环：
 
 - 每个 done slice 必须有 `diff-check` gate evidence，且 `Status=passed`、`Command` / `Evidence` 非空、非占位、`Command` 指向当前计划目录和当前切片。
-- 每个 done slice 必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确。
-- 每个 done + `AI Review：passed` slice 必须有非空 task brief、`Implementer 结论：ready-for-review` 的非空 task report、非空 review-package；review-package 必须包含 Task Brief、Task Report、Claims、项目规范、Git Diff 统计、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID；Git Diff 统计必须使用 `text` fence，Git Diff 必须使用 `diff` fence，允许无当前 dirty diff。
+- 每个 done slice 必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确；最终 claim 状态必须是 `verified` 或 `waived`。
+- 每个 done + `AI Review：passed` slice 必须有非空 task brief、`conclusion: ready-for-review` 的非空 task report、非空 review-package；JSON report 必须 schema valid，legacy `.md` report 继续按旧格式检查；review-package 必须包含 Task Brief、Task Report、Claims、项目规范、Git Diff 统计、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID；Git Diff 统计必须使用 `text` fence，Git Diff 必须使用 `diff` fence，允许无当前 dirty diff。
+
+`close-check` 只信 `claims/<S-id>.json` 的终态，不会因为 task report 中 `proposedStatus: implemented` 就把 claim 当成完成。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。
 - `ledger.md` 必须存在，`Current Checkpoint` 必须有非占位 checkpoint，且每个 done slice 至少有一条 durable checkpoint。
 

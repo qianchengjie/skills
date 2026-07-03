@@ -352,37 +352,75 @@ async function writeTaskReportTemplateFixture(planDir, sliceId = 'S1') {
 }
 
 async function markTaskReportReady(planDir, sliceId = 'S1') {
-  const reportPath = path.join(planDir, 'task-reports', `${sliceId}.md`);
-  const report = await fs.readFile(reportPath, 'utf8');
-  await fs.writeFile(
-    reportPath,
-    report
-      .replace('- 待填写。', '- 已按 brief 完成示例切片。')
-      .replace('- blocked', '- ready-for-review'),
-    'utf8',
-  );
+  const reportPath = path.join(planDir, 'task-reports', `${sliceId}.json`);
+  const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+  report.conclusion = 'ready-for-review';
+  report.completed = ['已按 brief 完成示例切片。'];
+  await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 }
 
 async function markTaskReportClaimUpdatesReady(planDir, sliceId = 'S1') {
-  const reportPath = path.join(planDir, 'task-reports', `${sliceId}.md`);
+  const reportPath = path.join(planDir, 'task-reports', `${sliceId}.json`);
   const claims = JSON.parse(await fs.readFile(path.join(planDir, 'claims', `${sliceId}.json`), 'utf8'));
-  let report = await fs.readFile(reportPath, 'utf8');
+  const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
   const evidenceByType = {
-    behavior: 'src/example.ts 已完成核心行为，node --test test/example.test.ts 通过。',
-    scope: 'diff-check 已通过，未越过允许修改范围。',
-    validation: 'node --test test/example.test.ts 验收通过。',
-    risk: '未发现需要保留的残余风险，建议控制器按证据处理。',
+    behavior: { kind: 'code', file: 'src/example.ts', summary: 'src/example.ts 已完成核心行为。' },
+    scope: { kind: 'diff-check', command: `node tmp/sliced-dev-general/scripts/dev-plan.mjs diff-check ${planDir} ${sliceId}`, summary: 'diff-check 已通过，未越过允许修改范围。' },
+    validation: { kind: 'test', command: 'node --test test/example.test.ts', summary: '验收测试通过。' },
+    risk: { kind: 'manual', summary: '未发现需要保留的残余风险，建议控制器按证据处理。' },
   };
-  for (const claim of claims.claims ?? []) {
-    const evidence = evidenceByType[claim.type] ?? `${claim.id} 已完成并有对应证据。`;
-    report = report.replace(
-      `| ${claim.id} | implemented | 待填写：改动文件、测试/命令结果或阻塞原因。 | - |`,
-      `| ${claim.id} | implemented | ${evidence} | - |`,
-    );
-  }
+  report.claimUpdates = (claims.claims ?? []).map((claim) => ({
+    claimId: claim.id,
+    proposedStatus: 'implemented',
+    evidence: [{ status: 'passed', ...(evidenceByType[claim.type] ?? { kind: 'manual', summary: `${claim.id} 已完成并有对应证据。` }) }],
+    note: '',
+  }));
+  report.validation = [
+    {
+      kind: 'test',
+      status: 'passed',
+      command: 'node --test test/example.test.ts',
+      summary: '示例验收测试通过。',
+      claimIds: (claims.claims ?? []).filter((claim) => claim.priority === 'P0' || claim.priority === 'P1').map((claim) => claim.id),
+    },
+  ];
+  await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+}
+
+async function writeLegacyReadyTaskReportFixture(planDir, sliceId = 'S1') {
+  const claims = JSON.parse(await fs.readFile(path.join(planDir, 'claims', `${sliceId}.json`), 'utf8'));
+  const rows = (claims.claims ?? []).map((claim) => `| ${claim.id} | implemented | ${claim.id} 已完成并有对应证据。 | - |`);
+  await fs.mkdir(path.join(planDir, 'task-reports'), { recursive: true });
   await fs.writeFile(
-    reportPath,
-    report,
+    path.join(planDir, 'task-reports', `${sliceId}.md`),
+    `# Task Report：${sliceId}
+
+## 实际完成
+
+- 已按 brief 完成示例切片。
+
+## Claim Updates
+
+| Claim | Proposed Status | Evidence Update | Note |
+| --- | --- | --- | --- |
+${rows.join('\n')}
+
+## 验证结果
+
+- node --test test/example.test.ts 通过。
+
+## 偏离 / 风险 / 未完成
+
+- 无。
+
+## 需要 reviewer 重点检查
+
+- 无。
+
+## Implementer 结论
+
+- ready-for-review
+`,
     'utf8',
   );
 }
@@ -2340,10 +2378,12 @@ test('CLI claims-template writes structured slice claims and handoff renders the
     assert.match(brief, /\| C1 \| behavior \| P0 \| proposed \|/);
 
     await writeTaskReportTemplateFixture('dev-plans/2026-06-10-claims-template', 'S1');
-    const report = await fs.readFile(path.join(planDir, 'task-reports', 'S1.md'), 'utf8');
-    assert.match(report, /## Claim Updates/);
-    assert.match(report, /\| C1 \| implemented \|/);
-    assert.match(report, /\| C4 \| implemented \|/);
+    const report = JSON.parse(await fs.readFile(path.join(planDir, 'task-reports', 'S1.json'), 'utf8'));
+    assert.equal(report.schemaVersion, 'sliced-dev.taskReport.v1');
+    assert.equal(report.sliceId, 'S1');
+    assert.equal(report.conclusion, 'blocked');
+    assert.deepEqual(report.claimUpdates.map((item) => item.claimId), ['C1', 'C2', 'C3', 'C4']);
+    assert.deepEqual(report.claimUpdates.map((item) => item.proposedStatus), ['proposed', 'proposed', 'proposed', 'proposed']);
   });
 });
 
@@ -2411,16 +2451,16 @@ test('review-package escapes multiline claim detail fields', async () => {
     await fs.writeFile(claimsPath, `${JSON.stringify(claims, null, 2)}\n`, 'utf8');
 
     await writeReadyTaskHandoff('dev-plans/2026-06-10-claims-escaped-details', 'S1');
-    const reportPath = path.join(planDir, 'task-reports', 'S1.md');
-    const report = await fs.readFile(reportPath, 'utf8');
-    await fs.writeFile(
-      reportPath,
-      report.replace(
-        'src/example.ts 已完成核心行为，node --test test/example.test.ts 通过。',
-        'src/example.ts 已完成核心行为 \\| node --test test/example.test.ts 通过。',
-      ),
-      'utf8',
-    );
+    const reportPath = path.join(planDir, 'task-reports', 'S1.json');
+    const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    report.claimUpdates[0].evidence = [
+      {
+        kind: 'manual',
+        status: 'passed',
+        summary: 'src/example.ts 已完成核心行为 | node --test test/example.test.ts 通过。',
+      },
+    ];
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
     initGitRepo();
     const result = runDevPlanCli(['review-package', 'dev-plans/2026-06-10-claims-escaped-details', 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
@@ -2451,7 +2491,7 @@ test('CLI task-brief writes narrow implementer brief', async () => {
     assert.match(brief, /## 目标/);
     assert.match(brief, /执行示例。/);
     assert.match(brief, /## 输出要求/);
-    assert.match(brief, /task-reports\/S1\.md/);
+    assert.match(brief, /task-reports\/S1\.json/);
     assert.doesNotMatch(brief, /## 文件索引/);
     assert.doesNotMatch(brief, /## 切片\n/);
   });
@@ -2471,7 +2511,7 @@ test('CLI task handoff commands require slice claims', async () => {
     assert.match(report.stderr.toString(), /task-report-template: missing claims file/);
 
     assert.equal(await fs.stat(path.join(planDir, 'task-briefs', 'S1.md')).then(() => true, () => false), false);
-    assert.equal(await fs.stat(path.join(planDir, 'task-reports', 'S1.md')).then(() => true, () => false), false);
+    assert.equal(await fs.stat(path.join(planDir, 'task-reports', 'S1.json')).then(() => true, () => false), false);
   });
 });
 
@@ -2527,19 +2567,177 @@ test('CLI task-report-template writes implementer report template', async () => 
       'S1',
     ]);
     assert.equal(result.status, 0, result.stderr.toString());
-    assert.match(result.stdout.toString(), /task-reports\/S1\.md/);
+    assert.match(result.stdout.toString(), /task-reports\/S1\.json/);
 
-    const report = await fs.readFile(path.join(planDir, 'task-reports', 'S1.md'), 'utf8');
-    assert.match(report, /^# Task Report：S1/m);
-    assert.match(report, /## 实际完成/);
-    assert.match(report, /## 实际改动文件/);
-    assert.match(report, /## 与 brief 的一致性/);
-    assert.match(report, /## 验证结果/);
-    assert.match(report, /## 偏离 \/ 风险 \/ 未完成/);
-    assert.match(report, /## 需要 reviewer 重点检查/);
-    assert.match(report, /## Implementer 结论/);
-    assert.match(report, /- blocked/);
-    assert.match(report, /ready-for-review \/ blocked/);
+    const report = JSON.parse(await fs.readFile(path.join(planDir, 'task-reports', 'S1.json'), 'utf8'));
+    assert.equal(report.schemaVersion, 'sliced-dev.taskReport.v1');
+    assert.equal(report.sliceId, 'S1');
+    assert.equal(report.conclusion, 'blocked');
+    assert.deepEqual(report.completed, []);
+    assert.deepEqual(report.changedFiles, []);
+    assert.equal(report.briefConsistency.status, 'matched');
+    assert.deepEqual(report.claimUpdates.map((item) => item.claimId), ['C1', 'C2', 'C3', 'C4']);
+    assert.deepEqual(report.claimUpdates.map((item) => item.proposedStatus), ['proposed', 'proposed', 'proposed', 'proposed']);
+    assert.deepEqual(report.validation, []);
+    assert.deepEqual(report.risks, []);
+    assert.deepEqual(report.reviewFocus, []);
+  });
+});
+
+test('validate accepts legal task report JSON', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-report-json-valid');
+    await writeValidExecutingPlan(planDir);
+    await writeReadyTaskHandoff('dev-plans/2026-06-10-task-report-json-valid', 'S1');
+
+    assert.deepEqual(await validatePlan(planDir), []);
+  });
+});
+
+test('validate rejects invalid task report conclusion', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-report-json-conclusion');
+    await writeValidExecutingPlan(planDir);
+    await writeReadyTaskHandoff('dev-plans/2026-06-10-task-report-json-conclusion', 'S1');
+    const reportPath = path.join(planDir, 'task-reports', 'S1.json');
+    const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    report.conclusion = 'done';
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('conclusion must be ready-for-review or blocked')));
+  });
+});
+
+test('validate rejects task report proposedStatus verified', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-report-json-verified');
+    await writeValidExecutingPlan(planDir);
+    await writeReadyTaskHandoff('dev-plans/2026-06-10-task-report-json-verified', 'S1');
+    const reportPath = path.join(planDir, 'task-reports', 'S1.json');
+    const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    report.claimUpdates[0].proposedStatus = 'verified';
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('proposedStatus must not be verified')));
+  });
+});
+
+test('validate rejects task report unknown claim references', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-report-json-unknown-claim');
+    await writeValidExecutingPlan(planDir);
+    await writeReadyTaskHandoff('dev-plans/2026-06-10-task-report-json-unknown-claim', 'S1');
+    const reportPath = path.join(planDir, 'task-reports', 'S1.json');
+    const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    report.changedFiles = [{ path: 'src/example.ts', reason: '覆盖示例行为。', claimIds: ['C9'] }];
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('claimIds references unknown claim C9')));
+  });
+});
+
+test('validate rejects orphan task report JSON', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-report-json-orphan');
+    await writeValidExecutingPlan(planDir);
+    await fs.mkdir(path.join(planDir, 'task-reports'), { recursive: true });
+    await fs.writeFile(
+      path.join(planDir, 'task-reports', 'S9.json'),
+      `${JSON.stringify({ schemaVersion: 'sliced-dev.taskReport.v1', sliceId: 'S9' }, null, 2)}\n`,
+      'utf8',
+    );
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('task-reports/S9.json: no matching slice S9 in plan.md')));
+  });
+});
+
+test('validate requires ready task report to cover all P0/P1 claims', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-report-json-coverage');
+    await writeValidExecutingPlan(planDir);
+    await writeReadyTaskHandoff('dev-plans/2026-06-10-task-report-json-coverage', 'S1');
+    const reportPath = path.join(planDir, 'task-reports', 'S1.json');
+    const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    report.claimUpdates = report.claimUpdates.filter((update) => update.claimId !== 'C3');
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('ready-for-review claimUpdates must cover P1 claim C3')));
+  });
+});
+
+test('validate rejects ready task report with unimplemented P0/P1 claim updates', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-report-json-unimplemented-required');
+    await writeValidExecutingPlan(planDir);
+    await writeReadyTaskHandoff('dev-plans/2026-06-10-task-report-json-unimplemented-required', 'S1');
+    const reportPath = path.join(planDir, 'task-reports', 'S1.json');
+    const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    report.claimUpdates = report.claimUpdates.map((update) => (
+      update.claimId === 'C1'
+        ? { ...update, proposedStatus: 'proposed', evidence: [], note: '' }
+        : update
+    ));
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('ready-for-review claimUpdates for P0 claim C1 must be implemented')));
+  });
+});
+
+test('review-package keeps legacy markdown task report fallback', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-report-legacy-fallback');
+    await writeValidExecutingPlan(planDir);
+    await writeVerifiedClaimsFixture(planDir, 'S1');
+    await writeTaskBriefFixture('dev-plans/2026-06-10-task-report-legacy-fallback', 'S1');
+    await writeLegacyReadyTaskReportFixture(planDir, 'S1');
+    initGitRepo();
+
+    const result = runDevPlanCli(['review-package', 'dev-plans/2026-06-10-task-report-legacy-fallback', 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    const reviewPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1.md'), 'utf8');
+    assert.match(reviewPackage, /# Task Report：S1/);
+    assert.match(reviewPackage, /```markdown/);
+  });
+});
+
+test('close-check does not treat task report claim updates as final claim truth', async () => {
+  await withTempRepo(async () => {
+    const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
+    const planDir = path.join('dev-plans', '2026-06-10-task-report-not-final-truth');
+    await writeValidExecutingPlan(planDir);
+    const claimsTemplate = runDevPlanCli(['claims-template', 'dev-plans/2026-06-10-task-report-not-final-truth', 'S1']);
+    assert.equal(claimsTemplate.status, 0, claimsTemplate.stderr.toString());
+    await writeTaskReportTemplateFixture('dev-plans/2026-06-10-task-report-not-final-truth', 'S1');
+    await markTaskReportClaimUpdatesReady('dev-plans/2026-06-10-task-report-not-final-truth', 'S1');
+    await markTaskReportReady('dev-plans/2026-06-10-task-report-not-final-truth', 'S1');
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withPassedDiffCheckEvidence(withFilledContextPreflight(await fs.readFile(planPath, 'utf8')), planDir)
+        .replace('> 状态：executing', '> 状态：done')
+        .replace('- 阶段：executing', '- 阶段：done')
+        .replace('- 当前切片：S1', '- 当前切片：无')
+        .replace('- 状态：not-started', '- 状态：done')
+        .replace('- 风险：B', '- 风险：A')
+        .replace('- 执行：待判定', '- 执行：自动')
+        .replace('- 上下文预检：pending', '- 上下文预检：ready')
+        .replace('- 硬门禁：pending', '- 硬门禁：passed（标准流程）')
+        .replace('- AI Review：pending', '- AI Review：skipped（A 类用户允许跳过）')
+        .replace('- 用户验收：pending', '- 用户验收：passed')
+        .replace('- Commit：待提交', '- Commit：已提交')
+        .replace('- 验证：pending', '- 验证：passed（标准流程）'),
+      'utf8',
+    );
+
+    const result = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-task-report-not-final-truth']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /final status must be verified or waived, got proposed/);
   });
 });
 
@@ -2574,6 +2772,10 @@ test('CLI review-package fails when task report is blocked', async () => {
     await writeValidExecutingPlan(planDir);
     await writeTaskBriefFixture('dev-plans/2026-06-10-review-package-blocked-report', 'S1');
     await writeTaskReportTemplateFixture('dev-plans/2026-06-10-review-package-blocked-report', 'S1');
+    const reportPath = path.join(planDir, 'task-reports', 'S1.json');
+    const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    report.risks = [{ severity: 'high', summary: '测试 fixture 中保留 blocked report。', claimIds: [] }];
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 
     const result = runDevPlanCli(['review-package', 'dev-plans/2026-06-10-review-package-blocked-report', 'S1']);
     assert.equal(result.status, 1, result.stderr.toString());
@@ -2591,7 +2793,7 @@ test('CLI review-package requires current slice claims', async () => {
 
     const result = runDevPlanCli(['review-package', 'dev-plans/2026-06-10-review-package-missing-claims', 'S1']);
     assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /review-package: missing claims file/);
+    assert.match(result.stderr.toString(), /requires claims\/S1\.json before task report JSON/);
     assert.equal(await fs.stat(path.join(planDir, 'review-packages', 'S1.md')).then(() => true, () => false), false);
   });
 });
@@ -2602,17 +2804,14 @@ test('CLI review-package requires Claim Updates section in task report', async (
     await writeValidExecutingPlan(planDir);
     await writeReadyTaskHandoff('dev-plans/2026-06-10-review-package-missing-claim-updates', 'S1');
 
-    const reportPath = path.join(planDir, 'task-reports', 'S1.md');
-    const report = await fs.readFile(reportPath, 'utf8');
-    await fs.writeFile(
-      reportPath,
-      report.replace(/\n## Claim Updates\n\n[\s\S]*?\n## 验证结果\n/, '\n## 验证结果\n'),
-      'utf8',
-    );
+    const reportPath = path.join(planDir, 'task-reports', 'S1.json');
+    const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    delete report.claimUpdates;
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 
     const result = runDevPlanCli(['review-package', 'dev-plans/2026-06-10-review-package-missing-claim-updates', 'S1']);
     assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /Claim Updates/);
+    assert.match(result.stderr.toString(), /claimUpdates must be an array/);
   });
 });
 
@@ -2677,7 +2876,9 @@ test('CLI review-package writes slice evidence package', async () => {
     assert.match(reviewPackage, /## Task Brief/);
     assert.match(reviewPackage, /# Task Brief：S1/);
     assert.match(reviewPackage, /## Task Report/);
-    assert.match(reviewPackage, /# Task Report：S1/);
+    assert.match(reviewPackage, /### Conclusion/);
+    assert.match(reviewPackage, /### Claim Updates/);
+    assert.match(reviewPackage, /\| Claim \| Proposed Status \| Evidence \| Note \|/);
     assert.match(reviewPackage, /ready-for-review/);
     assert.match(reviewPackage, /## 全局约束/);
     assert.match(reviewPackage, /不新增 ks \/ dd 平台分支/);
@@ -2833,7 +3034,7 @@ test('CLI review-package excludes its own generated packages from changed files'
     assert.match(reviewPackage, /src\/new\.ts（untracked）/);
     assert.doesNotMatch(reviewPackage, /review-packages\/S1\.md（untracked）/);
     assert.doesNotMatch(reviewPackage, /task-briefs\/S1\.md（untracked）/);
-    assert.doesNotMatch(reviewPackage, /task-reports\/S1\.md（untracked）/);
+    assert.doesNotMatch(reviewPackage, /task-reports\/S1\.(?:md|json)（untracked）/);
     assert.doesNotMatch(reviewPackage, /--- untracked dev-plans\/2026-06-10-review-package-self-inventory\/review-packages\/S1\.md/);
   });
 });
@@ -3214,7 +3415,7 @@ test('workflow eval close-check requires task report for passed AI Review', asyn
     const planDir = path.join('dev-plans', '2026-06-10-close-check-missing-report');
     await writeValidExecutingPlan(planDir);
     await writeCloseCheckHandoffFixtures('dev-plans/2026-06-10-close-check-missing-report');
-    await fs.rm(path.join(planDir, 'task-reports', 'S1.md'), { force: true });
+    await fs.rm(path.join(planDir, 'task-reports', 'S1.json'), { force: true });
     const planPath = path.join(planDir, 'plan.md');
     await fs.writeFile(
       planPath,
@@ -3236,6 +3437,10 @@ test('workflow eval close-check rejects blocked task report for passed AI Review
     await writeValidExecutingPlan(planDir);
     await writeTaskBriefFixture('dev-plans/2026-06-10-close-check-blocked-report', 'S1');
     await writeTaskReportTemplateFixture('dev-plans/2026-06-10-close-check-blocked-report', 'S1');
+    const reportPath = path.join(planDir, 'task-reports', 'S1.json');
+    const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    report.risks = [{ severity: 'high', summary: '测试 fixture 中保留 blocked report。', claimIds: [] }];
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
     await writeReviewPackageFixture(planDir, 'S1');
     await writeWholeReviewPackageFixture(planDir);
     const planPath = path.join(planDir, 'plan.md');
@@ -3248,7 +3453,7 @@ test('workflow eval close-check rejects blocked task report for passed AI Review
 
     const result = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-blocked-report']);
     assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /task report Implementer 结论 must be ready-for-review/);
+    assert.match(result.stderr.toString(), /task report conclusion must be ready-for-review/);
   });
 });
 

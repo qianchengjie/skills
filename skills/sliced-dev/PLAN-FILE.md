@@ -17,7 +17,7 @@ dev-plans/
     claims/          # 每个切片的结构化 Claim / Evidence / Status 真源，提交入库
       S1.json
     task-briefs/      # 生成文件，gitignore
-    task-reports/     # 生成文件，gitignore
+    task-reports/     # implementer 结构化交付报告，默认 S*.json，gitignore
     review-packages/  # 生成文件，gitignore
 ```
 
@@ -250,7 +250,7 @@ dev-plans/
 每个切片必须有 `#### 门禁记录`，记录 diff-check 结果、接收门禁和门禁执行摘要（如每次修复改了什么）。硬门禁、AI Review、修复次数的状态唯一真源是切片头部字段，不在本小节重复记录同名状态行；详细失败信息仍放在本切片 `验证备注` 或 `audits.md` 的长证据中。`状态：done` 时，`close-check` 要求 diff-check 记录为结构化表格，且 command / evidence 非空、非占位；command 中的 `diff-check <planDir> <S-id>` 必须指向当前计划目录和当前切片。
 ## Claims / Evidence / Status
 
-`claims/S*.json` 是每个切片的 Claim / Evidence / Status 结构化真源。`plan.md` 继续承载切片叙事、上下文预检、门禁状态和 AI Review 结论；不要把完整 claims 状态双写进 Markdown 表格。task brief、task report、review-package 和 whole-review-package 只渲染或回传 claims 信息。
+`claims/S*.json` 是每个切片的 Claim / Evidence / Status 结构化真源。`plan.md` 继续承载切片叙事、上下文预检、门禁状态和 AI Review 结论；不要把完整 claims 状态双写进 Markdown 表格，也不要在 `plan.md` 双写完整 task report 状态。task brief、task report、review-package 和 whole-review-package 只渲染或回传 claims 信息。
 
 每个可执行切片建议在实现前生成 claims 文件：
 
@@ -304,7 +304,7 @@ Evidence 字段规则：
 - `blocked`：无法验证或需要人工裁决。
 - `waived`：明确豁免。
 
-`done` 切片的 claims 格式约束由 `close-check` 执行：必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确。`validate` 会校验已有 claims 文件的 JSON / 字段形状和孤儿文件，但为了兼容草稿 / 未执行切片，不强制每个非 done 切片提前存在 claims 文件。
+`done` 切片的 claims 格式约束由 `close-check` 执行：必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确，最终状态必须是 `verified` 或 `waived`。`validate` 会校验已有 claims 文件的 JSON / 字段形状和孤儿文件，但为了兼容草稿 / 未执行切片，不强制每个非 done 切片提前存在 claims 文件。
 
 
 `close-check` 不读取当前 git dirty 状态；边界检查由显式 `diff-check` 门禁记录承载。
@@ -316,7 +316,7 @@ Evidence 字段规则：
 
 | Gate | Command | Status | Evidence |
 | --- | --- | --- | --- |
-| implementer-acceptance | task-reports/<S-id>.md | passed | ready-for-review; changed files within 允许修改; no 禁止修改 hit |
+| implementer-acceptance | task-reports/<S-id>.json | passed | ready-for-review; changed files within 允许修改; no 禁止修改 hit |
 | diff-check | node /absolute/path/to/sliced-dev/scripts/dev-plan.mjs diff-check dev-plans/2026-06-30-example S1 | passed | changed files within 允许修改; no 禁止修改 hit |
 
 - 失败处理：修复次数用尽仍失败则停止并报告。
@@ -324,11 +324,13 @@ Evidence 字段规则：
 
 ## Task Brief / Task Report
 
-`task-briefs/<S-id>.md` 和 `task-reports/<S-id>.md` 由脚本生成，是实现与审查的临时交接文件，不写入 `plan.md` 正文，也不作为 durable 状态真源。
+`task-briefs/<S-id>.md` 和 `task-reports/<S-id>.json` 由脚本生成，是实现与审查的临时交接文件，不写入 `plan.md` 正文。`task-reports/<S-id>.json` 是 implementer 的结构化交付报告 / update request，不是 Claim / Evidence / Status 的最终真源；只有 legacy `task-reports/<S-id>.md` 存在时才按旧格式兼容。
 
 - task brief 从当前切片、`全局约束`、`上下文预检`（含 `项目规范` / `禁止词` / `基线脏文件`）、`接口契约`、关联 D/A、门禁记录和 `claims/<S-id>.json` 提取窄上下文；修改运行时逻辑时，implementer subagent 必须补直接相关测试，或在 task report 说明不适用原因。
-- task report 由 implementer subagent 填写实际完成、改动文件、验证、偏离风险、`Claim Updates` 和 `Implementer 结论`；控制器不得代写 ready report。
-- `review-package` 只接受 `Implementer 结论：ready-for-review` 的 task report。
+- task report 由 implementer subagent 填写 `completed`、`changedFiles`、`briefConsistency`、`claimUpdates`、`validation`、`risks`、`reviewFocus` 和 `conclusion`；控制器不得代写 ready report。
+- `claimUpdates[*].proposedStatus` 只允许 `proposed` / `implemented` / `blocked` / `failed`，不得写 `verified` / `waived`。
+- `conclusion: ready-for-review` 时，所有 P0/P1 claims 的 `claimUpdates` 必须是 `implemented`，并提供 evidence 或 note。
+- `review-package` 只接受 `conclusion: ready-for-review` 的 task report。
 - `review-package` 必须包含 `项目规范`；Evidence 填写 review-package 章节名、文件路径或固定不适用标记；自然语言判断写 Note。
 
 ## AI Review 结论
