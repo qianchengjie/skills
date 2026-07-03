@@ -90,7 +90,7 @@ REPORT_AND_NEXT
 ### 门禁投影
 
 - 硬门禁 = 「验证命令」的修改后验证组合：相关 lint、受影响 workspace 的 type-check、与改动直接相关的测试，按预检 `验证` 行执行。`validate` / `diff-check` / `task-brief` / `review-package` / `review-prompt` / subagent 派发依赖 dev-plans 目录，轻量档不适用、不强行替代。
-- 轻量档 AI Review 按风险分层：B 类对当前 diff 完整过一遍 `Code Quality / AI Contamination Check`，边界以短版预检的 `不碰` 行为准，输出问题清单或一行 `AI Review passed`；A 类输出一行简化自查结论；`skipped` 仍需用户明示允许。完整档不适用此短流程，必须走 `review-package` + 三 verdict。
+- 轻量档 AI Review 按风险分层：B 类对当前 diff 完整过一遍 `代码质量 / AI 污染检查`，边界以短版预检的 `不碰` 行为准，输出问题清单或一行 `AI Review passed`；A 类输出一行简化自查结论；`skipped` 仍需用户明示允许。完整档不适用此短流程，必须走 `review-package` + 三 verdict。
 - 有限修复同口径：每个任务最多自动修复两次，次数用尽仍失败则停止并报告。
 
 ### 越界与升级
@@ -113,7 +113,7 @@ REPORT_AND_NEXT
 2. 本片必须理解哪些上下文。
 3. 必须读取哪些文件、搜索哪些关键词或查看哪些旧行为。
 4. 本片必须遵守哪些项目规范入口或摘录；无则写 `无`。
-5. 本片是否触碰 `全局约束` 或当前切片 `接口契约`。
+5. 本片是否触碰 `全局约束` 或当前切片 `切片交接`。
 6. 本片允许 / 禁止改哪些文件。
 7. 哪些情况必须停止。
 
@@ -132,12 +132,12 @@ REPORT_AND_NEXT
 - 不解释通用最佳实践。
 - 不列“可能有用”的泛上下文，只列本片不读就容易写偏的上下文。
 - 不把实现形状写死为“抽 helper / 加 fallback / 新公共 utils”。任务按业务结果拆，不按代码形状拆。
-- 若当前片声明 `#### 接口契约`，必须说明相关契约的读取和验证方式。
+- 若当前片声明 `#### 切片交接`，必须说明相关交接的读取和验证方式。
 
 ### 必读上下文读取规则
 
 - `必读上下文` 读完之前，不允许进入实现。
-- `全局约束` 是每片默认继承的约束；`项目规范` 是执行与 AI Review 的拒收依据；当前片声明 `#### 接口契约` 时，执行前必须读取该小节。
+- `全局约束` 是每片默认继承的约束；`项目规范` 是执行与 AI Review 的拒收依据；当前片声明 `#### 切片交接` 时，执行前必须读取该小节。
 - 读完后发现原判断错误，必须更新 `上下文预检` 和风险等级。
 - 需要修改 `允许修改` 外的文件，必须停止并说明原因；不能先改再补记录。
 - 上下文不足时写 `上下文预检：blocked（原因）`，并把切片 `状态` 置为 `blocked` 或记录 D 分叉。
@@ -299,9 +299,9 @@ reviewer subagent 调用模板和权限边界见 [REVIEWER-SUBAGENT.md](REVIEWER
 
 三项 verdict 固定为：
 
-- `Requirement Compliance`：当前 diff 是否满足本片 `任务内容` / 验收。
-- `Slice Boundary / Interface Compliance`：是否遵守全局约束、上下文预检、非目标、禁止修改和接口契约。
-- `Code Quality / AI Contamination Check`：是否覆盖 maintainability、test quality、unnecessary complexity、project style consistency、project rules compliance、performance footguns、error handling consistency，以及无领域语义 helper、无证据 null / fallback、新同义词、主流程切碎、过早抽象或吞非法状态。旧记录中的 `AI Contamination Check` 仅作兼容。
+- `需求符合性`：当前 diff 是否满足本片 `任务内容` / 验收。
+- `切片边界 / 交接一致性`：是否遵守全局约束、上下文预检、非目标、禁止修改和切片交接。
+- `代码质量 / AI 污染检查`：是否覆盖 maintainability、test quality、unnecessary complexity、project style consistency、project rules compliance、performance footguns、error handling consistency，以及无领域语义 helper、无证据 null / fallback、新同义词、主流程切碎、过早抽象或吞非法状态。
 
 AI Review 结论表必须使用 `Verdict | Status | Severity | Evidence | Note` 五列格式。Evidence 填写 review-package 章节名、文件路径或固定不适用标记（`N/A` / `NA` / `not applicable` / `不适用`）；自然语言判断说明写 Note。脚本只校验固定 verdict、枚举和 Evidence 非空。
 
@@ -370,18 +370,18 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/<date-slu
 node <sliced-dev-skill-dir>/scripts/dev-plan.mjs whole-review-package dev-plans/<date-slug>
 ```
 
-whole-task package 用于检查全局约束是否被跨片绕开、接口契约的生产消费链是否一致、后续切片是否绕过前序非目标。高风险任务提示转 `rules-review deep / cross-slice`，不得静默当成自动门禁通过。
+whole-task package 用于检查全局约束是否被跨片绕开、切片交接是否一致、后续切片是否绕过前序非目标。高风险任务提示转 `rules-review deep / cross-slice`，不得静默当成自动门禁通过。
 
 生成后先把 `plan.md` 顶部 `Whole Review` 更新为 `package-generated`。整任务审查必须使用固定表写回 `## Whole Review 结论`：
 
 ```markdown
 | Verdict | Status | Severity | Evidence |
 | --- | --- | --- | --- |
-| Global Constraints Compliance | passed | not-applicable | ... |
-| Cross-slice Interface Consistency | passed | not-applicable | ... |
-| Non-goals / Boundary Regression | passed | not-applicable | ... |
-| Requirement Closure | passed | not-applicable | ... |
-| Residual Risk / Release Readiness | passed | not-applicable | ... |
+| 全局约束符合性 | passed | not-applicable | ... |
+| 跨切片交接一致性 | passed | not-applicable | ... |
+| 非目标 / 边界回归 | passed | not-applicable | ... |
+| 需求闭合性 | passed | not-applicable | ... |
+| 残余风险 / 发布就绪度 | passed | not-applicable | ... |
 ```
 
 `Whole Review：passed` 不允许出现 `failed`、`cannot-verify-from-package`、`blocked` 或 `critical`；Evidence 填写 review-package 章节名、文件路径或固定不适用标记，阻塞说明写在顶部状态摘要或正文说明中。

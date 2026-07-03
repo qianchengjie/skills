@@ -66,9 +66,9 @@ Review package：<dev-plans/.../review-packages/<S-id>.md>
 - claim 证据是否足以支撑状态；不要因为字段形状正确就视为已通过。
 
 必须输出固定三项 verdict：
-- Requirement Compliance
-- Slice Boundary / Interface Compliance
-- Code Quality / AI Contamination Check
+- 需求符合性
+- 切片边界 / 交接一致性
+- 代码质量 / AI 污染检查
 
 每项必须包含：
 - Status：passed / failed / cannot-verify-from-package / not-applicable
