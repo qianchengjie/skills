@@ -372,7 +372,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - `AI Review：issues` / `AI Review：blocked` 必须有非占位头部原因，或在 `#### AI Review 结论` 中有 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位。
 - verdict `Status` 只允许 `passed` / `failed` / `cannot-verify-from-package` / `not-applicable`；`Severity` 只允许 `critical` / `major` / `minor` / `not-applicable`。
 - `AI Review：passed` 或 `状态：done` 的切片中，任一 verdict 为 `failed`、`cannot-verify-from-package` 或 `Severity=critical` 都非法。
-- `状态：done` 的切片必须满足 `上下文预检：ready/skipped`、`硬门禁：passed/skipped`、`AI Review：passed/skipped`、`用户验收：passed/skipped/not-required`；`风险` / `执行` 不得为 `待判定`；`风险：B/C` 不允许三项机器门禁为 `skipped`；`用户验收：not-required` 只允许 `执行：自动` 且必须带原因。
+- `状态：done` 的切片必须满足 [PLAN-FILE.md](PLAN-FILE.md) 的完成态约束；`风险：B/C` 不允许三项机器门禁为 `skipped`。
 - 依赖字段中出现的 `S*` 必须存在。
 - 关联项只能包含 `D*` 和 `A*`，ID 不能重复。
 - 关联项状态必须与对应正文块状态一致。

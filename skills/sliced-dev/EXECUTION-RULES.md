@@ -60,7 +60,7 @@ REPORT_AND_NEXT
 - `RUN_HARD_GATES`：执行 lint / type-check / test / `diff-check` 等确定性门禁；控制器依据真实证据更新 `claims/<S-id>.json`，不要让 implementer 自行最终裁定 `verified`。
 - `AI_REVIEW_PACKAGE_AND_REVIEW`：生成当前片 review-package，再按 [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md) 派发 reviewer subagent 输出三 verdict；第三 verdict 必须覆盖普通 code quality 与 AI contamination。
 - `FIX_OR_STOP`：每个切片最多自动修复两次；次数用尽仍失败则停止并报告。
-- `USER_ACCEPTANCE`：AI Review 通过后，自动片默认写 `用户验收：not-required（自动片，完成报告暴露验证和风险）` 并继续提交；需确认片 / C 类片写 `用户验收：pending` 并停下给用户验收。`passed`、`skipped（用户明确跳过）` 或自动片 `not-required（非占位原因）` 后才允许提交和标记 done，`issues` 进入本片有限修复或转 D 分叉。标记 done 前，当前片所有 claims 必须是 `verified` 或 `waived`。
+- `USER_ACCEPTANCE`：AI Review 通过后按 [PLAN-FILE.md](PLAN-FILE.md) 的 `用户验收` 字段收口；自动片默认不逐片停下，需确认片 / C 类片必须停下给用户验收。阻塞状态不得提交或标记 done；标记 done 前，当前片所有 claims 必须是 `verified` 或 `waived`。
 
 低风险 A 类可压缩状态机，但仍必须能说明改动范围和验证结果。B/C 类不得跳过上下文预检、硬门禁和 AI Review；C 类在方案形成后必须停下等人工确认。
 
@@ -324,17 +324,9 @@ AI Review 结果写回：
 
 ## 用户验收
 
-AI Review 通过后，按执行模式处理用户验收。自动片默认不逐片停下，把当前片写为 `用户验收：not-required（自动片，完成报告暴露验证和风险）`，在完成报告中给出 review-package 路径、实际改动和验证摘要后继续提交；若用户明确要求逐片验收，则仍写 `用户验收：pending` 并停下。需确认片 / C 类片必须先写 `用户验收：pending`，报告 review-package 路径、实际改动和验证摘要，然后停下等用户验收本 slice。
+AI Review 通过后，按执行模式处理用户验收；字段枚举、合法条件和 done 约束见 [PLAN-FILE.md](PLAN-FILE.md) 的切片字段规则。自动片默认不逐片停下，在完成报告中给出 review-package 路径、实际改动和验证摘要后继续提交；若用户明确要求逐片验收，则写 `用户验收：pending` 并停下。需确认片 / C 类片必须先写 `用户验收：pending`，报告 review-package 路径、实际改动和验证摘要，然后停下等用户验收本 slice。
 
-用户验收结果写回：
-
-- 用户确认符合要求：`用户验收：passed`。
-- 用户明确跳过验收：`用户验收：skipped（<原因>）`，原因必须非占位。
-- 自动片无需逐片验收：`用户验收：not-required（<原因>）`，原因必须非占位；`执行：需确认` 或 `风险：C` 不允许使用。
-- 用户不满意但不改变范围 / 口径：`用户验收：issues（<摘要>）`，进入本片有限修复循环。
-- 用户反馈改变范围、验收口径、非目标或风险等级：不直接修，转 `D* open` 分叉并回到分叉处理协议。
-
-`用户验收：pending/issues` 阻塞本片代码提交和 `状态：done`；需确认片 / C 类片的 `not-required` 同样阻塞。返工后必须重跑受影响硬门禁和 AI Review，再次进入用户验收判定。
+用户不满意但不改变范围 / 口径时进入本片有限修复循环；用户反馈改变范围、验收口径、非目标或风险等级时，不直接修，转 `D* open` 分叉并回到分叉处理协议。返工后必须重跑受影响硬门禁和 AI Review，再次进入用户验收判定。
 
 ## 有限修复循环
 
