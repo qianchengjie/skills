@@ -54,7 +54,7 @@ active 规则只能位于：
 
 `concerns/README.md` 和 `domain/README.md` 是目录说明，不是规则文件。不要在 README 文件里定义可执行规则 ID。
 
-如有冲突，以 `.agents/rules/` 为准。项目可以不提供 `.agents/AGENTS.md`。
+在项目规则协议内部，namespace 注册、规则 ID 和规则正文以 `.agents/rules/` 为准；这不覆盖系统 / 开发者 / 用户指令、仓库 AGENTS.md 或任务显式范围。若冲突影响执行权限，先说明冲突并按更高优先级指令处理。项目可以不提供 `.agents/AGENTS.md`。
 
 ## Index 协议
 
