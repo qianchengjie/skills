@@ -35,6 +35,7 @@ const AGENTS_ENTRY_SNIPPET = `建议加入 AGENTS.md 的入口片段：
 - 总是读取 \`.agents/rules/index.md\` 中 \`CORE\` 指向的 active 文件。
 - 只有触发条件匹配当前任务时，才读取其他 active namespace 文件。
 - 涉及规则判断时，引用相关规则 ID。
+- 项目规则不覆盖系统 / 开发者 / 用户指令、仓库 AGENTS.md 或任务显式范围；冲突影响执行权限时，先说明冲突并按更高优先级处理。
 \`\`\`
 
 本脚本不会自动修改 AGENTS.md。`;
@@ -69,7 +70,7 @@ const files = [
 - 生效条件：<什么时候适用>
 - 规则：<一句话写清楚必须做什么 / 禁止做什么>
 - 证据要求：
-  - <handoff / review package 里必须留下的证据>
+  - <规则适用时必须留下的证据；载体由消费 workflow 指定，可以是 final report、review package、handoff、提交说明或其他可复核记录>
 - 失败条件：
   - <什么情况算违反>
 - 无法验证条件：

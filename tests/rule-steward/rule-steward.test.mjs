@@ -34,11 +34,16 @@ const initResult = await runNode([initScript, "--root", root]);
 assert.match(initResult.stdout, /Initialized rule store/);
 assert.match(initResult.stdout, /建议加入 AGENTS\.md 的入口片段/);
 assert.match(initResult.stdout, /涉及规则判断时，引用相关规则 ID/);
+assert.match(initResult.stdout, /项目规则不覆盖系统 \/ 开发者 \/ 用户指令/);
 assert.doesNotMatch(initResult.stdout, /如果未读取项目规则/);
 assert.match(initResult.stdout, /本脚本不会自动修改 AGENTS\.md/);
 
 const indexPath = path.join(root, ".agents/rules/index.md");
 assert.match(await readFile(indexPath, "utf8"), /\| `CORE` \| active \| `always\/constraints\.md` \|/);
+assert.match(
+  await readFile(path.join(root, ".agents/rules/always/constraints.md"), "utf8"),
+  /载体由消费 workflow 指定/,
+);
 
 await assertFails([initScript, "--root", root], /Refusing to overwrite existing file/);
 await assertFails([getScript, "--root", root, "CORE-001"], /Rule not found: CORE-001/);
