@@ -43,4 +43,4 @@ for skill in "$ROOT"/skills/*; do
   validate_skill "$skill"
 done
 
-node --test "$ROOT"/tests/sliced-dev/dev-plan.test.mjs
+find "$ROOT/tests" -type f -name '*.test.mjs' -exec node --test {} +
