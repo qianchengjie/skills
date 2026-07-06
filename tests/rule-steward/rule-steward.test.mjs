@@ -30,7 +30,12 @@ async function assertFails(args, pattern) {
 
 const root = await mkdtemp(path.join(os.tmpdir(), "rule-steward-"));
 
-await runNode([initScript, "--root", root]);
+const initResult = await runNode([initScript, "--root", root]);
+assert.match(initResult.stdout, /Initialized rule store/);
+assert.match(initResult.stdout, /建议加入 AGENTS\.md 的入口片段/);
+assert.match(initResult.stdout, /涉及规则判断时，引用相关规则 ID/);
+assert.doesNotMatch(initResult.stdout, /如果未读取项目规则/);
+assert.match(initResult.stdout, /本脚本不会自动修改 AGENTS\.md/);
 
 const indexPath = path.join(root, ".agents/rules/index.md");
 assert.match(await readFile(indexPath, "utf8"), /\| `CORE` \| active \| `always\/constraints\.md` \|/);

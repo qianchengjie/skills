@@ -26,6 +26,19 @@ function parseArgs(argv) {
   return { root };
 }
 
+const AGENTS_ENTRY_SNIPPET = `建议加入 AGENTS.md 的入口片段：
+
+\`\`\`md
+## 项目规则入口
+
+- 当任务需要项目规则时，先读取 \`.agents/rules/index.md\`。
+- 总是读取 \`.agents/rules/index.md\` 中 \`CORE\` 指向的 active 文件。
+- 只有触发条件匹配当前任务时，才读取其他 active namespace 文件。
+- 涉及规则判断时，引用相关规则 ID。
+\`\`\`
+
+本脚本不会自动修改 AGENTS.md。`;
+
 const { root } = parseArgs(process.argv.slice(2));
 const rulesRoot = path.join(root, ".agents", "rules");
 
@@ -102,3 +115,5 @@ for (const [relativePath, content] of files) {
 }
 
 console.log(`Initialized rule store at ${rulesRoot}`);
+console.log("");
+console.log(AGENTS_ENTRY_SNIPPET);
