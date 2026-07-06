@@ -56,6 +56,46 @@ await writeFile(
 );
 await assertFails([getScript, "--root", root, "CORE-001"], /Invalid active rule file path/);
 
+await writeFile(path.join(root, ".agents/rules/concerns/core.md"), "# Wrong CORE target\n");
+await writeFile(
+  indexPath,
+  `# Rules Index
+
+## Namespaces
+
+| Namespace | 状态 | 文件 | 触发条件 |
+| --- | --- | --- | --- |
+| \`CORE\` | active | \`concerns/core.md\` | 每次任务必读 |
+`,
+);
+await assertFails([getScript, "--root", root, "CORE-001"], /CORE namespace must use always\/constraints\.md/);
+
+await writeFile(
+  indexPath,
+  `# Rules Index
+
+## Namespaces
+
+| Namespace | 状态 | 文件 | 触发条件 |
+| --- | --- | --- | --- |
+| \`CORE\` | retired | \`always/constraints.md\` | 每次任务必读 |
+`,
+);
+await assertFails([getScript, "--root", root, "CORE-001"], /CORE namespace must be active/);
+
+await writeFile(
+  indexPath,
+  `# Rules Index
+
+## Namespaces
+
+| Namespace | 状态 | 文件 | 触发条件 |
+| --- | --- | --- | --- |
+| \`FOO\` | active | \`concerns/core.md\` | 测试 |
+`,
+);
+await assertFails([getScript, "--root", root, "CORE-001"], /Missing required CORE namespace/);
+
 await writeFile(
   indexPath,
   `# Rules Index

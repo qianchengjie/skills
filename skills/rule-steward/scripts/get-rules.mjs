@@ -132,6 +132,13 @@ async function parseIndex(rulesRoot) {
     namespaces.set(namespace, { status, file, trigger, absoluteFile });
   }
 
+  const core = namespaces.get("CORE");
+  if (!core) fail("Missing required CORE namespace");
+  if (core.status !== "active") fail("CORE namespace must be active");
+  if (core.file !== "always/constraints.md") {
+    fail("CORE namespace must use always/constraints.md");
+  }
+
   return namespaces;
 }
 
