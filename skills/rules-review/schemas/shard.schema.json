@@ -26,7 +26,18 @@
         "originReason": { "type": "string", "minLength": 1 },
         "acceptedRisk": { "$ref": "#/$defs/acceptedRisk" },
         "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+        "failureChecks": { "type": "array", "items": { "$ref": "#/$defs/failureCheck" } },
         "reason": { "type": "string" }
+      }
+    },
+    "failureCheck": {
+      "type": "object",
+      "required": ["condition", "outcome", "evidence"],
+      "properties": {
+        "conditionId": { "type": "string", "minLength": 1 },
+        "condition": { "type": "string", "minLength": 1 },
+        "outcome": { "enum": ["checked_no_violation", "not_triggered"] },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } }
       }
     },
     "acceptedRisk": {

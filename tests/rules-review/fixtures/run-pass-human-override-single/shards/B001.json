@@ -10,7 +10,19 @@
       "evidence": [
         {
           "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "summary": "CORE-001 已检查 T001"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:10",
+              "summary": "CORE-001 已检查 T001"
+            }
+          ]
         }
       ]
     },
@@ -19,8 +31,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:11",
+          "summary": "CORE-001 已检查 T002"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:11",
+              "summary": "CORE-001 已检查 T002"
+            }
+          ]
         }
       ]
     },
@@ -29,8 +53,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:12",
+          "summary": "CORE-001 已检查 T003"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:12",
+              "summary": "CORE-001 已检查 T003"
+            }
+          ]
         }
       ]
     },
@@ -39,8 +75,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:13",
+          "summary": "CORE-001 已检查 T004"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:13",
+              "summary": "CORE-001 已检查 T004"
+            }
+          ]
         }
       ]
     },
@@ -49,8 +97,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:14",
+          "summary": "CORE-001 已检查 T005"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:14",
+              "summary": "CORE-001 已检查 T005"
+            }
+          ]
         }
       ]
     },
@@ -59,8 +119,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:15",
+          "summary": "CORE-001 已检查 T006"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:15",
+              "summary": "CORE-001 已检查 T006"
+            }
+          ]
         }
       ]
     },
@@ -69,8 +141,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:16",
+          "summary": "CORE-001 已检查 T007"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:16",
+              "summary": "CORE-001 已检查 T007"
+            }
+          ]
         }
       ]
     },
@@ -79,8 +163,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:17",
+          "summary": "CORE-001 已检查 T008"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:17",
+              "summary": "CORE-001 已检查 T008"
+            }
+          ]
         }
       ]
     },
@@ -89,8 +185,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:18",
+          "summary": "CORE-001 已检查 T009"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:18",
+              "summary": "CORE-001 已检查 T009"
+            }
+          ]
         }
       ]
     },
@@ -99,8 +207,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:19",
+          "summary": "CORE-001 已检查 T010"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:19",
+              "summary": "CORE-001 已检查 T010"
+            }
+          ]
         }
       ]
     },
@@ -109,8 +229,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:20",
+          "summary": "CORE-001 已检查 T011"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:20",
+              "summary": "CORE-001 已检查 T011"
+            }
+          ]
         }
       ]
     },
@@ -119,8 +251,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:21",
+          "summary": "CORE-001 已检查 T012"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:21",
+              "summary": "CORE-001 已检查 T012"
+            }
+          ]
         }
       ]
     },
@@ -129,8 +273,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:22",
+          "summary": "CORE-001 已检查 T013"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:22",
+              "summary": "CORE-001 已检查 T013"
+            }
+          ]
         }
       ]
     },
@@ -139,8 +295,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:23",
+          "summary": "CORE-001 已检查 T014"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:23",
+              "summary": "CORE-001 已检查 T014"
+            }
+          ]
         }
       ]
     },
@@ -149,8 +317,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:24",
+          "summary": "CORE-001 已检查 T015"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:24",
+              "summary": "CORE-001 已检查 T015"
+            }
+          ]
         }
       ]
     },
@@ -159,8 +339,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:25",
+          "summary": "CORE-001 已检查 T016"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:25",
+              "summary": "CORE-001 已检查 T016"
+            }
+          ]
         }
       ]
     },
@@ -169,8 +361,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:26",
+          "summary": "CORE-001 已检查 T017"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:26",
+              "summary": "CORE-001 已检查 T017"
+            }
+          ]
         }
       ]
     },
@@ -179,8 +383,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:27",
+          "summary": "CORE-001 已检查 T018"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:27",
+              "summary": "CORE-001 已检查 T018"
+            }
+          ]
         }
       ]
     },
@@ -189,8 +405,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:28",
+          "summary": "CORE-001 已检查 T019"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:28",
+              "summary": "CORE-001 已检查 T019"
+            }
+          ]
         }
       ]
     },
@@ -199,8 +427,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:29",
+          "summary": "CORE-001 已检查 T020"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:29",
+              "summary": "CORE-001 已检查 T020"
+            }
+          ]
         }
       ]
     },
@@ -209,8 +449,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:30",
+          "summary": "CORE-001 已检查 T021"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:30",
+              "summary": "CORE-001 已检查 T021"
+            }
+          ]
         }
       ]
     },
@@ -219,8 +471,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:31",
+          "summary": "CORE-001 已检查 T022"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:31",
+              "summary": "CORE-001 已检查 T022"
+            }
+          ]
         }
       ]
     },
@@ -229,8 +493,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:32",
+          "summary": "CORE-001 已检查 T023"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:32",
+              "summary": "CORE-001 已检查 T023"
+            }
+          ]
         }
       ]
     },
@@ -239,8 +515,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:33",
+          "summary": "CORE-001 已检查 T024"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:33",
+              "summary": "CORE-001 已检查 T024"
+            }
+          ]
         }
       ]
     },
@@ -249,8 +537,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:34",
+          "summary": "CORE-001 已检查 T025"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:34",
+              "summary": "CORE-001 已检查 T025"
+            }
+          ]
         }
       ]
     },
@@ -259,8 +559,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:35",
+          "summary": "CORE-001 已检查 T026"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:35",
+              "summary": "CORE-001 已检查 T026"
+            }
+          ]
         }
       ]
     },
@@ -269,8 +581,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:36",
+          "summary": "CORE-001 已检查 T027"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:36",
+              "summary": "CORE-001 已检查 T027"
+            }
+          ]
         }
       ]
     },
@@ -279,8 +603,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:37",
+          "summary": "CORE-001 已检查 T028"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:37",
+              "summary": "CORE-001 已检查 T028"
+            }
+          ]
         }
       ]
     },
@@ -289,8 +625,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:38",
+          "summary": "CORE-001 已检查 T029"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:38",
+              "summary": "CORE-001 已检查 T029"
+            }
+          ]
         }
       ]
     },
@@ -299,8 +647,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:39",
+          "summary": "CORE-001 已检查 T030"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:39",
+              "summary": "CORE-001 已检查 T030"
+            }
+          ]
         }
       ]
     },
@@ -309,8 +669,20 @@
       "status": "passed",
       "evidence": [
         {
-          "loc": "src/example.ts:10",
-          "summary": "CORE-001 已检查"
+          "loc": "src/example.ts:40",
+          "summary": "CORE-001 已检查 T031"
+        }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:40",
+              "summary": "CORE-001 已检查 T031"
+            }
+          ]
         }
       ]
     }

@@ -23,11 +23,13 @@
 - requiredRuleRefs：1
 - excludedRuleRefs：0
 - globallyNotApplicableRuleRefs：0
-- changedUnits：1
+- changedUnits：31
 - candidates：0
 - contextExpansions：0
+- applicabilityMatrix：31
 - reviewItems：31
 - reviewBatches：1
+- priorReviewCheck：none_found
 - 验证命令：`node skills/rules-review/scripts/validate.js --mode run --dir tests/rules-review/fixtures/run-pass-human-override-single`
 - 验证摘要：protocolGate=passed，semanticVerdict=clean，findings=0，mustFix=0，shouldFix=0，cannotVerify=0，observations=0，recommendation=ready_for_merge
 
@@ -35,7 +37,7 @@
 - mode：single_batch
 - selectedBy：human_override
 - policyVersion：review-execution-policy/v1
-- metrics：changedUnits=1，candidates=0，targets=1，requiredRuleRefs=1，reviewItems=31
+- metrics：changedUnits=31，candidates=0，targets=31，requiredRuleRefs=1，reviewItems=31
 - userRequestedConcurrency：false
 - reason：reviewItems/targets/rules are within single-batch default range.
 - humanOverride：requestedMode=single_batch，risk=用户强制 single agent，可能降低大 diff review 覆盖质量。

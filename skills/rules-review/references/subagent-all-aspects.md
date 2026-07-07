@@ -6,7 +6,7 @@
 
 - 主 agent 必须先生成 `.rules-review-tmp/<run-id>/dispatch.json`。
 - `dispatch.json.executionPlan.mode` 必须是 `multi_batch`。
-- `dispatch.json` 是规则集合、目标、reviewItem 和 reviewBatch 的唯一机器事实源。
+- `dispatch.json` 是规则集合、目标、适用性矩阵、reviewItem 和 reviewBatch 的唯一机器事实源。
 - 每个 subagent 只接收一个 `task.json`，不得依赖线程历史、Markdown 摘要或“详见主台账”补齐输入。
 - 容量不足时按 `reviewBatches[]` 顺序分批启动；启动失败、容量不足或等待超时必须写回 `dispatch.json`。
 - 未启动、未返回、格式不合规或未聚合的 batch 不得写成已完成。
@@ -33,8 +33,9 @@
 - `reviewBatchId` 与 `reviewBatches[].reviewBatchId` 一致。
 - `ruleSetId` 与 `dispatch.ruleSet.ruleSetId` 一致。
 - `reviewItems[]` 必须展开当前 batch 的每个 `reviewItem`，不得只写 ID 范围。
-- `rules[]` 只包含当前 batch 所需规则快照，每项必须包含 `namespace`、`ruleRef`、`sourceFile`、`sourceHash`、`trigger`、`appliesTo`，以及 `summary` 或 `ruleText`。
+- `rules[]` 只包含当前 batch 所需规则快照，每项必须包含 `namespace`、`ruleRef`、`sourceFile`、`sourceHash`、`trigger`、`appliesTo`，以及 `summary` 或 `ruleText`；`failureConditions[]` 和 `requiredContext[]` 必须与 dispatch 规则快照一致。
 - `targets[]` 只包含当前 batch 所需目标，每项必须包含 `targetId`、`targetKind`，并覆盖本 batch 每个 `reviewItems[].targetId`。
+- `applicabilityMatrix[]` 只包含当前 batch `reviewItems[]` 对应的 dispatch `applicable` 行，并不得改写。
 - 被 `reviewItems[].targetId` 引用的 target 必须包含非空 `summary`，并至少包含非空 `loc` 或 `source`。
 - `outputContract.format = "strict_json"`。
 - `outputContract.schemaRef = "schemas/shard.schema.json"`。
@@ -50,6 +51,7 @@
 ## subagent 约束
 
 - 只使用 task 分配的 `reviewItems[]`、`rules[]` 和 `targets[]`。
+- 只使用 task 分配的 `applicabilityMatrix[]` 判断本 batch 为什么被分派；不得自行扩写适用性矩阵。
 - 不自行维护 `.agents/rules/`，不补规则，不改 ruleRef。
 - 不从 `git diff` / `git status` 重建目标台账。
 - 输出必须是单个 strict JSON 对象，且符合 `schemas/shard.schema.json`。
@@ -76,13 +78,14 @@
 `results[].status` 取值：
 
 ```text
-passed / finding / not_applicable / cannot_verify
+passed / finding / observation / not_applicable / cannot_verify
 ```
 
 字段规则：
 
-- `finding` 必须有 `findingId` 和非空 `evidence[]`。
-- `passed` 必须有非空 `evidence[]`。
+- `finding` 必须有 `findingId`、`origin` 和非空 `evidence[]`。
+- `observation` 必须有 `origin`，并包含 `reason` 或非空 `evidence[]`。
+- `passed` 必须有非空 `evidence[]` 和非空 `failureChecks[]`；如果规则快照声明 `failureConditions[]`，必须覆盖对应 `conditionId`。
 - `not_applicable` 必须有 `reason`，可选 `evidence[]`。
 - `cannot_verify` 必须有 `reason` 或非空 `evidence[]`。
 - `evidence[]` 的每项至少包含非空 `summary`，并包含 `loc` 或 `source` 之一。

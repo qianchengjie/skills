@@ -3,7 +3,7 @@
   "$id": "https://agents.local/rules-review/dispatch.schema.json",
   "title": "rules-review dispatch",
   "type": "object",
-  "required": ["kind", "schemaVersion", "runId", "ruleSet", "targets", "reviewItems", "executionPlan", "reviewBatches"],
+  "required": ["kind", "schemaVersion", "runId", "ruleSet", "targets", "applicabilityMatrix", "reviewItems", "executionPlan", "reviewBatches", "priorReviewCheck"],
   "properties": {
     "kind": { "const": "rules-review-dispatch" },
     "schemaVersion": { "const": 2 },
@@ -30,9 +30,11 @@
         "contextExpansions": { "type": "array", "items": { "$ref": "#/$defs/contextExpansion" } }
       }
     },
+    "applicabilityMatrix": { "type": "array", "items": { "$ref": "#/$defs/applicabilityEntry" } },
     "reviewItems": { "type": "array", "items": { "$ref": "#/$defs/reviewItem" } },
     "executionPlan": { "$ref": "#/$defs/executionPlan" },
-    "reviewBatches": { "type": "array", "items": { "$ref": "#/$defs/reviewBatch" } }
+    "reviewBatches": { "type": "array", "items": { "$ref": "#/$defs/reviewBatch" } },
+    "priorReviewCheck": { "$ref": "#/$defs/priorReviewCheck" }
   },
   "$defs": {
     "executionPlan": {
@@ -95,7 +97,25 @@
         "trigger": {},
         "appliesTo": {},
         "summary": { "type": "string", "minLength": 1 },
-        "ruleText": { "type": "string", "minLength": 1 }
+        "ruleText": { "type": "string", "minLength": 1 },
+        "failureConditions": { "type": "array", "items": { "$ref": "#/$defs/failureCondition" } },
+        "requiredContext": { "type": "array", "items": { "$ref": "#/$defs/requiredContext" } }
+      }
+    },
+    "failureCondition": {
+      "type": "object",
+      "required": ["conditionId", "summary"],
+      "properties": {
+        "conditionId": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1 }
+      }
+    },
+    "requiredContext": {
+      "type": "object",
+      "required": ["contextId", "summary"],
+      "properties": {
+        "contextId": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1 }
       }
     },
     "contextExpansion": {
@@ -104,7 +124,8 @@
       "properties": {
         "expansionId": { "type": "string", "minLength": 1 },
         "reason": { "type": "string", "minLength": 1 },
-        "addedTargetIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+        "addedTargetIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "requiredContextRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
       }
     },
     "target": {
@@ -116,6 +137,19 @@
         "loc": { "type": "string" },
         "source": { "type": "string" },
         "summary": { "type": "string" }
+      }
+    },
+    "applicabilityEntry": {
+      "type": "object",
+      "required": ["ruleRef", "targetId", "targetKind", "applicability", "evidence"],
+      "properties": {
+        "ruleRef": { "type": "string", "minLength": 1 },
+        "targetId": { "type": "string", "minLength": 1 },
+        "targetKind": { "type": "string", "minLength": 1 },
+        "applicability": { "enum": ["applicable", "not_applicable"] },
+        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
+        "reason": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } }
       }
     },
     "reviewItem": {
@@ -141,6 +175,43 @@
         "returnStatus": { "enum": ["not_started", "started", "returned", "not_returned", "format_invalid", "untrusted"] },
         "aggregateStatus": { "enum": ["aggregated", "not_aggregated"] },
         "unaggregatedReason": { "type": ["string", "null"] }
+      }
+    },
+    "priorReviewCheck": {
+      "type": "object",
+      "required": ["status", "reason", "evidence", "priorReviewRefs", "discrepancies"],
+      "properties": {
+        "status": {
+          "enum": ["not_applicable", "none_found", "checked_no_discrepancy", "checked_with_discrepancy"]
+        },
+        "reason": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+        "priorReviewRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "discrepancies": { "type": "array", "items": { "$ref": "#/$defs/priorReviewDiscrepancy" } }
+      }
+    },
+    "priorReviewDiscrepancy": {
+      "type": "object",
+      "required": ["summary", "status"],
+      "properties": {
+        "summary": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["explained", "unexplained"] },
+        "reason": { "type": "string", "minLength": 1 },
+        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["summary"],
+      "anyOf": [
+        { "required": ["loc"] },
+        { "required": ["source"] }
+      ],
+      "properties": {
+        "summary": { "type": "string", "minLength": 1 },
+        "loc": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1 }
       }
     }
   }

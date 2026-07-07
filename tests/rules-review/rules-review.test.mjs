@@ -338,6 +338,105 @@ delete missingTaskRuleLevelTask.rules[0].ruleLevel;
 writeJson(missingTaskRuleLevelTaskPath, missingTaskRuleLevelTask);
 await assertRunDirFails(missingTaskRuleLevelDir, /task ruleLevel must be valid|required field is missing/);
 
+const missingApplicabilityDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-missing-applicability-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), missingApplicabilityDir, { recursive: true });
+const missingApplicabilityDispatchPath = path.join(missingApplicabilityDir, "dispatch.json");
+const missingApplicabilityDispatch = readJson(missingApplicabilityDispatchPath);
+missingApplicabilityDispatch.applicabilityMatrix.pop();
+writeJson(missingApplicabilityDispatchPath, missingApplicabilityDispatch);
+await assertRunDirFails(missingApplicabilityDir, /applicabilityMatrix must cover every requiredRuleRef x target pair/);
+
+const taskApplicabilityMismatchDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-task-applicability-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), taskApplicabilityMismatchDir, { recursive: true });
+const taskApplicabilityMismatchTaskPath = path.join(taskApplicabilityMismatchDir, "tasks/B001.json");
+const taskApplicabilityMismatchTask = readJson(taskApplicabilityMismatchTaskPath);
+taskApplicabilityMismatchTask.applicabilityMatrix = [];
+writeJson(taskApplicabilityMismatchTaskPath, taskApplicabilityMismatchTask);
+await assertRunDirFails(taskApplicabilityMismatchDir, /task applicabilityMatrix must include each dispatch applicable row/);
+
+const passedNoFailureChecksDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-passed-no-failure-checks-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), passedNoFailureChecksDir, { recursive: true });
+const passedNoFailureChecksShardPath = path.join(passedNoFailureChecksDir, "shards/B001.json");
+const passedNoFailureChecksShard = readJson(passedNoFailureChecksShardPath);
+delete passedNoFailureChecksShard.results[0].failureChecks;
+writeJson(passedNoFailureChecksShardPath, passedNoFailureChecksShard);
+await assertRunDirFails(passedNoFailureChecksDir, /passed result requires failureChecks/);
+
+const taskMissingFailureConditionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-task-missing-failure-conditions-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), taskMissingFailureConditionsDir, { recursive: true });
+const taskMissingFailureConditionsDispatchPath = path.join(taskMissingFailureConditionsDir, "dispatch.json");
+const taskMissingFailureConditionsDispatch = readJson(taskMissingFailureConditionsDispatchPath);
+taskMissingFailureConditionsDispatch.ruleSet.ruleSources[0].failureConditions = [
+  { conditionId: "CORE-001-FC001", summary: "CORE-001 must not regress the changed request parameter." },
+];
+writeJson(taskMissingFailureConditionsDispatchPath, taskMissingFailureConditionsDispatch);
+await assertRunDirFails(taskMissingFailureConditionsDir, /task\.rules\[\]\.failureConditions must match dispatch ruleSources\[\]\.failureConditions/);
+
+const emptyRequiredContextExpansionDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-empty-required-context-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), emptyRequiredContextExpansionDir, { recursive: true });
+const emptyRequiredContextExpansionDispatchPath = path.join(emptyRequiredContextExpansionDir, "dispatch.json");
+const emptyRequiredContextExpansionDispatch = readJson(emptyRequiredContextExpansionDispatchPath);
+emptyRequiredContextExpansionDispatch.ruleSet.ruleSources[0].requiredContext = [
+  { contextId: "CORE-001-RC001", summary: "CORE-001 requires a consumer context check." },
+];
+emptyRequiredContextExpansionDispatch.targets.contextExpansions.push({
+  expansionId: "E999",
+  reason: "Declared required context without adding a target.",
+  addedTargetIds: [],
+  requiredContextRefs: ["CORE-001-RC001"],
+});
+writeJson(emptyRequiredContextExpansionDispatchPath, emptyRequiredContextExpansionDispatch);
+await assertRunDirFails(emptyRequiredContextExpansionDir, /contextExpansions with requiredContextRefs must add candidate targets/);
+
+const priorDiscrepancyDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-prior-discrepancy-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), priorDiscrepancyDir, { recursive: true });
+const priorDiscrepancyDispatchPath = path.join(priorDiscrepancyDir, "dispatch.json");
+const priorDiscrepancyDispatch = readJson(priorDiscrepancyDispatchPath);
+priorDiscrepancyDispatch.priorReviewCheck = {
+  status: "checked_with_discrepancy",
+  reason: "Prior review had a finding not reproduced in this run.",
+  evidence: [{ source: ".rules-review-tmp/old/final.md", summary: "Prior final.md was compared." }],
+  priorReviewRefs: [".rules-review-tmp/old/final.md"],
+  discrepancies: [{ summary: "Prior F001 was not reconciled.", status: "unexplained" }],
+};
+writeJson(priorDiscrepancyDispatchPath, priorDiscrepancyDispatch);
+await assertRunDirFails(priorDiscrepancyDir, /unexplained prior review discrepancy must be represented by cannot_verify result/);
+
+const priorDiscrepancyCannotVerifyDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-prior-cannot-verify-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), priorDiscrepancyCannotVerifyDir, { recursive: true });
+const priorDiscrepancyCannotVerifyDispatchPath = path.join(priorDiscrepancyCannotVerifyDir, "dispatch.json");
+const priorDiscrepancyCannotVerifyDispatch = readJson(priorDiscrepancyCannotVerifyDispatchPath);
+priorDiscrepancyCannotVerifyDispatch.priorReviewCheck = {
+  status: "checked_with_discrepancy",
+  reason: "Prior review had a finding not reproduced in this run.",
+  evidence: [{ source: ".rules-review-tmp/old/final.md", summary: "Prior final.md was compared." }],
+  priorReviewRefs: [".rules-review-tmp/old/final.md"],
+  discrepancies: [{ summary: "Prior F001 was not reconciled.", status: "unexplained", reviewItemId: "RI001" }],
+};
+writeJson(priorDiscrepancyCannotVerifyDispatchPath, priorDiscrepancyCannotVerifyDispatch);
+const priorDiscrepancyCannotVerifyShardPath = path.join(priorDiscrepancyCannotVerifyDir, "shards/B001.json");
+const priorDiscrepancyCannotVerifyShard = readJson(priorDiscrepancyCannotVerifyShardPath);
+priorDiscrepancyCannotVerifyShard.results[0] = {
+  reviewItemId: "RI001",
+  status: "cannot_verify",
+  reason: "Prior F001 needs manual reconciliation.",
+};
+writeJson(priorDiscrepancyCannotVerifyShardPath, priorDiscrepancyCannotVerifyShard);
+const priorDiscrepancyCannotVerifyFinalReviewPath = path.join(priorDiscrepancyCannotVerifyDir, "finalReview.json");
+const priorDiscrepancyCannotVerifyFinalReview = readJson(priorDiscrepancyCannotVerifyFinalReviewPath);
+priorDiscrepancyCannotVerifyFinalReview.semanticVerdict = "unknown";
+priorDiscrepancyCannotVerifyFinalReview.issueSummary = issueSummary({ cannotVerify: 1 });
+priorDiscrepancyCannotVerifyFinalReview.recommendation = "manual_verification_required";
+priorDiscrepancyCannotVerifyFinalReview.cannotVerifyItems = [
+  { reviewItemId: "RI001", ruleRef: "CORE-001", targetId: "T001", reason: "Prior F001 needs manual reconciliation." },
+];
+priorDiscrepancyCannotVerifyFinalReview.validationResults = [runValidationResult(priorDiscrepancyCannotVerifyFinalReview)];
+writeJson(priorDiscrepancyCannotVerifyFinalReviewPath, priorDiscrepancyCannotVerifyFinalReview);
+await renderFinalInDir(priorDiscrepancyCannotVerifyDir);
+const priorDiscrepancyCannotVerifyPass = await runValidate(["--mode", "run", "--dir", priorDiscrepancyCannotVerifyDir]);
+const priorDiscrepancyCannotVerifyOutput = JSON.parse(priorDiscrepancyCannotVerifyPass.stdout);
+assert.equal(priorDiscrepancyCannotVerifyOutput.gate.recommendation, "manual_verification_required");
+
 const shouldFixDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-should-fix-"));
 fs.cpSync(path.join(fixtures, "run-pass-full-clean"), shouldFixDir, { recursive: true });
 const shouldFixShardPath = path.join(shouldFixDir, "shards/B001.json");

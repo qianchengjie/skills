@@ -26,8 +26,10 @@
 - changedUnits：1
 - candidates：1
 - contextExpansions：1
+- applicabilityMatrix：4
 - reviewItems：3
 - reviewBatches：1
+- priorReviewCheck：none_found
 - 验证命令：`node skills/rules-review/scripts/validate.js --mode run --dir tests/rules-review/fixtures/run-pass-finding-evidence-key-order`
 - 验证摘要：protocolGate=passed，semanticVerdict=issues，findings=1，mustFix=1，shouldFix=0，cannotVerify=0，observations=0，recommendation=must_fix_before_merge
 

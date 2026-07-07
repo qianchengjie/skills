@@ -9,105 +9,105 @@
       "reviewItemId": "RI017",
       "ruleRef": "CORE-001",
       "targetKind": "changed_unit",
-      "targetId": "T001",
+      "targetId": "T017",
       "required": true
     },
     {
       "reviewItemId": "RI018",
       "ruleRef": "CORE-001",
       "targetKind": "changed_unit",
-      "targetId": "T001",
+      "targetId": "T018",
       "required": true
     },
     {
       "reviewItemId": "RI019",
       "ruleRef": "CORE-001",
       "targetKind": "changed_unit",
-      "targetId": "T001",
+      "targetId": "T019",
       "required": true
     },
     {
       "reviewItemId": "RI020",
       "ruleRef": "CORE-001",
       "targetKind": "changed_unit",
-      "targetId": "T001",
+      "targetId": "T020",
       "required": true
     },
     {
       "reviewItemId": "RI021",
       "ruleRef": "CORE-001",
       "targetKind": "changed_unit",
-      "targetId": "T001",
+      "targetId": "T021",
       "required": true
     },
     {
       "reviewItemId": "RI022",
       "ruleRef": "CORE-001",
       "targetKind": "changed_unit",
-      "targetId": "T001",
+      "targetId": "T022",
       "required": true
     },
     {
       "reviewItemId": "RI023",
       "ruleRef": "CORE-001",
       "targetKind": "changed_unit",
-      "targetId": "T001",
+      "targetId": "T023",
       "required": true
     },
     {
       "reviewItemId": "RI024",
       "ruleRef": "CORE-001",
       "targetKind": "changed_unit",
-      "targetId": "T001",
+      "targetId": "T024",
       "required": true
     },
     {
       "reviewItemId": "RI025",
       "ruleRef": "CORE-001",
       "targetKind": "changed_unit",
-      "targetId": "T001",
+      "targetId": "T025",
       "required": true
     },
     {
       "reviewItemId": "RI026",
       "ruleRef": "CORE-001",
       "targetKind": "changed_unit",
-      "targetId": "T001",
+      "targetId": "T026",
       "required": true
     },
     {
       "reviewItemId": "RI027",
       "ruleRef": "CORE-001",
       "targetKind": "changed_unit",
-      "targetId": "T001",
+      "targetId": "T027",
       "required": true
     },
     {
       "reviewItemId": "RI028",
       "ruleRef": "CORE-001",
       "targetKind": "changed_unit",
-      "targetId": "T001",
+      "targetId": "T028",
       "required": true
     },
     {
       "reviewItemId": "RI029",
       "ruleRef": "CORE-001",
       "targetKind": "changed_unit",
-      "targetId": "T001",
+      "targetId": "T029",
       "required": true
     },
     {
       "reviewItemId": "RI030",
       "ruleRef": "CORE-001",
       "targetKind": "changed_unit",
-      "targetId": "T001",
+      "targetId": "T030",
       "required": true
     },
     {
       "reviewItemId": "RI031",
       "ruleRef": "CORE-001",
       "targetKind": "changed_unit",
-      "targetId": "T001",
+      "targetId": "T031",
       "required": true
     }
   ],
@@ -129,14 +129,295 @@
   ],
   "targets": [
     {
-      "targetId": "T001",
+      "targetId": "T017",
       "targetKind": "changed_unit",
-      "loc": "src/example.ts:10",
-      "summary": "修改请求参数"
+      "loc": "src/example.ts:26",
+      "summary": "修改请求参数 017"
+    },
+    {
+      "targetId": "T018",
+      "targetKind": "changed_unit",
+      "loc": "src/example.ts:27",
+      "summary": "修改请求参数 018"
+    },
+    {
+      "targetId": "T019",
+      "targetKind": "changed_unit",
+      "loc": "src/example.ts:28",
+      "summary": "修改请求参数 019"
+    },
+    {
+      "targetId": "T020",
+      "targetKind": "changed_unit",
+      "loc": "src/example.ts:29",
+      "summary": "修改请求参数 020"
+    },
+    {
+      "targetId": "T021",
+      "targetKind": "changed_unit",
+      "loc": "src/example.ts:30",
+      "summary": "修改请求参数 021"
+    },
+    {
+      "targetId": "T022",
+      "targetKind": "changed_unit",
+      "loc": "src/example.ts:31",
+      "summary": "修改请求参数 022"
+    },
+    {
+      "targetId": "T023",
+      "targetKind": "changed_unit",
+      "loc": "src/example.ts:32",
+      "summary": "修改请求参数 023"
+    },
+    {
+      "targetId": "T024",
+      "targetKind": "changed_unit",
+      "loc": "src/example.ts:33",
+      "summary": "修改请求参数 024"
+    },
+    {
+      "targetId": "T025",
+      "targetKind": "changed_unit",
+      "loc": "src/example.ts:34",
+      "summary": "修改请求参数 025"
+    },
+    {
+      "targetId": "T026",
+      "targetKind": "changed_unit",
+      "loc": "src/example.ts:35",
+      "summary": "修改请求参数 026"
+    },
+    {
+      "targetId": "T027",
+      "targetKind": "changed_unit",
+      "loc": "src/example.ts:36",
+      "summary": "修改请求参数 027"
+    },
+    {
+      "targetId": "T028",
+      "targetKind": "changed_unit",
+      "loc": "src/example.ts:37",
+      "summary": "修改请求参数 028"
+    },
+    {
+      "targetId": "T029",
+      "targetKind": "changed_unit",
+      "loc": "src/example.ts:38",
+      "summary": "修改请求参数 029"
+    },
+    {
+      "targetId": "T030",
+      "targetKind": "changed_unit",
+      "loc": "src/example.ts:39",
+      "summary": "修改请求参数 030"
+    },
+    {
+      "targetId": "T031",
+      "targetKind": "changed_unit",
+      "loc": "src/example.ts:40",
+      "summary": "修改请求参数 031"
     }
   ],
   "outputContract": {
     "format": "strict_json",
     "schemaRef": "schemas/shard.schema.json"
-  }
+  },
+  "applicabilityMatrix": [
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T017",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI017",
+      "evidence": [
+        {
+          "loc": "src/example.ts:26",
+          "summary": "CORE-001 applies to T017"
+        }
+      ]
+    },
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T018",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI018",
+      "evidence": [
+        {
+          "loc": "src/example.ts:27",
+          "summary": "CORE-001 applies to T018"
+        }
+      ]
+    },
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T019",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI019",
+      "evidence": [
+        {
+          "loc": "src/example.ts:28",
+          "summary": "CORE-001 applies to T019"
+        }
+      ]
+    },
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T020",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI020",
+      "evidence": [
+        {
+          "loc": "src/example.ts:29",
+          "summary": "CORE-001 applies to T020"
+        }
+      ]
+    },
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T021",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI021",
+      "evidence": [
+        {
+          "loc": "src/example.ts:30",
+          "summary": "CORE-001 applies to T021"
+        }
+      ]
+    },
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T022",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI022",
+      "evidence": [
+        {
+          "loc": "src/example.ts:31",
+          "summary": "CORE-001 applies to T022"
+        }
+      ]
+    },
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T023",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI023",
+      "evidence": [
+        {
+          "loc": "src/example.ts:32",
+          "summary": "CORE-001 applies to T023"
+        }
+      ]
+    },
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T024",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI024",
+      "evidence": [
+        {
+          "loc": "src/example.ts:33",
+          "summary": "CORE-001 applies to T024"
+        }
+      ]
+    },
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T025",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI025",
+      "evidence": [
+        {
+          "loc": "src/example.ts:34",
+          "summary": "CORE-001 applies to T025"
+        }
+      ]
+    },
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T026",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI026",
+      "evidence": [
+        {
+          "loc": "src/example.ts:35",
+          "summary": "CORE-001 applies to T026"
+        }
+      ]
+    },
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T027",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI027",
+      "evidence": [
+        {
+          "loc": "src/example.ts:36",
+          "summary": "CORE-001 applies to T027"
+        }
+      ]
+    },
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T028",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI028",
+      "evidence": [
+        {
+          "loc": "src/example.ts:37",
+          "summary": "CORE-001 applies to T028"
+        }
+      ]
+    },
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T029",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI029",
+      "evidence": [
+        {
+          "loc": "src/example.ts:38",
+          "summary": "CORE-001 applies to T029"
+        }
+      ]
+    },
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T030",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI030",
+      "evidence": [
+        {
+          "loc": "src/example.ts:39",
+          "summary": "CORE-001 applies to T030"
+        }
+      ]
+    },
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T031",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI031",
+      "evidence": [
+        {
+          "loc": "src/example.ts:40",
+          "summary": "CORE-001 applies to T031"
+        }
+      ]
+    }
+  ]
 }

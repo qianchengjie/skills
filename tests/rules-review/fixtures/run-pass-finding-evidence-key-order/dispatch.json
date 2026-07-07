@@ -145,5 +145,71 @@
     },
     "reason": "reviewItems/targets/rules are within single-batch default range.",
     "humanOverride": null
+  },
+  "applicabilityMatrix": [
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T001",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI001",
+      "evidence": [
+        {
+          "summary": "CORE-001 applies to T001",
+          "loc": "src/example.ts:10"
+        }
+      ]
+    },
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T002",
+      "targetKind": "candidate",
+      "applicability": "not_applicable",
+      "reason": "CORE-001 is not applicable to T002 in this fixture.",
+      "evidence": [
+        {
+          "summary": "CORE-001 applicability checked for T002",
+          "loc": "src/example.ts:12"
+        }
+      ]
+    },
+    {
+      "ruleRef": "TYPE-001",
+      "targetId": "T001",
+      "targetKind": "changed_unit",
+      "applicability": "not_applicable",
+      "reason": "TYPE-001 is not applicable to T001 in this fixture.",
+      "evidence": [
+        {
+          "summary": "TYPE-001 applicability checked for T001",
+          "loc": "src/example.ts:10"
+        }
+      ]
+    },
+    {
+      "ruleRef": "TYPE-001",
+      "targetId": "T002",
+      "targetKind": "candidate",
+      "applicability": "applicable",
+      "reviewItemId": "RI002",
+      "evidence": [
+        {
+          "summary": "TYPE-001 applies to T002",
+          "loc": "src/example.ts:12"
+        }
+      ]
+    }
+  ],
+  "priorReviewCheck": {
+    "status": "none_found",
+    "reason": "No prior final.md applies to this fixture run.",
+    "evidence": [
+      {
+        "source": "tests/rules-review/fixtures/run-pass-finding-evidence-key-order",
+        "summary": "Fixture run has no prior review to reconcile."
+      }
+    ],
+    "priorReviewRefs": [],
+    "discrepancies": []
   }
 }

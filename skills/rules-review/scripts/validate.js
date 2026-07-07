@@ -33,6 +33,10 @@ const ISSUE_SUMMARY_FIELDS = ['findings', 'mustFix', 'shouldFix', 'cannotVerify'
 const EXECUTION_POLICY_VERSION = 'review-execution-policy/v1';
 const EXECUTION_MODES = ['single_batch', 'multi_batch'];
 const EXECUTION_SELECTED_BY = ['ai', 'human_override'];
+const APPLICABILITY_STATUSES = ['applicable', 'not_applicable'];
+const FAILURE_CHECK_OUTCOMES = ['checked_no_violation', 'not_triggered'];
+const PRIOR_REVIEW_STATUSES = ['not_applicable', 'none_found', 'checked_no_discrepancy', 'checked_with_discrepancy'];
+const PRIOR_REVIEW_DISCREPANCY_STATUSES = ['explained', 'unexplained'];
 const REVIEW_ITEM_RE = /^RI\d{3}$/;
 const FINDING_RE = /^F\d{3}$/;
 
@@ -248,12 +252,15 @@ function readText(filePath, artifact, result, code, gateImpact = 'blocked') {
 function validateDispatch(dispatch, artifact, result) {
   expectKind(dispatch, artifact, result, 'D002', 'rules-review-dispatch');
   validateSchemaVersion(dispatch, artifact, result, 'D003');
-  requireFields(dispatch, artifact, result, 'D004', '', ['kind', 'schemaVersion', 'runId', 'ruleSet', 'targets', 'reviewItems', 'executionPlan', 'reviewBatches']);
+  requireFields(dispatch, artifact, result, 'D004', '', ['kind', 'schemaVersion', 'runId', 'ruleSet', 'targets', 'applicabilityMatrix', 'reviewItems', 'executionPlan', 'reviewBatches', 'priorReviewCheck']);
   if (!isNonEmptyString(dispatch.runId)) addViolation(result, 'D005', artifact, '/runId', 'runId must be non-empty string', 'string', dispatch.runId);
 
   const ruleSet = validateRuleSet(dispatch.ruleSet, artifact, result);
   const targets = validateTargets(dispatch.targets, artifact, result);
   const reviewItems = validateReviewItems(dispatch.reviewItems, ruleSet, targets, artifact, result);
+  validateApplicabilityMatrix(dispatch.applicabilityMatrix, ruleSet, targets, reviewItems, artifact, result);
+  validateRequiredContextCoverage(ruleSet, dispatch.targets, artifact, result);
+  validatePriorReviewCheck(dispatch.priorReviewCheck, reviewItems, artifact, result);
   validateReviewBatches(dispatch.reviewBatches, ruleSet, reviewItems, artifact, result);
   validateExecutionPlan(dispatch.executionPlan, dispatch, ruleSet, reviewItems, artifact, result);
 }
@@ -317,6 +324,8 @@ function validateRuleSet(ruleSet, artifact, result) {
       if (!candidateRuleRefs.has(source && source.ruleRef)) addViolation(result, 'D030', artifact, `${pointer}/ruleRef`, 'ruleSources[].ruleRef must be in candidateRuleRefs', Array.from(candidateRuleRefs), source && source.ruleRef);
       if (!RULE_LEVELS.includes(source && source.ruleLevel)) addViolation(result, 'D034', artifact, `${pointer}/ruleLevel`, 'ruleSources[].ruleLevel must be valid', RULE_LEVELS, source && source.ruleLevel);
       if (!hasRuleBody(source)) addViolation(result, 'D032', artifact, pointer, 'rule source requires summary or ruleText', 'non-empty summary or ruleText', source);
+      if (source && source.failureConditions !== undefined) validateFailureConditions(source.failureConditions, artifact, result, 'D035', `${pointer}/failureConditions`);
+      if (source && source.requiredContext !== undefined) validateRequiredContextList(source.requiredContext, artifact, result, 'D036', `${pointer}/requiredContext`);
       if (source && source.ruleRef) ruleSourcesByRuleRef.set(source.ruleRef, source);
     });
   }
@@ -371,6 +380,9 @@ function validateTargets(targets, artifact, result) {
         addViolation(result, 'D052', artifact, `${pointer}/addedTargetIds/${targetIndex}`, 'contextExpansions[].addedTargetIds[] must exist in targets.candidates[]', Array.from(candidateTargetIds), targetId);
       }
     });
+    if (expansion && expansion.requiredContextRefs !== undefined) {
+      validateStringSet(expansion.requiredContextRefs, artifact, result, 'D053', `${pointer}/requiredContextRefs`);
+    }
   });
 
   return { allTargetIds, candidateTargetIds, targetById };
@@ -425,6 +437,160 @@ function validateReviewItems(reviewItems, ruleSet, targets, artifact, result) {
     if (!hasRequiredItem) addViolation(result, 'D070', artifact, '/reviewItems', 'requiredRuleRef must generate at least one required reviewItem', ruleRef, Array.from(itemMap.values()));
   });
   return itemMap;
+}
+
+function validateApplicabilityMatrix(rows, ruleSet, targets, reviewItems, artifact, result) {
+  if (!Array.isArray(rows)) {
+    addViolation(result, 'D150', artifact, '/applicabilityMatrix', 'applicabilityMatrix must be array', 'array', rows);
+    return;
+  }
+
+  const rowsByPair = new Map();
+  const applicableItemIds = new Set();
+  rows.forEach((entry, index) => {
+    const pointer = `/applicabilityMatrix/${index}`;
+    requireFields(entry, artifact, result, 'D151', pointer, ['ruleRef', 'targetId', 'targetKind', 'applicability', 'evidence']);
+    if (!ruleSet.requiredRuleRefs.has(entry && entry.ruleRef)) {
+      addViolation(result, 'D152', artifact, `${pointer}/ruleRef`, 'applicabilityMatrix ruleRef must be requiredRuleRefs item', Array.from(ruleSet.requiredRuleRefs), entry && entry.ruleRef);
+    }
+    const target = targets.targetById.get(entry && entry.targetId);
+    if (!target) {
+      addViolation(result, 'D153', artifact, `${pointer}/targetId`, 'applicabilityMatrix targetId must exist in targets', Array.from(targets.allTargetIds), entry && entry.targetId);
+    } else if (entry.targetKind !== target.targetKind) {
+      addViolation(result, 'D154', artifact, `${pointer}/targetKind`, 'applicabilityMatrix targetKind must match target', target.targetKind, entry.targetKind);
+    }
+    if (!APPLICABILITY_STATUSES.includes(entry && entry.applicability)) {
+      addViolation(result, 'D155', artifact, `${pointer}/applicability`, 'applicability must be valid', APPLICABILITY_STATUSES, entry && entry.applicability);
+    }
+    validateEvidenceArray(entry && entry.evidence, artifact, result, 'D156', `${pointer}/evidence`, 'applicabilityMatrix entry requires evidence');
+
+    const key = applicabilityKey(entry && entry.ruleRef, entry && entry.targetId);
+    if (rowsByPair.has(key)) addViolation(result, 'D157', artifact, pointer, 'applicabilityMatrix must contain one row per required rule and target pair', 'unique ruleRef + targetId', entry);
+    if (entry && entry.ruleRef && entry.targetId) rowsByPair.set(key, entry);
+
+    if (entry && entry.applicability === 'applicable') {
+      if (!REVIEW_ITEM_RE.test(entry.reviewItemId)) {
+        addViolation(result, 'D158', artifact, `${pointer}/reviewItemId`, 'applicable matrix row requires reviewItemId', 'RIxxx', entry.reviewItemId);
+        return;
+      }
+      const item = reviewItems.get(entry.reviewItemId);
+      if (!item) {
+        addViolation(result, 'D159', artifact, `${pointer}/reviewItemId`, 'applicable matrix row reviewItemId must exist in reviewItems', Array.from(reviewItems.keys()), entry.reviewItemId);
+        return;
+      }
+      if (item.ruleRef !== entry.ruleRef || item.targetId !== entry.targetId || item.targetKind !== entry.targetKind || item.required !== true) {
+        addViolation(result, 'D160', artifact, `${pointer}/reviewItemId`, 'applicable matrix row must point to matching required reviewItem', { ruleRef: entry.ruleRef, targetId: entry.targetId, targetKind: entry.targetKind, required: true }, item);
+      }
+      applicableItemIds.add(entry.reviewItemId);
+    }
+
+    if (entry && entry.applicability === 'not_applicable') {
+      if (!isNonEmptyString(entry.reason)) addViolation(result, 'D161', artifact, `${pointer}/reason`, 'not_applicable matrix row requires reason', 'non-empty reason', entry.reason);
+      if (entry.reviewItemId !== undefined && entry.reviewItemId !== null) {
+        addViolation(result, 'D162', artifact, `${pointer}/reviewItemId`, 'not_applicable matrix row must not bind reviewItemId', 'no reviewItemId', entry.reviewItemId);
+      }
+    }
+  });
+
+  ruleSet.requiredRuleRefs.forEach((ruleRef) => {
+    targets.targetById.forEach((_target, targetId) => {
+      const key = applicabilityKey(ruleRef, targetId);
+      if (!rowsByPair.has(key)) {
+        addViolation(result, 'D163', artifact, '/applicabilityMatrix', 'applicabilityMatrix must cover every requiredRuleRef x target pair', key, Array.from(rowsByPair.keys()));
+      }
+    });
+  });
+
+  reviewItems.forEach((item) => {
+    if (!item.required) return;
+    if (!applicableItemIds.has(item.reviewItemId)) {
+      addViolation(result, 'D164', artifact, '/applicabilityMatrix', 'each required reviewItem must be backed by applicable matrix row', item.reviewItemId, Array.from(applicableItemIds));
+    }
+  });
+}
+
+function applicabilityKey(ruleRef, targetId) {
+  return `${ruleRef || ''}\u0000${targetId || ''}`;
+}
+
+function validateRequiredContextCoverage(ruleSet, targets, artifact, result) {
+  const requiredContextById = new Map();
+  ruleSet.requiredRuleRefs.forEach((ruleRef) => {
+    const source = ruleSet.ruleSourcesByRuleRef.get(ruleRef);
+    asArray(source && source.requiredContext).forEach((entry) => {
+      if (entry && entry.contextId) requiredContextById.set(entry.contextId, { ruleRef, entry });
+    });
+  });
+
+  if (requiredContextById.size === 0) return;
+
+  const covered = new Set();
+  asArray(targets && targets.contextExpansions).forEach((expansion, index) => {
+    if (asArray(expansion && expansion.requiredContextRefs).length > 0 && asArray(expansion && expansion.addedTargetIds).length === 0) {
+      addViolation(result, 'D172', artifact, `/targets/contextExpansions/${index}/addedTargetIds`, 'contextExpansions with requiredContextRefs must add candidate targets', 'non-empty addedTargetIds', expansion && expansion.addedTargetIds);
+    }
+    asArray(expansion && expansion.requiredContextRefs).forEach((contextId, refIndex) => {
+      if (!requiredContextById.has(contextId)) {
+        addViolation(result, 'D170', artifact, `/targets/contextExpansions/${index}/requiredContextRefs/${refIndex}`, 'requiredContextRefs must reference required rule context', Array.from(requiredContextById.keys()), contextId);
+      } else {
+        covered.add(contextId);
+      }
+    });
+  });
+
+  requiredContextById.forEach((_value, contextId) => {
+    if (!covered.has(contextId)) {
+      addViolation(result, 'D171', artifact, '/targets/contextExpansions', 'required rule context must be covered by contextExpansions.requiredContextRefs', contextId, Array.from(covered));
+    }
+  });
+}
+
+function validatePriorReviewCheck(value, reviewItems, artifact, result) {
+  if (!isObject(value)) {
+    addViolation(result, 'D180', artifact, '/priorReviewCheck', 'priorReviewCheck must be object', 'object', value);
+    return;
+  }
+
+  requireFields(value, artifact, result, 'D181', '/priorReviewCheck', ['status', 'reason', 'evidence', 'priorReviewRefs', 'discrepancies']);
+  if (!PRIOR_REVIEW_STATUSES.includes(value.status)) {
+    addViolation(result, 'D182', artifact, '/priorReviewCheck/status', 'priorReviewCheck.status must be valid', PRIOR_REVIEW_STATUSES, value.status);
+  }
+  if (!isNonEmptyString(value.reason)) {
+    addViolation(result, 'D183', artifact, '/priorReviewCheck/reason', 'priorReviewCheck.reason must be non-empty string', 'non-empty reason', value.reason);
+  }
+  validateEvidenceArray(value.evidence, artifact, result, 'D184', '/priorReviewCheck/evidence', 'priorReviewCheck requires evidence');
+  const priorReviewRefs = validateStringSet(value.priorReviewRefs, artifact, result, 'D185', '/priorReviewCheck/priorReviewRefs');
+  if (!Array.isArray(value.discrepancies)) {
+    addViolation(result, 'D186', artifact, '/priorReviewCheck/discrepancies', 'priorReviewCheck.discrepancies must be array', 'array', value.discrepancies);
+    return;
+  }
+
+  if (['checked_no_discrepancy', 'checked_with_discrepancy'].includes(value.status) && priorReviewRefs.size === 0) {
+    addViolation(result, 'D187', artifact, '/priorReviewCheck/priorReviewRefs', 'checked prior review status requires priorReviewRefs', 'non-empty priorReviewRefs', value.priorReviewRefs);
+  }
+  if (['not_applicable', 'none_found'].includes(value.status) && (priorReviewRefs.size > 0 || value.discrepancies.length > 0)) {
+    addViolation(result, 'D196', artifact, '/priorReviewCheck', 'not_applicable or none_found prior review status requires empty priorReviewRefs and discrepancies', { priorReviewRefs: [], discrepancies: [] }, value);
+  }
+  if (value.status === 'checked_no_discrepancy' && value.discrepancies.length > 0) {
+    addViolation(result, 'D188', artifact, '/priorReviewCheck/discrepancies', 'checked_no_discrepancy requires empty discrepancies', [], value.discrepancies);
+  }
+  if (value.status === 'checked_with_discrepancy' && value.discrepancies.length === 0) {
+    addViolation(result, 'D189', artifact, '/priorReviewCheck/discrepancies', 'checked_with_discrepancy requires discrepancies', 'non-empty discrepancies', value.discrepancies);
+  }
+
+  value.discrepancies.forEach((entry, index) => {
+    const pointer = `/priorReviewCheck/discrepancies/${index}`;
+    requireFields(entry, artifact, result, 'D190', pointer, ['summary', 'status']);
+    if (!isNonEmptyString(entry && entry.summary)) addViolation(result, 'D191', artifact, `${pointer}/summary`, 'prior review discrepancy summary must be non-empty string', 'string', entry && entry.summary);
+    if (!PRIOR_REVIEW_DISCREPANCY_STATUSES.includes(entry && entry.status)) addViolation(result, 'D192', artifact, `${pointer}/status`, 'prior review discrepancy status must be valid', PRIOR_REVIEW_DISCREPANCY_STATUSES, entry && entry.status);
+    if (entry && entry.status === 'explained' && !isNonEmptyString(entry.reason) && !hasValidEvidenceArray(entry.evidence)) {
+      addViolation(result, 'D193', artifact, pointer, 'explained discrepancy requires reason or evidence', 'reason or evidence[]', entry);
+    }
+    if (entry && entry.evidence !== undefined) validateEvidenceArray(entry.evidence, artifact, result, 'D194', `${pointer}/evidence`, 'prior review discrepancy evidence must be reviewable when present');
+    if (entry && entry.reviewItemId !== undefined && !reviewItems.has(entry.reviewItemId)) {
+      addViolation(result, 'D195', artifact, `${pointer}/reviewItemId`, 'prior review discrepancy reviewItemId must exist in reviewItems', Array.from(reviewItems.keys()), entry.reviewItemId);
+    }
+  });
 }
 
 function validateReviewBatches(reviewBatches, ruleSet, reviewItems, artifact, result) {
@@ -591,10 +757,11 @@ function validateExecutionModeAgainstPolicy(executionPlan, dispatch, artifact, r
 function validateTask(task, artifact, result) {
   expectKind(task, artifact, result, 'T002', 'rules-review-task');
   validateSchemaVersion(task, artifact, result, 'T003');
-  requireFields(task, artifact, result, 'T004', '', ['kind', 'schemaVersion', 'runId', 'reviewBatchId', 'ruleSetId', 'reviewItems', 'rules', 'targets', 'outputContract']);
+  requireFields(task, artifact, result, 'T004', '', ['kind', 'schemaVersion', 'runId', 'reviewBatchId', 'ruleSetId', 'reviewItems', 'rules', 'targets', 'applicabilityMatrix', 'outputContract']);
   if (!Array.isArray(task.reviewItems)) addViolation(result, 'T005', artifact, '/reviewItems', 'reviewItems must be array', 'array', task.reviewItems);
   if (!Array.isArray(task.rules)) addViolation(result, 'T006', artifact, '/rules', 'rules must be array', 'array', task.rules);
   if (!Array.isArray(task.targets)) addViolation(result, 'T007', artifact, '/targets', 'targets must be array', 'array', task.targets);
+  if (!Array.isArray(task.applicabilityMatrix)) addViolation(result, 'T018', artifact, '/applicabilityMatrix', 'applicabilityMatrix must be array', 'array', task.applicabilityMatrix);
 
   asArray(task.reviewItems).forEach((item, index) => {
     const pointer = `/reviewItems/${index}`;
@@ -607,6 +774,8 @@ function validateTask(task, artifact, result) {
     if (!RULE_LEVELS.includes(rule && rule.ruleLevel)) addViolation(result, 'T017', artifact, `${pointer}/ruleLevel`, 'task ruleLevel must be valid', RULE_LEVELS, rule && rule.ruleLevel);
     if (!isNonEmptyString(rule && rule.sourceHash)) addViolation(result, 'T011', artifact, `${pointer}/sourceHash`, 'sourceHash is required', 'non-empty hash', rule && rule.sourceHash);
     if (!hasRuleBody(rule)) addViolation(result, 'T016', artifact, pointer, 'task rule requires summary or ruleText', 'non-empty summary or ruleText', rule);
+    if (rule && rule.failureConditions !== undefined) validateFailureConditions(rule.failureConditions, artifact, result, 'T019', `${pointer}/failureConditions`);
+    if (rule && rule.requiredContext !== undefined) validateRequiredContextList(rule.requiredContext, artifact, result, 'T020', `${pointer}/requiredContext`);
   });
   asArray(task.targets).forEach((target, index) => {
     const pointer = `/targets/${index}`;
@@ -618,6 +787,50 @@ function validateTask(task, artifact, result) {
     if (task.outputContract.format !== 'strict_json') addViolation(result, 'T014', artifact, '/outputContract/format', 'output format must be strict_json', 'strict_json', task.outputContract.format);
     if (task.outputContract.schemaRef !== 'schemas/shard.schema.json') addViolation(result, 'T015', artifact, '/outputContract/schemaRef', 'schemaRef must point to shard schema', 'schemas/shard.schema.json', task.outputContract.schemaRef);
   }
+  validateTaskApplicabilityMatrix(task, artifact, result);
+}
+
+function validateTaskApplicabilityMatrix(task, artifact, result) {
+  if (!Array.isArray(task && task.applicabilityMatrix)) return;
+
+  const reviewItems = new Map(asArray(task.reviewItems).map((item) => [item && item.reviewItemId, item]));
+  const rules = new Set(asArray(task.rules).map((rule) => rule && rule.ruleRef).filter(Boolean));
+  const targets = new Map(asArray(task.targets).map((target) => [target && target.targetId, target]));
+  const rowsByItem = new Map();
+
+  task.applicabilityMatrix.forEach((entry, index) => {
+    const pointer = `/applicabilityMatrix/${index}`;
+    requireFields(entry, artifact, result, 'T030', pointer, ['ruleRef', 'targetId', 'targetKind', 'applicability', 'reviewItemId', 'evidence']);
+    if (!rules.has(entry && entry.ruleRef)) addViolation(result, 'T031', artifact, `${pointer}/ruleRef`, 'task applicabilityMatrix ruleRef must exist in task.rules[]', Array.from(rules), entry && entry.ruleRef);
+    const target = targets.get(entry && entry.targetId);
+    if (!target) {
+      addViolation(result, 'T032', artifact, `${pointer}/targetId`, 'task applicabilityMatrix targetId must exist in task.targets[]', Array.from(targets.keys()), entry && entry.targetId);
+    } else if (target.targetKind !== entry.targetKind) {
+      addViolation(result, 'T033', artifact, `${pointer}/targetKind`, 'task applicabilityMatrix targetKind must match task target', target.targetKind, entry.targetKind);
+    }
+    if (entry && entry.applicability !== 'applicable') addViolation(result, 'T034', artifact, `${pointer}/applicability`, 'task applicabilityMatrix may only include applicable rows', 'applicable', entry && entry.applicability);
+    validateEvidenceArray(entry && entry.evidence, artifact, result, 'T035', `${pointer}/evidence`, 'task applicabilityMatrix entry requires evidence');
+    if (!REVIEW_ITEM_RE.test(entry && entry.reviewItemId)) {
+      addViolation(result, 'T036', artifact, `${pointer}/reviewItemId`, 'task applicable matrix row requires reviewItemId', 'RIxxx', entry && entry.reviewItemId);
+      return;
+    }
+    if (rowsByItem.has(entry.reviewItemId)) addViolation(result, 'T037', artifact, pointer, 'task applicabilityMatrix must contain one row per reviewItemId', 'unique reviewItemId', entry.reviewItemId);
+    rowsByItem.set(entry.reviewItemId, entry);
+    const item = reviewItems.get(entry.reviewItemId);
+    if (!item) {
+      addViolation(result, 'T038', artifact, `${pointer}/reviewItemId`, 'task applicabilityMatrix reviewItemId must exist in task.reviewItems[]', Array.from(reviewItems.keys()), entry.reviewItemId);
+      return;
+    }
+    if (item.required !== true || item.ruleRef !== entry.ruleRef || item.targetId !== entry.targetId || item.targetKind !== entry.targetKind) {
+      addViolation(result, 'T039', artifact, `${pointer}/reviewItemId`, 'task applicabilityMatrix row must match required reviewItem', item, entry);
+    }
+  });
+
+  reviewItems.forEach((item) => {
+    if (item && item.required === true && !rowsByItem.has(item.reviewItemId)) {
+      addViolation(result, 'T040', artifact, '/applicabilityMatrix', 'task must include an applicable matrix row for each required reviewItem', item.reviewItemId, Array.from(rowsByItem.keys()));
+    }
+  });
 }
 
 function validateRetryTask(retryTask, artifact, result) {
@@ -687,6 +900,7 @@ function validateReviewResult(reviewResult, artifact, result, pointer, prefix, t
   }
   if (reviewResult && reviewResult.status === 'passed') {
     validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}015`, `${pointer}/evidence`, 'passed result requires evidence');
+    validateFailureChecks(reviewResult, taskContext, artifact, result, pointer, prefix);
   }
   if (reviewResult && reviewResult.status === 'not_applicable' && !isNonEmptyString(reviewResult.reason)) {
     addViolation(result, `${prefix}016`, artifact, `${pointer}/reason`, 'not_applicable result requires reason', 'non-empty reason', reviewResult.reason);
@@ -697,6 +911,44 @@ function validateReviewResult(reviewResult, artifact, result, pointer, prefix, t
   if (reviewResult && reviewResult.status === 'not_applicable' && reviewResult.evidence !== undefined) {
     validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}018`, `${pointer}/evidence`, 'not_applicable evidence must be reviewable when present');
   }
+}
+
+function validateFailureChecks(reviewResult, taskContext, artifact, result, pointer, prefix) {
+  if (!Array.isArray(reviewResult && reviewResult.failureChecks) || reviewResult.failureChecks.length === 0) {
+    addViolation(result, `${prefix}030`, artifact, `${pointer}/failureChecks`, 'passed result requires failureChecks', 'non-empty failureChecks[]', reviewResult && reviewResult.failureChecks);
+    return;
+  }
+
+  const expectedConditions = failureConditionsForReviewResult(reviewResult, taskContext);
+  const expectedConditionIds = new Set(expectedConditions.map((condition) => condition && condition.conditionId).filter(Boolean));
+  const actualConditionIds = new Set();
+
+  reviewResult.failureChecks.forEach((check, index) => {
+    const checkPointer = `${pointer}/failureChecks/${index}`;
+    requireFields(check, artifact, result, `${prefix}031`, checkPointer, ['condition', 'outcome', 'evidence']);
+    if (!isNonEmptyString(check && check.condition)) addViolation(result, `${prefix}032`, artifact, `${checkPointer}/condition`, 'failureCheck condition must be non-empty string', 'string', check && check.condition);
+    if (!FAILURE_CHECK_OUTCOMES.includes(check && check.outcome)) addViolation(result, `${prefix}033`, artifact, `${checkPointer}/outcome`, 'failureCheck outcome must be valid', FAILURE_CHECK_OUTCOMES, check && check.outcome);
+    validateEvidenceArray(check && check.evidence, artifact, result, `${prefix}034`, `${checkPointer}/evidence`, 'failureCheck requires evidence');
+    if (check && check.conditionId !== undefined) {
+      if (!isNonEmptyString(check.conditionId)) {
+        addViolation(result, `${prefix}035`, artifact, `${checkPointer}/conditionId`, 'failureCheck conditionId must be non-empty string when present', 'string', check.conditionId);
+      } else {
+        actualConditionIds.add(check.conditionId);
+      }
+    }
+  });
+
+  expectedConditionIds.forEach((conditionId) => {
+    if (!actualConditionIds.has(conditionId)) {
+      addViolation(result, `${prefix}036`, artifact, `${pointer}/failureChecks`, 'passed failureChecks must cover rule failureConditions', conditionId, Array.from(actualConditionIds));
+    }
+  });
+}
+
+function failureConditionsForReviewResult(reviewResult, taskContext) {
+  const item = taskContext && taskContext.reviewItems ? taskContext.reviewItems.get(reviewResult && reviewResult.reviewItemId) : null;
+  const rule = item && taskContext && taskContext.rules ? taskContext.rules.get(item.ruleRef) : null;
+  return asArray(rule && rule.failureConditions);
 }
 
 function validateReviewResultDisposition(reviewResult, taskContext, artifact, result, pointer, prefix) {
@@ -799,6 +1051,7 @@ function validateRun(runDir, result) {
 
   const runState = dispatch ? validateRunArtifacts(runDir, dispatch, result) : { results: [], resultOwners: new Map() };
   if (dispatch) validateRequiredResults(dispatch, runState.results, runState.resultOwners, result);
+  if (dispatch) validatePriorReviewDiscrepancies(dispatch, runState.results, result);
 
   const beforeFinalGate = calculateGate(dispatch, runState.results, result);
   if (finalReview && dispatch) validateFinalReviewAgainstComputed(finalReview, dispatch, runState.results, beforeFinalGate, rel(runDir, finalReviewPath), result);
@@ -886,6 +1139,7 @@ function validateTaskAgainstDispatch(task, dispatch, batch, reviewItems, artifac
       if (item[field] !== expected[field]) addViolation(result, 'RUN024', artifact, `/reviewItems/${index}/${field}`, 'task reviewItem must equal dispatch reviewItem', expected[field], item[field]);
     });
   });
+  validateTaskApplicabilityAgainstDispatch(task, dispatch, batch, artifact, result);
 
   const dispatchTargets = buildDispatchTargetMap(dispatch);
   const taskTargets = new Map(asArray(task.targets).map((target) => [target && target.targetId, target]));
@@ -925,7 +1179,33 @@ function validateTaskAgainstDispatch(task, dispatch, batch, reviewItems, artifac
     if (!rulesHaveSameBody(rule, source)) {
       addViolation(result, 'RUN031', artifact, `/rules/${index}`, 'task rule summary or ruleText must match dispatch ruleSource', { summary: source.summary || null, ruleText: source.ruleText || null }, { summary: rule.summary || null, ruleText: rule.ruleText || null });
     }
+    if (!optionalJsonEqual(rule.failureConditions, source.failureConditions)) {
+      addViolation(result, 'RUN036', artifact, `/rules/${index}/failureConditions`, 'task.rules[].failureConditions must match dispatch ruleSources[].failureConditions', source.failureConditions || null, rule.failureConditions || null);
+    }
+    if (!optionalJsonEqual(rule.requiredContext, source.requiredContext)) {
+      addViolation(result, 'RUN037', artifact, `/rules/${index}/requiredContext`, 'task.rules[].requiredContext must match dispatch ruleSources[].requiredContext', source.requiredContext || null, rule.requiredContext || null);
+    }
   });
+}
+
+function validateTaskApplicabilityAgainstDispatch(task, dispatch, batch, artifact, result) {
+  const expectedItemIds = new Set(asArray(batch && batch.reviewItemIds));
+  const expectedRows = asArray(dispatch && dispatch.applicabilityMatrix)
+    .filter((entry) => entry && entry.reviewItemId && expectedItemIds.has(entry.reviewItemId));
+  const actualRows = asArray(task && task.applicabilityMatrix);
+
+  if (actualRows.length !== expectedRows.length) {
+    addViolation(result, 'RUN034', artifact, '/applicabilityMatrix', 'task applicabilityMatrix must include each dispatch applicable row for this batch and no extras', expectedRows, actualRows);
+    return;
+  }
+  if (!unorderedItemsEqual(actualRows, expectedRows, applicabilityRowsEqual)) {
+    addViolation(result, 'RUN035', artifact, '/applicabilityMatrix', 'task applicabilityMatrix rows must equal dispatch rows for this batch', expectedRows, actualRows);
+  }
+}
+
+function applicabilityRowsEqual(left, right) {
+  return ['ruleRef', 'targetId', 'targetKind', 'applicability', 'reviewItemId', 'reason'].every((field) => optionalField(left, field) === optionalField(right, field))
+    && evidenceArraysEqual(left && left.evidence, right && right.evidence);
 }
 
 function validateShardAgainstBatch(shard, batch, artifact, result) {
@@ -954,6 +1234,18 @@ function validateRequiredResults(dispatch, results, resultOwners, result) {
       addViolation(result, 'RUN041', result.artifact, `/reviewItems/${item.reviewItemId}`, 'required reviewItem must have exactly one result', 'one result', 0, 1, 'incomplete');
     } else if (owners.length > 1) {
       addViolation(result, 'RUN042', result.artifact, `/reviewItems/${item.reviewItemId}`, 'reviewItem has duplicate results', 'one result', owners.length);
+    }
+  });
+}
+
+function validatePriorReviewDiscrepancies(dispatch, results, result) {
+  const resultsByReviewItemId = new Map(asArray(results).map((reviewResult) => [reviewResult && reviewResult.reviewItemId, reviewResult]));
+  asArray(dispatch && dispatch.priorReviewCheck && dispatch.priorReviewCheck.discrepancies).forEach((discrepancy, index) => {
+    if (!discrepancy || discrepancy.status !== 'unexplained') return;
+    const pointer = `/priorReviewCheck/discrepancies/${index}`;
+    const reviewResult = resultsByReviewItemId.get(discrepancy.reviewItemId);
+    if (!reviewResult || reviewResult.status !== 'cannot_verify') {
+      addViolation(result, 'RUN050', 'dispatch.json', pointer, 'unexplained prior review discrepancy must be represented by cannot_verify result or explained before final gate', 'matching status=cannot_verify result', discrepancy);
     }
   });
 }
@@ -1593,8 +1885,57 @@ function hasRuleBody(rule) {
   return isNonEmptyString(rule && rule.summary) || isNonEmptyString(rule && rule.ruleText);
 }
 
+function validateFailureConditions(value, artifact, result, code, pointer) {
+  if (!Array.isArray(value)) {
+    addViolation(result, code, artifact, pointer, 'failureConditions must be array', 'array', value);
+    return;
+  }
+  const ids = new Set();
+  value.forEach((condition, index) => {
+    const conditionPointer = `${pointer}/${index}`;
+    requireFields(condition, artifact, result, code, conditionPointer, ['conditionId', 'summary']);
+    if (!isNonEmptyString(condition && condition.conditionId)) {
+      addViolation(result, code, artifact, `${conditionPointer}/conditionId`, 'failureCondition conditionId must be non-empty string', 'string', condition && condition.conditionId);
+    } else if (ids.has(condition.conditionId)) {
+      addViolation(result, code, artifact, conditionPointer, 'failureConditions conditionId must be unique', 'unique conditionId', condition.conditionId);
+    } else {
+      ids.add(condition.conditionId);
+    }
+    if (!isNonEmptyString(condition && condition.summary)) {
+      addViolation(result, code, artifact, `${conditionPointer}/summary`, 'failureCondition summary must be non-empty string', 'string', condition && condition.summary);
+    }
+  });
+}
+
+function validateRequiredContextList(value, artifact, result, code, pointer) {
+  if (!Array.isArray(value)) {
+    addViolation(result, code, artifact, pointer, 'requiredContext must be array', 'array', value);
+    return;
+  }
+  const ids = new Set();
+  value.forEach((entry, index) => {
+    const entryPointer = `${pointer}/${index}`;
+    requireFields(entry, artifact, result, code, entryPointer, ['contextId', 'summary']);
+    if (!isNonEmptyString(entry && entry.contextId)) {
+      addViolation(result, code, artifact, `${entryPointer}/contextId`, 'requiredContext contextId must be non-empty string', 'string', entry && entry.contextId);
+    } else if (ids.has(entry.contextId)) {
+      addViolation(result, code, artifact, entryPointer, 'requiredContext contextId must be unique', 'unique contextId', entry.contextId);
+    } else {
+      ids.add(entry.contextId);
+    }
+    if (!isNonEmptyString(entry && entry.summary)) {
+      addViolation(result, code, artifact, `${entryPointer}/summary`, 'requiredContext summary must be non-empty string', 'string', entry && entry.summary);
+    }
+  });
+}
+
 function rulesHaveSameBody(left, right) {
   return (left.summary || null) === (right.summary || null) && (left.ruleText || null) === (right.ruleText || null);
+}
+
+function optionalJsonEqual(left, right) {
+  if (left === undefined && right === undefined) return true;
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function validateEvidenceArray(evidence, artifact, result, code, pointer, message) {
@@ -1708,8 +2049,10 @@ function formatAuditLines(finalReview, dispatch, runDir) {
     `- changedUnits：${asArray(targets.changedUnits).length}`,
     `- candidates：${asArray(targets.candidates).length}`,
     `- contextExpansions：${asArray(targets.contextExpansions).length}`,
+    `- applicabilityMatrix：${asArray(dispatch && dispatch.applicabilityMatrix).length}`,
     `- reviewItems：${asArray(dispatch && dispatch.reviewItems).length}`,
     `- reviewBatches：${asArray(dispatch && dispatch.reviewBatches).length}`,
+    `- priorReviewCheck：${dispatch && dispatch.priorReviewCheck ? dispatch.priorReviewCheck.status : '未知'}`,
     `- 验证命令：\`${formatRunCommand(runDir)}\``,
     `- 验证摘要：protocolGate=${validation.protocolGate || '未知'}，semanticVerdict=${validation.semanticVerdict || '未知'}，findings=${formatMetric(validation.issueSummary && validation.issueSummary.findings)}，mustFix=${formatMetric(validation.issueSummary && validation.issueSummary.mustFix)}，shouldFix=${formatMetric(validation.issueSummary && validation.issueSummary.shouldFix)}，cannotVerify=${formatMetric(validation.issueSummary && validation.issueSummary.cannotVerify)}，observations=${formatMetric(validation.issueSummary && validation.issueSummary.observations)}，recommendation=${validation.recommendation || '未知'}`,
   ];

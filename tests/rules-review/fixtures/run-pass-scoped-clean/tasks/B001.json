@@ -40,5 +40,20 @@
   "outputContract": {
     "format": "strict_json",
     "schemaRef": "schemas/shard.schema.json"
-  }
+  },
+  "applicabilityMatrix": [
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T001",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI001",
+      "evidence": [
+        {
+          "summary": "CORE-001 applies to T001",
+          "loc": "src/example.ts:10"
+        }
+      ]
+    }
+  ]
 }

@@ -12,6 +12,18 @@
           "loc": "src/example.ts:10",
           "summary": "CORE-001 已检查"
         }
+      ],
+      "failureChecks": [
+        {
+          "condition": "CORE-001 failure condition checked",
+          "outcome": "checked_no_violation",
+          "evidence": [
+            {
+              "loc": "src/example.ts:10",
+              "summary": "CORE-001 已检查"
+            }
+          ]
+        }
       ]
     }
   ]

@@ -98,5 +98,32 @@
     },
     "reason": "reviewItems/targets/rules are within single-batch default range.",
     "humanOverride": null
+  },
+  "applicabilityMatrix": [
+    {
+      "ruleRef": "CORE-001",
+      "targetId": "T001",
+      "targetKind": "changed_unit",
+      "applicability": "applicable",
+      "reviewItemId": "RI001",
+      "evidence": [
+        {
+          "summary": "CORE-001 applies to T001",
+          "loc": "src/example.ts:10"
+        }
+      ]
+    }
+  ],
+  "priorReviewCheck": {
+    "status": "none_found",
+    "reason": "No prior final.md applies to this fixture run.",
+    "evidence": [
+      {
+        "source": "tests/rules-review/fixtures/run-pass-scoped-clean",
+        "summary": "Fixture run has no prior review to reconcile."
+      }
+    ],
+    "priorReviewRefs": [],
+    "discrepancies": []
   }
 }
