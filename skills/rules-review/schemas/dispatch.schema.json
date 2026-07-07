@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agents.local/rules-review/dispatch.schema.json",
+  "title": "rules-review dispatch",
+  "type": "object",
+  "required": ["kind", "schemaVersion", "runId", "ruleSet", "targets", "reviewItems", "reviewBatches"],
+  "properties": {
+    "kind": { "const": "rules-review-dispatch" },
+    "schemaVersion": { "const": 2 },
+    "runId": { "type": "string", "minLength": 1 },
+    "ruleSet": {
+      "type": "object",
+      "required": ["ruleSetId", "sourceIndexHash", "candidateRuleRefs", "requiredRuleRefs", "excludedRuleRefs", "globallyNotApplicableRuleRefs", "ruleSources"],
+      "properties": {
+        "ruleSetId": { "type": "string", "minLength": 1 },
+        "sourceIndexHash": { "type": "string", "minLength": 1 },
+        "candidateRuleRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "requiredRuleRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "excludedRuleRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "globallyNotApplicableRuleRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "ruleSources": { "type": "array", "items": { "$ref": "#/$defs/ruleSource" } }
+      }
+    },
+    "targets": {
+      "type": "object",
+      "required": ["changedUnits", "candidates", "contextExpansions"],
+      "properties": {
+        "changedUnits": { "type": "array", "items": { "$ref": "#/$defs/target" } },
+        "candidates": { "type": "array", "items": { "$ref": "#/$defs/target" } },
+        "contextExpansions": { "type": "array" }
+      }
+    },
+    "reviewItems": { "type": "array", "items": { "$ref": "#/$defs/reviewItem" } },
+    "reviewBatches": { "type": "array", "items": { "$ref": "#/$defs/reviewBatch" } }
+  },
+  "$defs": {
+    "ruleSource": {
+      "type": "object",
+      "required": ["namespace", "ruleRef", "sourceFile", "sourceHash", "trigger", "appliesTo"],
+      "properties": {
+        "namespace": { "type": "string", "minLength": 1 },
+        "ruleRef": { "type": "string", "minLength": 1 },
+        "sourceFile": { "type": "string", "minLength": 1 },
+        "sourceHash": { "type": "string", "minLength": 1 },
+        "trigger": {},
+        "appliesTo": {},
+        "summary": { "type": "string" }
+      }
+    },
+    "target": {
+      "type": "object",
+      "required": ["targetId", "targetKind"],
+      "properties": {
+        "targetId": { "type": "string", "minLength": 1 },
+        "targetKind": { "type": "string", "minLength": 1 },
+        "loc": { "type": "string" },
+        "summary": { "type": "string" }
+      }
+    },
+    "reviewItem": {
+      "type": "object",
+      "required": ["reviewItemId", "ruleRef", "targetKind", "targetId", "required"],
+      "properties": {
+        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
+        "ruleRef": { "type": "string", "minLength": 1 },
+        "targetKind": { "type": "string", "minLength": 1 },
+        "targetId": { "type": "string", "minLength": 1 },
+        "required": { "type": "boolean" }
+      }
+    },
+    "reviewBatch": {
+      "type": "object",
+      "required": ["reviewBatchId", "ruleSetId", "reviewItemIds", "taskRef", "returnStatus", "aggregateStatus"],
+      "properties": {
+        "reviewBatchId": { "type": "string", "minLength": 1 },
+        "ruleSetId": { "type": "string", "minLength": 1 },
+        "reviewItemIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "taskRef": { "type": "string", "minLength": 1 },
+        "shardRef": { "type": ["string", "null"] },
+        "returnStatus": { "enum": ["not_started", "started", "returned", "not_returned", "format_invalid", "untrusted"] },
+        "aggregateStatus": { "enum": ["aggregated", "not_aggregated"] },
+        "unaggregatedReason": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

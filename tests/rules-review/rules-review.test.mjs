@@ -1,0 +1,72 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import path from "node:path";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
+
+const execFileAsync = promisify(execFile);
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const script = path.join(repoRoot, "skills/rules-review/scripts/validate.js");
+const fixtures = path.join(repoRoot, "tests/rules-review/fixtures");
+
+async function runValidate(args) {
+  return execFileAsync(process.execPath, [script, ...args], { cwd: repoRoot });
+}
+
+async function assertRunPass(fixture, expectedGate) {
+  const pass = await runValidate(["--mode", "run", "--dir", path.join(fixtures, fixture)]);
+  const output = JSON.parse(pass.stdout);
+  assert.equal(output.ok, true);
+  assert.deepEqual(output.gate, expectedGate);
+}
+
+async function assertRunFails(fixture, pattern) {
+  try {
+    await runValidate(["--mode", "run", "--dir", path.join(fixtures, fixture)]);
+  } catch (error) {
+    const output = `${error.stdout}${error.stderr}`;
+    assert.match(output, pattern);
+    return;
+  }
+  assert.fail(`Expected fixture to fail: ${fixture}`);
+}
+
+await assertRunPass("run-pass-full-clean", {
+  protocolGate: "passed",
+  scopeMode: "full",
+  coverageClaim: "full_complete",
+  semanticVerdict: "clean",
+});
+
+await assertRunPass("run-pass-scoped-clean", {
+  protocolGate: "passed",
+  scopeMode: "scoped",
+  coverageClaim: "scoped_complete",
+  semanticVerdict: "clean",
+});
+
+const response = await runValidate([
+  "--mode",
+  "render-response",
+  "--dir",
+  path.join(fixtures, "run-pass-scoped-clean"),
+  "--output",
+  "/tmp/rules-review-response-test.md",
+]);
+const responseOutput = JSON.parse(response.stdout);
+assert.equal(responseOutput.ok, true);
+assert.match(responseOutput.response, /限定范围完成/);
+
+await assertRunFails("run-fail-missing-result", /required reviewItem must have exactly one result/);
+await assertRunFails("run-fail-unassigned-result", /result must reference assigned reviewItemId/);
+await assertRunFails("run-fail-duplicate-result", /reviewItem has duplicate results/);
+await assertRunFails("run-fail-finding-no-evidence", /finding result requires findingId and evidence/);
+await assertRunFails("run-fail-passed-no-evidence", /passed result requires evidence/);
+await assertRunFails("run-fail-not-applicable-no-reason", /not_applicable result requires reason/);
+await assertRunFails("run-fail-cannot-verify-no-proof", /cannot_verify result requires reason or evidence/);
+await assertRunFails("run-fail-missing-source-hash", /sourceHash is required/);
+await assertRunFails("run-fail-scoped-no-excluded", /scoped scopeMode requires excludedRuleRefs/);
+await assertRunFails("run-fail-bad-context-expansion", /contextExpansions\[\]\.addedTargetIds\[\] must exist in targets\.candidates\[\]/);
+await assertRunFails("run-fail-bad-review-target", /reviewItem targetId must exist/);
+
+console.log("rules-review tests passed");

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agents.local/rules-review/final-review.schema.json",
+  "title": "rules-review final review",
+  "type": "object",
+  "required": ["kind", "schemaVersion", "runId", "protocolGate", "scopeMode", "coverageClaim", "semanticVerdict", "excludedRuleRefs", "findings", "validationResults"],
+  "properties": {
+    "kind": { "const": "rules-review-final-review" },
+    "schemaVersion": { "const": 2 },
+    "runId": { "type": "string", "minLength": 1 },
+    "protocolGate": { "enum": ["passed", "incomplete", "blocked"] },
+    "scopeMode": { "enum": ["full", "scoped"] },
+    "coverageClaim": { "enum": ["full_complete", "scoped_complete", "incomplete", "blocked"] },
+    "semanticVerdict": { "enum": ["clean", "issues", "unknown"] },
+    "excludedRuleRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+    "validationResults": { "type": "array" },
+    "summary": { "type": "string" }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "required": ["findingId", "reviewItemId", "ruleRef", "targetId", "evidence"],
+      "properties": {
+        "findingId": { "type": "string", "pattern": "^F\\d{3}$" },
+        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
+        "ruleRef": { "type": "string", "minLength": 1 },
+        "targetId": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "array" }
+      }
+    }
+  }
+}

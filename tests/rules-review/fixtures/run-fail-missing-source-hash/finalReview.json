@@ -1,0 +1,13 @@
+{
+  "kind": "rules-review-final-review",
+  "schemaVersion": 2,
+  "runId": "run-fail-missing-source-hash",
+  "protocolGate": "passed",
+  "scopeMode": "full",
+  "coverageClaim": "full_complete",
+  "semanticVerdict": "clean",
+  "excludedRuleRefs": [],
+  "findings": [],
+  "validationResults": [],
+  "summary": "full clean fixture"
+}

@@ -1,0 +1,133 @@
+# 多 agent / reviewBatch JSON 分派规则
+
+只在用户明确要求多 agent / 并行 / subagent，或当前审查需要拆成多个 `reviewBatch` 时读取。普通单 batch 审查不读取本文件。
+
+## 启动边界
+
+- 主 agent 必须先生成 `.rules-review-tmp/<run-id>/dispatch.json`。
+- `dispatch.json` 是规则集合、目标、reviewItem 和 reviewBatch 的唯一机器事实源。
+- 每个 subagent 只接收一个 `task.json`，不得依赖线程历史、Markdown 摘要或“详见主台账”补齐输入。
+- 容量不足时按 `reviewBatches[]` 顺序分批启动；启动失败、容量不足或等待超时必须写回 `dispatch.json`。
+- 未启动、未返回、格式不合规或未聚合的 batch 不得写成已完成。
+
+工具约束：
+
+- agent-to-agent 交互一律使用 strict JSON；不得用 prose、Markdown 分片、代码围栏或前后解释文本替代。
+- `fork_context=true` 只允许传递背景说明（cwd、目标范围口径、只读边界）；不得用于传递 `reviewItem`、规则快照、目标边界或授权审查范围。
+- 使用 `spawn_agent` 且 `fork_context=true` 时，不要显式传 `agent_type`、`model`、`reasoning_effort`。
+
+## task.json
+
+任务包落盘到：
+
+```text
+.rules-review-tmp/<run-id>/tasks/<reviewBatchId>.json
+```
+
+必备语义：
+
+- `kind = "rules-review-task"`。
+- `schemaVersion = 2`。
+- `runId` 与 `dispatch.json.runId` 一致。
+- `reviewBatchId` 与 `reviewBatches[].reviewBatchId` 一致。
+- `ruleSetId` 与 `dispatch.ruleSet.ruleSetId` 一致。
+- `reviewItems[]` 必须展开当前 batch 的每个 `reviewItem`，不得只写 ID 范围。
+- `rules[]` 只包含当前 batch 所需规则快照，每项必须包含 `namespace`、`ruleRef`、`sourceFile`、`sourceHash`、`trigger`、`appliesTo`。
+- `targets[]` 只包含当前 batch 所需目标，每项必须包含 `targetId`、`targetKind`。
+- `outputContract.format = "strict_json"`。
+- `outputContract.schemaRef = "schemas/shard.schema.json"`。
+
+反例（以下写法等价于未分派）：
+
+- “沿用当前线程的 RI001-RI020”
+- “reviewItem 编号见上文 / 见主 agent 输出”
+- “参见主 agent 的目标台账”
+- 只写编号范围而不展开每条规则和目标
+- 让子 agent 自己读取 `.agents/rules/` 重建另一套规则集合
+
+## subagent 约束
+
+- 只使用 task 分配的 `reviewItems[]`、`rules[]` 和 `targets[]`。
+- 不自行维护 `.agents/rules/`，不补规则，不改 ruleRef。
+- 不从 `git diff` / `git status` 重建目标台账。
+- 输出必须是单个 strict JSON 对象，且符合 `schemas/shard.schema.json`。
+- 不输出最终 Markdown、全局 `protocolGate` 或 `semanticVerdict`。
+- 不生成最终 `finding` 汇总；只在 `results[]` 中按 `reviewItemId` 返回局部结论。
+- 发现其它 batch 或其它目标的问题，不得越权返回；可写入当前 result 的 `reason` 说明无法验证，或让主 agent 另建 reviewItem。
+
+## shard.json
+
+返回结果落盘为：
+
+```text
+.rules-review-tmp/<run-id>/shards/<reviewBatchId>.json
+```
+
+必备语义：
+
+- `kind = "rules-review-shard"`。
+- `schemaVersion = 2`。
+- `runId` 与 task 一致。
+- `reviewBatchId` 与 task 一致。
+- `results[]` 每项绑定一个 `reviewItemId`。
+
+`results[].status` 取值：
+
+```text
+passed / finding / not_applicable / cannot_verify
+```
+
+字段规则：
+
+- `finding` 必须有 `findingId` 和非空 `evidence[]`。
+- `passed` 必须有非空 `evidence[]`。
+- `not_applicable` 必须有 `reason`，可选 `evidence[]`。
+- `cannot_verify` 必须有 `reason` 或非空 `evidence[]`。
+- 同一 `reviewItemId` 在同一 shard 内不得出现多条 result。
+- result 只能引用当前 `reviewBatchId` 的 `reviewItemIds[]`。
+
+## 自校验
+
+subagent 返回前应执行：
+
+```text
+node <skill>/scripts/validate.js --mode shard --task tasks/<reviewBatchId>.json --input shards/<reviewBatchId>.json
+```
+
+无法运行 Node 或无法落盘时，仍返回当前最佳 strict JSON，并在相关 result 中使用 `cannot_verify` 与 `reason` 说明阻断点。不得把未校验包装成 `passed`。
+
+## 重试 / 重派
+
+重试包落盘到：
+
+```text
+.rules-review-tmp/<run-id>/retries/<reviewBatchId>-retry-<n>.json
+```
+
+`retryTask.json` 只允许包含：
+
+- `kind = "rules-review-retry-task"`
+- `schemaVersion = 2`
+- `runId`
+- `retryAttempt`
+- `reason`
+- `originalTaskRef`
+- `violations`
+- `outputContract`
+
+重试目标只允许是修正 JSON 契约，不要求 subagent 基于前一次输出局部修补或扩展审查范围。
+
+失败处理：
+
+1. subagent 返回不合规时，先在 `dispatch.json` 标记 `returnStatus = "format_invalid"`、`aggregateStatus = "not_aggregated"`。
+2. 可以重试时发送 `retryTask.json`。
+3. 仍不合规、越权返回或分片不可信时重派。
+4. 重派仍失败时，该 batch 标记未完成，最终 `protocolGate = "incomplete"` 或 `"blocked"`。
+
+## 聚合要求
+
+- 主 agent 只聚合通过 validator 权威门禁的 shard。
+- 每个 `required: true` 的 `reviewItem` 必须有且只有一个合法 result。
+- 未返回 result 的 required reviewItem 导致 `protocolGate = "incomplete"`。
+- 重复 result、跨 batch result、未知 `reviewItemId`、source hash 不一致导致 `protocolGate = "blocked"`。
+- `finding` 不导致协议失败；它只让 `semanticVerdict = "issues"`。

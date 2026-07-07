@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agents.local/rules-review/task.schema.json",
+  "title": "rules-review reviewBatch task",
+  "type": "object",
+  "required": ["kind", "schemaVersion", "runId", "reviewBatchId", "ruleSetId", "reviewItems", "rules", "targets", "outputContract"],
+  "properties": {
+    "kind": { "const": "rules-review-task" },
+    "schemaVersion": { "const": 2 },
+    "runId": { "type": "string", "minLength": 1 },
+    "reviewBatchId": { "type": "string", "minLength": 1 },
+    "ruleSetId": { "type": "string", "minLength": 1 },
+    "reviewItems": { "type": "array", "items": { "$ref": "dispatch.schema.json#/$defs/reviewItem" } },
+    "rules": { "type": "array", "items": { "$ref": "dispatch.schema.json#/$defs/ruleSource" } },
+    "targets": { "type": "array", "items": { "$ref": "dispatch.schema.json#/$defs/target" } },
+    "outputContract": {
+      "type": "object",
+      "required": ["format", "schemaRef"],
+      "properties": {
+        "format": { "const": "strict_json" },
+        "schemaRef": { "const": "schemas/shard.schema.json" }
+      }
+    }
+  }
+}

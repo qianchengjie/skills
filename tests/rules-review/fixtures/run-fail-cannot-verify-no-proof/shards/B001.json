@@ -1,0 +1,22 @@
+{
+  "kind": "rules-review-shard",
+  "schemaVersion": 2,
+  "runId": "run-fail-cannot-verify-no-proof",
+  "reviewBatchId": "B001",
+  "results": [
+    {
+      "reviewItemId": "RI001",
+      "status": "cannot_verify"
+    },
+    {
+      "reviewItemId": "RI002",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:12",
+          "summary": "TYPE-001 已检查"
+        }
+      ]
+    }
+  ]
+}

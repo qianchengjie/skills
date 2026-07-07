@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agents.local/rules-review/shard.schema.json",
+  "title": "rules-review reviewBatch shard",
+  "type": "object",
+  "required": ["kind", "schemaVersion", "runId", "reviewBatchId", "results"],
+  "properties": {
+    "kind": { "const": "rules-review-shard" },
+    "schemaVersion": { "const": 2 },
+    "runId": { "type": "string", "minLength": 1 },
+    "reviewBatchId": { "type": "string", "minLength": 1 },
+    "results": { "type": "array", "items": { "$ref": "#/$defs/result" } }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "required": ["reviewItemId", "status"],
+      "properties": {
+        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
+        "status": { "enum": ["passed", "finding", "not_applicable", "cannot_verify"] },
+        "findingId": { "type": "string", "pattern": "^F\\d{3}$" },
+        "evidence": { "type": "array" },
+        "reason": { "type": "string" }
+      }
+    }
+  }
+}

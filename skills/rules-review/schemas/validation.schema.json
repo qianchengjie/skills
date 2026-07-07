@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agents.local/rules-review/validation.schema.json",
+  "title": "rules-review validation result",
+  "type": "object",
+  "required": ["ok", "mode", "artifact", "violations", "skipped"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "mode": { "type": "string" },
+    "artifact": { "type": ["string", "null"] },
+    "violations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/violation" }
+    },
+    "skipped": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/violation" }
+    }
+  },
+  "$defs": {
+    "violation": {
+      "type": "object",
+      "required": ["code", "severity", "artifact", "jsonPointer", "message", "expected", "actual"],
+      "properties": {
+        "code": { "type": "string" },
+        "severity": { "enum": ["error", "warning", "skipped"] },
+        "artifact": { "type": ["string", "null"] },
+        "jsonPointer": { "type": ["string", "null"] },
+        "message": { "type": "string" },
+        "expected": {},
+        "actual": {}
+      }
+    }
+  }
+}

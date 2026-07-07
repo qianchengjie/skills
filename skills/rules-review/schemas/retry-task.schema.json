@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agents.local/rules-review/retry-task.schema.json",
+  "title": "rules-review retry task packet",
+  "type": "object",
+  "required": ["kind", "schemaVersion", "runId", "retryAttempt", "reason", "originalTaskRef", "violations", "outputContract"],
+  "properties": {
+    "kind": { "const": "rules-review-retry-task" },
+    "schemaVersion": { "const": 2 },
+    "runId": { "type": "string" },
+    "retryAttempt": { "type": "integer", "minimum": 1 },
+    "reason": { "type": "string" },
+    "originalTaskRef": { "type": "string" },
+    "violations": {
+      "type": "array",
+      "items": { "$ref": "validation.schema.json#/$defs/violation" }
+    },
+    "outputContract": {
+      "type": "object",
+      "required": ["format", "schemaRef"],
+      "properties": {
+        "format": { "const": "strict_json" },
+        "schemaRef": { "const": "schemas/shard.schema.json" }
+      }
+    }
+  }
+}

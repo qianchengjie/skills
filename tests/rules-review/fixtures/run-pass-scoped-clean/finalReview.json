@@ -1,0 +1,15 @@
+{
+  "kind": "rules-review-final-review",
+  "schemaVersion": 2,
+  "runId": "run-pass-scoped-clean",
+  "protocolGate": "passed",
+  "scopeMode": "scoped",
+  "coverageClaim": "scoped_complete",
+  "semanticVerdict": "clean",
+  "excludedRuleRefs": [
+    "TYPE-001"
+  ],
+  "findings": [],
+  "validationResults": [],
+  "summary": "scoped clean fixture"
+}

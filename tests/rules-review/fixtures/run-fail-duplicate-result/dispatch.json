@@ -1,0 +1,128 @@
+{
+  "kind": "rules-review-dispatch",
+  "schemaVersion": 2,
+  "runId": "run-fail-duplicate-result",
+  "ruleSet": {
+    "ruleSetId": "RS001",
+    "sourceIndexHash": "sha256-index",
+    "candidateRuleRefs": [
+      "CORE-001",
+      "TYPE-001",
+      "UI-001"
+    ],
+    "requiredRuleRefs": [
+      "CORE-001",
+      "TYPE-001"
+    ],
+    "excludedRuleRefs": [],
+    "globallyNotApplicableRuleRefs": [
+      "UI-001"
+    ],
+    "ruleSources": [
+      {
+        "namespace": "CORE",
+        "ruleRef": "CORE-001",
+        "sourceFile": ".agents/rules/core.md",
+        "sourceHash": "sha256-core",
+        "trigger": [
+          "always"
+        ],
+        "appliesTo": [
+          "*"
+        ],
+        "summary": "核心规则"
+      },
+      {
+        "namespace": "TYPE",
+        "ruleRef": "TYPE-001",
+        "sourceFile": ".agents/rules/type.md",
+        "sourceHash": "sha256-type",
+        "trigger": [
+          "type"
+        ],
+        "appliesTo": [
+          "src/**/*.ts"
+        ],
+        "summary": "类型规则"
+      },
+      {
+        "namespace": "UI",
+        "ruleRef": "UI-001",
+        "sourceFile": ".agents/rules/ui.md",
+        "sourceHash": "sha256-ui",
+        "trigger": [
+          "ui"
+        ],
+        "appliesTo": [
+          "src/**/*.tsx"
+        ],
+        "summary": "界面规则"
+      }
+    ]
+  },
+  "targets": {
+    "changedUnits": [
+      {
+        "targetId": "T001",
+        "targetKind": "changed_unit",
+        "loc": "src/example.ts:10",
+        "summary": "修改请求参数"
+      }
+    ],
+    "candidates": [
+      {
+        "targetId": "T002",
+        "targetKind": "candidate",
+        "loc": "src/example.ts:12",
+        "summary": "相关响应字段"
+      }
+    ],
+    "contextExpansions": [
+      {
+        "expansionId": "E001",
+        "reason": "TYPE-001 需要查看响应字段",
+        "addedTargetIds": [
+          "T002"
+        ]
+      }
+    ]
+  },
+  "reviewItems": [
+    {
+      "reviewItemId": "RI001",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI002",
+      "ruleRef": "TYPE-001",
+      "targetKind": "candidate",
+      "targetId": "T002",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI003",
+      "ruleRef": "UI-001",
+      "targetKind": "candidate",
+      "targetId": "T002",
+      "required": false
+    }
+  ],
+  "reviewBatches": [
+    {
+      "reviewBatchId": "B001",
+      "ruleSetId": "RS001",
+      "reviewItemIds": [
+        "RI001",
+        "RI002"
+      ],
+      "taskRef": "tasks/B001.json",
+      "shardRef": "shards/B001.json",
+      "returnStatus": "returned",
+      "aggregateStatus": "aggregated",
+      "unaggregatedReason": null
+    }
+  ]
+}
