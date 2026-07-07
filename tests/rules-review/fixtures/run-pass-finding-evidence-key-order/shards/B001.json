@@ -24,6 +24,11 @@
           "summary": "TYPE-001 已检查"
         }
       ]
+    },
+    {
+      "reviewItemId": "RI003",
+      "status": "not_applicable",
+      "reason": "非 required reviewItem，仅用于分派闭合。"
     }
   ]
 }

@@ -1,0 +1,158 @@
+{
+  "kind": "rules-review-shard",
+  "schemaVersion": 2,
+  "runId": "run-pass-large-multi",
+  "reviewBatchId": "B002",
+  "results": [
+    {
+      "reviewItemId": "RI017",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 已检查"
+        }
+      ]
+    },
+    {
+      "reviewItemId": "RI018",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 已检查"
+        }
+      ]
+    },
+    {
+      "reviewItemId": "RI019",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 已检查"
+        }
+      ]
+    },
+    {
+      "reviewItemId": "RI020",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 已检查"
+        }
+      ]
+    },
+    {
+      "reviewItemId": "RI021",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 已检查"
+        }
+      ]
+    },
+    {
+      "reviewItemId": "RI022",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 已检查"
+        }
+      ]
+    },
+    {
+      "reviewItemId": "RI023",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 已检查"
+        }
+      ]
+    },
+    {
+      "reviewItemId": "RI024",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 已检查"
+        }
+      ]
+    },
+    {
+      "reviewItemId": "RI025",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 已检查"
+        }
+      ]
+    },
+    {
+      "reviewItemId": "RI026",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 已检查"
+        }
+      ]
+    },
+    {
+      "reviewItemId": "RI027",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 已检查"
+        }
+      ]
+    },
+    {
+      "reviewItemId": "RI028",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 已检查"
+        }
+      ]
+    },
+    {
+      "reviewItemId": "RI029",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 已检查"
+        }
+      ]
+    },
+    {
+      "reviewItemId": "RI030",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 已检查"
+        }
+      ]
+    },
+    {
+      "reviewItemId": "RI031",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 已检查"
+        }
+      ]
+    }
+  ]
+}

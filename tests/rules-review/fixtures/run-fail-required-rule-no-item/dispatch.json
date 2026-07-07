@@ -116,5 +116,22 @@
       "aggregateStatus": "aggregated",
       "unaggregatedReason": null
     }
-  ]
+  ],
+  "executionPlan": {
+    "mode": "single_batch",
+    "selectedBy": "ai",
+    "policyVersion": "review-execution-policy/v1",
+    "metrics": {
+      "changedUnits": 1,
+      "candidates": 1,
+      "targets": 2,
+      "requiredRuleRefs": 2,
+      "reviewItems": 2
+    },
+    "signals": {
+      "userRequestedConcurrency": false
+    },
+    "reason": "reviewItems/targets/rules are within single-batch default range.",
+    "humanOverride": null
+  }
 }

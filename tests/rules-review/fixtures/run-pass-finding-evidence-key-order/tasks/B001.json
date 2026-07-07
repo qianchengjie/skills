@@ -18,6 +18,13 @@
       "targetKind": "candidate",
       "targetId": "T002",
       "required": true
+    },
+    {
+      "reviewItemId": "RI003",
+      "ruleRef": "UI-001",
+      "targetKind": "candidate",
+      "targetId": "T002",
+      "required": false
     }
   ],
   "rules": [
@@ -46,6 +53,19 @@
         "src/**/*.ts"
       ],
       "summary": "类型规则"
+    },
+    {
+      "namespace": "UI",
+      "ruleRef": "UI-001",
+      "sourceFile": ".agents/rules/ui.md",
+      "sourceHash": "sha256-ui",
+      "trigger": [
+        "ui"
+      ],
+      "appliesTo": [
+        "src/**/*.tsx"
+      ],
+      "summary": "界面规则"
     }
   ],
   "targets": [

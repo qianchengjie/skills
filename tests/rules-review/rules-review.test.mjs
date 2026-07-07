@@ -70,6 +70,20 @@ await assertRunPass("run-pass-finding-evidence-key-order", {
   semanticVerdict: "issues",
 });
 
+await assertRunPass("run-pass-large-multi", {
+  protocolGate: "passed",
+  scopeMode: "full",
+  coverageClaim: "full_complete",
+  semanticVerdict: "clean",
+});
+
+await assertRunPass("run-pass-human-override-single", {
+  protocolGate: "passed",
+  scopeMode: "full",
+  coverageClaim: "full_complete",
+  semanticVerdict: "clean",
+});
+
 const response = await runValidate([
   "--mode",
   "render-response",
@@ -92,6 +106,15 @@ await assertRunFails("run-fail-not-applicable-no-reason", /not_applicable result
 await assertRunFails("run-fail-cannot-verify-no-proof", /cannot_verify result requires reason or evidence/);
 await assertRunFails("run-fail-missing-source-hash", /sourceHash is required/);
 await assertRunFails("run-fail-unclassified-candidate", /candidateRuleRef must be classified as required, excluded, or globallyNotApplicable/);
+await assertRunFails("run-fail-large-single-no-override", /hard execution policy requires multi_batch/);
+await assertRunFails("run-fail-concurrency-single-no-override", /hard execution policy requires multi_batch/);
+await assertRunFails("run-fail-single-with-multiple-batches", /single_batch executionPlan requires exactly one reviewBatch/);
+await assertRunFails("run-fail-multi-with-one-batch", /multi_batch executionPlan requires at least two reviewBatches/);
+await assertRunFails("run-fail-metric-reviewItems-mismatch", /executionPlan metric must match dispatch facts/);
+await assertRunFails("run-fail-reviewItem-unassigned", /reviewItem must be assigned to one reviewBatch/);
+await assertRunFails("run-fail-reviewItem-duplicated", /reviewItemId must not be assigned to multiple reviewBatches/);
+await assertRunFails("run-fail-human-override-no-risk", /humanOverride.risk must be non-empty string/);
+await assertRunFails("run-fail-human-override-mode-mismatch", /humanOverride\.requestedMode must match executionPlan\.mode/);
 await assertRunFails("run-fail-scoped-no-excluded", /scoped scopeMode requires excludedRuleRefs/);
 await assertRunFails("run-fail-bad-context-expansion", /contextExpansions\[\]\.addedTargetIds\[\] must exist in targets\.candidates\[\]/);
 await assertRunFails("run-fail-bad-review-target", /reviewItem targetId must exist/);

@@ -116,7 +116,8 @@
       "ruleSetId": "RS001",
       "reviewItemIds": [
         "RI001",
-        "RI002"
+        "RI002",
+        "RI003"
       ],
       "taskRef": "tasks/B001.json",
       "shardRef": "shards/B001.json",
@@ -124,5 +125,22 @@
       "aggregateStatus": "aggregated",
       "unaggregatedReason": null
     }
-  ]
+  ],
+  "executionPlan": {
+    "mode": "single_batch",
+    "selectedBy": "ai",
+    "policyVersion": "review-execution-policy/v1",
+    "metrics": {
+      "changedUnits": 1,
+      "candidates": 1,
+      "targets": 2,
+      "requiredRuleRefs": 2,
+      "reviewItems": 3
+    },
+    "signals": {
+      "userRequestedConcurrency": false
+    },
+    "reason": "reviewItems/targets/rules are within single-batch default range.",
+    "humanOverride": null
+  }
 }

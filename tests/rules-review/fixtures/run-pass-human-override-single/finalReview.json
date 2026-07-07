@@ -1,0 +1,12 @@
+{
+  "kind": "rules-review-final-review",
+  "schemaVersion": 2,
+  "runId": "run-pass-human-override-single",
+  "protocolGate": "passed",
+  "scopeMode": "full",
+  "coverageClaim": "full_complete",
+  "semanticVerdict": "clean",
+  "excludedRuleRefs": [],
+  "findings": [],
+  "validationResults": []
+}

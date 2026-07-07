@@ -1,0 +1,148 @@
+{
+  "kind": "rules-review-task",
+  "schemaVersion": 2,
+  "runId": "run-pass-large-multi",
+  "reviewBatchId": "B001",
+  "ruleSetId": "RS001",
+  "reviewItems": [
+    {
+      "reviewItemId": "RI001",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI002",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI003",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI004",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI005",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI006",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI007",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI008",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI009",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI010",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI011",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI012",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI013",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI014",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI015",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI016",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    }
+  ],
+  "rules": [
+    {
+      "namespace": "CORE",
+      "ruleRef": "CORE-001",
+      "sourceFile": ".agents/rules/core.md",
+      "sourceHash": "sha256-core",
+      "trigger": [
+        "always"
+      ],
+      "appliesTo": [
+        "*"
+      ],
+      "summary": "核心规则"
+    }
+  ],
+  "targets": [
+    {
+      "targetId": "T001",
+      "targetKind": "changed_unit",
+      "loc": "src/example.ts:10",
+      "summary": "修改请求参数"
+    }
+  ],
+  "outputContract": {
+    "format": "strict_json",
+    "schemaRef": "schemas/shard.schema.json"
+  }
+}

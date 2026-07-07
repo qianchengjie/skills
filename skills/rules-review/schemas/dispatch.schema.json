@@ -3,7 +3,7 @@
   "$id": "https://agents.local/rules-review/dispatch.schema.json",
   "title": "rules-review dispatch",
   "type": "object",
-  "required": ["kind", "schemaVersion", "runId", "ruleSet", "targets", "reviewItems", "reviewBatches"],
+  "required": ["kind", "schemaVersion", "runId", "ruleSet", "targets", "reviewItems", "executionPlan", "reviewBatches"],
   "properties": {
     "kind": { "const": "rules-review-dispatch" },
     "schemaVersion": { "const": 2 },
@@ -31,9 +31,54 @@
       }
     },
     "reviewItems": { "type": "array", "items": { "$ref": "#/$defs/reviewItem" } },
+    "executionPlan": { "$ref": "#/$defs/executionPlan" },
     "reviewBatches": { "type": "array", "items": { "$ref": "#/$defs/reviewBatch" } }
   },
   "$defs": {
+    "executionPlan": {
+      "type": "object",
+      "required": ["mode", "selectedBy", "policyVersion", "metrics", "signals", "reason", "humanOverride"],
+      "properties": {
+        "mode": { "enum": ["single_batch", "multi_batch"] },
+        "selectedBy": { "enum": ["ai", "human_override"] },
+        "policyVersion": { "const": "review-execution-policy/v1" },
+        "metrics": { "$ref": "#/$defs/executionMetrics" },
+        "signals": { "$ref": "#/$defs/executionSignals" },
+        "reason": { "type": "string", "minLength": 1 },
+        "humanOverride": {
+          "anyOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/humanOverride" }
+          ]
+        }
+      }
+    },
+    "executionMetrics": {
+      "type": "object",
+      "required": ["changedUnits", "candidates", "targets", "requiredRuleRefs", "reviewItems"],
+      "properties": {
+        "changedUnits": { "type": "integer", "minimum": 0 },
+        "candidates": { "type": "integer", "minimum": 0 },
+        "targets": { "type": "integer", "minimum": 0 },
+        "requiredRuleRefs": { "type": "integer", "minimum": 0 },
+        "reviewItems": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "executionSignals": {
+      "type": "object",
+      "required": ["userRequestedConcurrency"],
+      "properties": {
+        "userRequestedConcurrency": { "type": "boolean" }
+      }
+    },
+    "humanOverride": {
+      "type": "object",
+      "required": ["requestedMode", "risk"],
+      "properties": {
+        "requestedMode": { "enum": ["single_batch", "multi_batch"] },
+        "risk": { "type": "string", "minLength": 1 }
+      }
+    },
     "ruleSource": {
       "type": "object",
       "required": ["namespace", "ruleRef", "sourceFile", "sourceHash", "trigger", "appliesTo"],

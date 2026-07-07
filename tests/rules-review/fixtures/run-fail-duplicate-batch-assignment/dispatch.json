@@ -136,5 +136,22 @@
       "aggregateStatus": "aggregated",
       "unaggregatedReason": null
     }
-  ]
+  ],
+  "executionPlan": {
+    "mode": "multi_batch",
+    "selectedBy": "ai",
+    "policyVersion": "review-execution-policy/v1",
+    "metrics": {
+      "changedUnits": 1,
+      "candidates": 1,
+      "targets": 2,
+      "requiredRuleRefs": 2,
+      "reviewItems": 3
+    },
+    "signals": {
+      "userRequestedConcurrency": false
+    },
+    "reason": "reviewItems are split across multiple reviewBatches.",
+    "humanOverride": null
+  }
 }

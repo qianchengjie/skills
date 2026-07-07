@@ -1,0 +1,23 @@
+{
+  "kind": "rules-review-shard",
+  "schemaVersion": 2,
+  "runId": "run-fail-single-with-multiple-batches",
+  "reviewBatchId": "B002",
+  "results": [
+    {
+      "reviewItemId": "RI002",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:12",
+          "summary": "TYPE-001 已检查"
+        }
+      ]
+    },
+    {
+      "reviewItemId": "RI003",
+      "status": "not_applicable",
+      "reason": "非 required reviewItem，仅用于分派闭合。"
+    }
+  ]
+}

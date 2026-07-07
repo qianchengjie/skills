@@ -1,0 +1,327 @@
+{
+  "kind": "rules-review-dispatch",
+  "schemaVersion": 2,
+  "runId": "run-fail-human-override-mode-mismatch",
+  "ruleSet": {
+    "ruleSetId": "RS001",
+    "sourceIndexHash": "sha256-index",
+    "candidateRuleRefs": [
+      "CORE-001"
+    ],
+    "requiredRuleRefs": [
+      "CORE-001"
+    ],
+    "excludedRuleRefs": [],
+    "globallyNotApplicableRuleRefs": [],
+    "ruleSources": [
+      {
+        "namespace": "CORE",
+        "ruleRef": "CORE-001",
+        "sourceFile": ".agents/rules/core.md",
+        "sourceHash": "sha256-core",
+        "trigger": [
+          "always"
+        ],
+        "appliesTo": [
+          "*"
+        ],
+        "summary": "核心规则"
+      }
+    ]
+  },
+  "targets": {
+    "changedUnits": [
+      {
+        "targetId": "T001",
+        "targetKind": "changed_unit",
+        "loc": "src/example.ts:10",
+        "summary": "修改请求参数"
+      }
+    ],
+    "candidates": [],
+    "contextExpansions": []
+  },
+  "reviewItems": [
+    {
+      "reviewItemId": "RI001",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI002",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI003",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI004",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI005",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI006",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI007",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI008",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI009",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI010",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI011",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI012",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI013",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI014",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI015",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI016",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI017",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI018",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI019",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI020",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI021",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI022",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI023",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI024",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI025",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI026",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI027",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI028",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI029",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI030",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    },
+    {
+      "reviewItemId": "RI031",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    }
+  ],
+  "reviewBatches": [
+    {
+      "reviewBatchId": "B001",
+      "ruleSetId": "RS001",
+      "reviewItemIds": [
+        "RI001",
+        "RI002",
+        "RI003",
+        "RI004",
+        "RI005",
+        "RI006",
+        "RI007",
+        "RI008",
+        "RI009",
+        "RI010",
+        "RI011",
+        "RI012",
+        "RI013",
+        "RI014",
+        "RI015",
+        "RI016",
+        "RI017",
+        "RI018",
+        "RI019",
+        "RI020",
+        "RI021",
+        "RI022",
+        "RI023",
+        "RI024",
+        "RI025",
+        "RI026",
+        "RI027",
+        "RI028",
+        "RI029",
+        "RI030",
+        "RI031"
+      ],
+      "taskRef": "tasks/B001.json",
+      "shardRef": "shards/B001.json",
+      "returnStatus": "returned",
+      "aggregateStatus": "aggregated",
+      "unaggregatedReason": null
+    }
+  ],
+  "executionPlan": {
+    "mode": "single_batch",
+    "selectedBy": "human_override",
+    "policyVersion": "review-execution-policy/v1",
+    "metrics": {
+      "changedUnits": 1,
+      "candidates": 0,
+      "targets": 1,
+      "requiredRuleRefs": 1,
+      "reviewItems": 31
+    },
+    "signals": {
+      "userRequestedConcurrency": false
+    },
+    "reason": "reviewItems/targets/rules are within single-batch default range.",
+    "humanOverride": {
+      "requestedMode": "multi_batch",
+      "risk": "用户强制 single agent，可能降低大 diff review 覆盖质量。"
+    }
+  }
+}

@@ -1,10 +1,11 @@
 # 多 agent / reviewBatch JSON 分派规则
 
-只在用户明确要求多 agent / 并行 / subagent，或当前审查需要拆成多个 `reviewBatch` 时读取。普通单 batch 审查不读取本文件。
+只在用户明确要求多 agent / 并行 / subagent，或 `executionPlan.mode = "multi_batch"` 时读取。普通 `single_batch` 审查不读取本文件。
 
 ## 启动边界
 
 - 主 agent 必须先生成 `.rules-review-tmp/<run-id>/dispatch.json`。
+- `dispatch.json.executionPlan.mode` 必须是 `multi_batch`。
 - `dispatch.json` 是规则集合、目标、reviewItem 和 reviewBatch 的唯一机器事实源。
 - 每个 subagent 只接收一个 `task.json`，不得依赖线程历史、Markdown 摘要或“详见主台账”补齐输入。
 - 容量不足时按 `reviewBatches[]` 顺序分批启动；启动失败、容量不足或等待超时必须写回 `dispatch.json`。

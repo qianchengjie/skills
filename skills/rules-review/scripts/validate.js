@@ -23,6 +23,9 @@ const PROTOCOL_GATES = ['passed', 'incomplete', 'blocked'];
 const SCOPE_MODES = ['full', 'scoped'];
 const COVERAGE_CLAIMS = ['full_complete', 'scoped_complete', 'incomplete', 'blocked'];
 const SEMANTIC_VERDICTS = ['clean', 'issues', 'unknown'];
+const EXECUTION_POLICY_VERSION = 'review-execution-policy/v1';
+const EXECUTION_MODES = ['single_batch', 'multi_batch'];
+const EXECUTION_SELECTED_BY = ['ai', 'human_override'];
 const REVIEW_ITEM_RE = /^RI\d{3}$/;
 const FINDING_RE = /^F\d{3}$/;
 
@@ -220,13 +223,14 @@ function readText(filePath, artifact, result, code, gateImpact = 'blocked') {
 function validateDispatch(dispatch, artifact, result) {
   expectKind(dispatch, artifact, result, 'D002', 'rules-review-dispatch');
   validateSchemaVersion(dispatch, artifact, result, 'D003');
-  requireFields(dispatch, artifact, result, 'D004', '', ['kind', 'schemaVersion', 'runId', 'ruleSet', 'targets', 'reviewItems', 'reviewBatches']);
+  requireFields(dispatch, artifact, result, 'D004', '', ['kind', 'schemaVersion', 'runId', 'ruleSet', 'targets', 'reviewItems', 'executionPlan', 'reviewBatches']);
   if (!isNonEmptyString(dispatch.runId)) addViolation(result, 'D005', artifact, '/runId', 'runId must be non-empty string', 'string', dispatch.runId);
 
   const ruleSet = validateRuleSet(dispatch.ruleSet, artifact, result);
   const targets = validateTargets(dispatch.targets, artifact, result);
   const reviewItems = validateReviewItems(dispatch.reviewItems, ruleSet, targets, artifact, result);
   validateReviewBatches(dispatch.reviewBatches, ruleSet, reviewItems, artifact, result);
+  validateExecutionPlan(dispatch.executionPlan, dispatch, ruleSet, reviewItems, artifact, result);
 }
 
 function validateRuleSet(ruleSet, artifact, result) {
@@ -412,6 +416,7 @@ function validateReviewBatches(reviewBatches, ruleSet, reviewItems, artifact, re
     if (batch && batch.reviewBatchId) batchIds.add(batch.reviewBatchId);
     if (batch && batch.ruleSetId !== ruleSet.ruleSetId) addViolation(result, 'D084', artifact, `${pointer}/ruleSetId`, 'reviewBatch.ruleSetId must match ruleSet.ruleSetId', ruleSet.ruleSetId, batch.ruleSetId);
     validateStringSet(batch && batch.reviewItemIds, artifact, result, 'D085', `${pointer}/reviewItemIds`);
+    if (!isNonEmptyArray(batch && batch.reviewItemIds)) addViolation(result, 'D093', artifact, `${pointer}/reviewItemIds`, 'reviewBatch must include at least one reviewItemId', 'non-empty reviewItemIds', batch && batch.reviewItemIds);
     asArray(batch && batch.reviewItemIds).forEach((reviewItemId, itemIndex) => {
       if (!reviewItems.has(reviewItemId)) addViolation(result, 'D086', artifact, `${pointer}/reviewItemIds/${itemIndex}`, 'reviewBatch reviewItemIds must exist in reviewItems', Array.from(reviewItems.keys()), reviewItemId);
       if (!assignment.has(reviewItemId)) assignment.set(reviewItemId, []);
@@ -430,10 +435,131 @@ function validateReviewBatches(reviewBatches, ruleSet, reviewItems, artifact, re
     }
   });
   reviewItems.forEach((item, reviewItemId) => {
-    if (item.required === true && !assignment.has(reviewItemId)) {
-      addViolation(result, 'D092', artifact, '/reviewBatches', 'required reviewItem must be assigned to one reviewBatch', reviewItemId, Array.from(assignment.keys()));
+    if (!assignment.has(reviewItemId)) {
+      addViolation(result, 'D092', artifact, '/reviewBatches', 'reviewItem must be assigned to one reviewBatch', reviewItemId, Array.from(assignment.keys()));
     }
   });
+}
+
+function validateExecutionPlan(executionPlan, dispatch, ruleSet, reviewItems, artifact, result) {
+  if (!isObject(executionPlan)) {
+    addViolation(result, 'D100', artifact, '/executionPlan', 'executionPlan must be object', 'object', executionPlan);
+    return;
+  }
+
+  requireFields(executionPlan, artifact, result, 'D101', '/executionPlan', [
+    'mode',
+    'selectedBy',
+    'policyVersion',
+    'metrics',
+    'signals',
+    'reason',
+    'humanOverride',
+  ]);
+
+  if (!EXECUTION_MODES.includes(executionPlan.mode)) {
+    addViolation(result, 'D102', artifact, '/executionPlan/mode', 'executionPlan.mode must be valid', EXECUTION_MODES, executionPlan.mode);
+  }
+  if (!EXECUTION_SELECTED_BY.includes(executionPlan.selectedBy)) {
+    addViolation(result, 'D103', artifact, '/executionPlan/selectedBy', 'executionPlan.selectedBy must be valid', EXECUTION_SELECTED_BY, executionPlan.selectedBy);
+  }
+  if (executionPlan.policyVersion !== EXECUTION_POLICY_VERSION) {
+    addViolation(result, 'D104', artifact, '/executionPlan/policyVersion', 'executionPlan.policyVersion must match review execution policy', EXECUTION_POLICY_VERSION, executionPlan.policyVersion);
+  }
+  if (!isNonEmptyString(executionPlan.reason)) {
+    addViolation(result, 'D105', artifact, '/executionPlan/reason', 'executionPlan.reason must be non-empty string', 'non-empty reason', executionPlan.reason);
+  }
+
+  validateExecutionMetrics(executionPlan.metrics, dispatch, ruleSet, reviewItems, artifact, result);
+  validateExecutionSignals(executionPlan.signals, artifact, result);
+  validateHumanOverride(executionPlan, artifact, result);
+  validateExecutionModeAgainstPolicy(executionPlan, dispatch, artifact, result);
+}
+
+function validateExecutionMetrics(metrics, dispatch, ruleSet, reviewItems, artifact, result) {
+  if (!isObject(metrics)) {
+    addViolation(result, 'D110', artifact, '/executionPlan/metrics', 'executionPlan.metrics must be object', 'object', metrics);
+    return;
+  }
+
+  requireFields(metrics, artifact, result, 'D111', '/executionPlan/metrics', [
+    'changedUnits',
+    'candidates',
+    'targets',
+    'requiredRuleRefs',
+    'reviewItems',
+  ]);
+
+  const expected = {
+    changedUnits: asArray(dispatch && dispatch.targets && dispatch.targets.changedUnits).length,
+    candidates: asArray(dispatch && dispatch.targets && dispatch.targets.candidates).length,
+    targets: asArray(dispatch && dispatch.targets && dispatch.targets.changedUnits).length + asArray(dispatch && dispatch.targets && dispatch.targets.candidates).length,
+    requiredRuleRefs: ruleSet.requiredRuleRefs.size,
+    reviewItems: reviewItems.size,
+  };
+
+  Object.keys(expected).forEach((key) => {
+    if (!Number.isInteger(metrics[key]) || metrics[key] < 0) {
+      addViolation(result, 'D112', artifact, `/executionPlan/metrics/${key}`, 'executionPlan metric must be non-negative integer', 'integer >= 0', metrics[key]);
+      return;
+    }
+    if (metrics[key] !== expected[key]) {
+      addViolation(result, 'D113', artifact, `/executionPlan/metrics/${key}`, 'executionPlan metric must match dispatch facts', expected[key], metrics[key]);
+    }
+  });
+}
+
+function validateExecutionSignals(signals, artifact, result) {
+  if (!isObject(signals)) {
+    addViolation(result, 'D120', artifact, '/executionPlan/signals', 'executionPlan.signals must be object', 'object', signals);
+    return;
+  }
+  requireFields(signals, artifact, result, 'D121', '/executionPlan/signals', ['userRequestedConcurrency']);
+  if (signals.userRequestedConcurrency !== true && signals.userRequestedConcurrency !== false) {
+    addViolation(result, 'D122', artifact, '/executionPlan/signals/userRequestedConcurrency', 'userRequestedConcurrency must be boolean', 'boolean', signals.userRequestedConcurrency);
+  }
+}
+
+function validateHumanOverride(executionPlan, artifact, result) {
+  if (executionPlan.selectedBy === 'human_override') {
+    if (!isObject(executionPlan.humanOverride)) {
+      addViolation(result, 'D130', artifact, '/executionPlan/humanOverride', 'humanOverride must be object when selectedBy=human_override', 'object', executionPlan.humanOverride);
+      return;
+    }
+    requireFields(executionPlan.humanOverride, artifact, result, 'D131', '/executionPlan/humanOverride', ['requestedMode', 'risk']);
+    if (!EXECUTION_MODES.includes(executionPlan.humanOverride.requestedMode)) {
+      addViolation(result, 'D132', artifact, '/executionPlan/humanOverride/requestedMode', 'humanOverride.requestedMode must be valid', EXECUTION_MODES, executionPlan.humanOverride.requestedMode);
+    }
+    if (executionPlan.humanOverride.requestedMode !== executionPlan.mode) {
+      addViolation(result, 'D135', artifact, '/executionPlan/humanOverride/requestedMode', 'humanOverride.requestedMode must match executionPlan.mode', executionPlan.mode, executionPlan.humanOverride.requestedMode);
+    }
+    if (!isNonEmptyString(executionPlan.humanOverride.risk)) {
+      addViolation(result, 'D133', artifact, '/executionPlan/humanOverride/risk', 'humanOverride.risk must be non-empty string', 'non-empty risk', executionPlan.humanOverride.risk);
+    }
+    return;
+  }
+
+  if (executionPlan.humanOverride !== null) {
+    addViolation(result, 'D134', artifact, '/executionPlan/humanOverride', 'humanOverride must be null unless selectedBy=human_override', null, executionPlan.humanOverride);
+  }
+}
+
+function validateExecutionModeAgainstPolicy(executionPlan, dispatch, artifact, result) {
+  const batchCount = asArray(dispatch && dispatch.reviewBatches).length;
+  if (executionPlan.mode === 'single_batch' && batchCount !== 1) {
+    addViolation(result, 'D140', artifact, '/reviewBatches', 'single_batch executionPlan requires exactly one reviewBatch', 1, batchCount);
+  }
+  if (executionPlan.mode === 'multi_batch' && batchCount < 2) {
+    addViolation(result, 'D141', artifact, '/reviewBatches', 'multi_batch executionPlan requires at least two reviewBatches', '>= 2', batchCount);
+  }
+
+  if (executionPlan.selectedBy === 'human_override') return;
+  const metrics = isObject(executionPlan.metrics) ? executionPlan.metrics : {};
+  const signals = isObject(executionPlan.signals) ? executionPlan.signals : {};
+  const mustMulti = metrics.reviewItems > 30 || metrics.targets > 20 || signals.userRequestedConcurrency === true;
+  if (mustMulti && executionPlan.mode !== 'multi_batch') {
+    addViolation(result, 'D142', artifact, '/executionPlan/mode', 'hard execution policy requires multi_batch', 'multi_batch', executionPlan.mode);
+  }
 }
 
 function validateTask(task, artifact, result) {
@@ -556,7 +682,7 @@ function validateRun(runDir, result) {
   if (result.gate.protocolGate !== 'passed') {
     addViolation(result, 'RUN900', rel(runDir, 'finalReview.json'), '/protocolGate', 'protocolGate must be passed for automation gate success', 'passed', result.gate.protocolGate, 1, null);
   } else {
-    validateFinalMarkdown(finalReview, finalMdPath, result);
+    validateFinalMarkdown(finalReview, finalMdPath, result, dispatch);
   }
 }
 
@@ -822,7 +948,10 @@ function renderFinalMode(args, result) {
     addViolation(result, 'EXEC004', null, '/output', 'render-final requires --output', 'output path', args.output || null, 2);
     return;
   }
-  const markdown = renderFinalMarkdown(finalReview);
+  const dispatch = args.dispatch && args.dispatch !== true ? readJson(args.dispatch, args.dispatch, result, 'D001') : null;
+  if (dispatch) validateDispatch(dispatch, args.dispatch, result);
+  if (result.violations.length > 0) return;
+  const markdown = renderFinalMarkdown(finalReview, dispatch && dispatch.executionPlan);
   fs.mkdirSync(path.dirname(args.output), { recursive: true });
   fs.writeFileSync(args.output, markdown);
   result.rendered = args.output;
@@ -839,11 +968,14 @@ function renderResponseMode(args, result) {
   if (result.violations.length > 0) return;
 
   const finalReviewPath = path.join(runDir, 'finalReview.json');
+  const dispatchPath = path.join(runDir, 'dispatch.json');
   const finalReview = readJson(finalReviewPath, rel(runDir, finalReviewPath), result, 'FR001');
   if (!finalReview || result.violations.length > 0) return;
+  const dispatch = readJson(dispatchPath, rel(runDir, dispatchPath), result, 'D001');
+  if (!dispatch || result.violations.length > 0) return;
 
   const outputPath = !args.output || args.output === true ? path.join(runDir, 'response.md') : args.output;
-  const markdown = renderResponseMarkdown(runDir, finalReview);
+  const markdown = renderResponseMarkdown(runDir, finalReview, dispatch.executionPlan);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, markdown);
   result.rendered = outputPath;
@@ -853,10 +985,13 @@ function renderResponseMode(args, result) {
 function validateFinalMarkdownMode(args, result) {
   const finalReview = readJson(args['final-review'], args['final-review'], result, 'FR001');
   if (!finalReview) return;
-  validateFinalMarkdown(finalReview, args.input, result);
+  const dispatch = args.dispatch && args.dispatch !== true ? readJson(args.dispatch, args.dispatch, result, 'D001') : null;
+  if (dispatch) validateDispatch(dispatch, args.dispatch, result);
+  if (result.violations.length > 0) return;
+  validateFinalMarkdown(finalReview, args.input, result, dispatch);
 }
 
-function validateFinalMarkdown(finalReview, markdownPath, result) {
+function validateFinalMarkdown(finalReview, markdownPath, result, dispatch) {
   const markdown = readText(markdownPath, markdownPath, result, 'FM001');
   if (markdown == null || !finalReview) return;
   const required = [
@@ -864,12 +999,13 @@ function validateFinalMarkdown(finalReview, markdownPath, result) {
     label(finalReview.coverageClaim),
     label(finalReview.semanticVerdict),
   ];
+  if (dispatch && dispatch.executionPlan) required.push(formatExecutionMode(dispatch.executionPlan.mode));
   required.forEach((token, index) => {
     if (!markdown.includes(token)) addViolation(result, `FM00${index + 2}`, markdownPath, null, 'final Markdown must include rendered finalReview status labels', token, markdown);
   });
 }
 
-function renderFinalMarkdown(finalReview) {
+function renderFinalMarkdown(finalReview, executionPlan) {
   const findings = asArray(finalReview.findings);
   const lines = [
     '**结论**',
@@ -878,6 +1014,9 @@ function renderFinalMarkdown(finalReview) {
     '**范围**',
     `- 范围模式：${label(finalReview.scopeMode)}`,
     `- 排除规则：${formatList(finalReview.excludedRuleRefs)}`,
+    '',
+    '**执行计划**',
+    ...formatExecutionPlanLines(executionPlan),
     '',
     '**发现**',
     findings.length === 0 ? '- 无' : null,
@@ -892,9 +1031,10 @@ function renderFinalMarkdown(finalReview) {
   return `${lines.join('\n')}\n`;
 }
 
-function renderResponseMarkdown(runDir, finalReview) {
+function renderResponseMarkdown(runDir, finalReview, executionPlan) {
   const finalMdPath = path.resolve(runDir, 'final.md');
   const finalReviewPath = path.resolve(runDir, 'finalReview.json');
+  const dispatchPath = path.resolve(runDir, 'dispatch.json');
   const runCommand = [
     'node',
     formatCommandPath(path.relative(process.cwd(), __filename) || __filename),
@@ -911,6 +1051,10 @@ function renderResponseMarkdown(runDir, finalReview) {
     '**报告**',
     `- 完整报告：${formatMarkdownFileLink('final.md', finalMdPath)}`,
     `- 事实源：${formatMarkdownFileLink('finalReview.json', finalReviewPath)}`,
+    `- 分派源：${formatMarkdownFileLink('dispatch.json', dispatchPath)}`,
+    '',
+    '**执行计划**',
+    ...formatExecutionPlanLines(executionPlan),
     '',
     '**验证**',
     `- \`${runCommand}\`：通过`,
@@ -1060,6 +1204,34 @@ function formatCommandPath(filePath) {
 
 function label(value) {
   return LABELS[value] || String(value || '未知');
+}
+
+function formatExecutionMode(mode) {
+  if (mode === 'single_batch') return 'single_batch';
+  if (mode === 'multi_batch') return 'multi_batch';
+  return String(mode || '未知');
+}
+
+function formatExecutionPlanLines(executionPlan) {
+  if (!isObject(executionPlan)) return ['- 未记录'];
+  const metrics = isObject(executionPlan.metrics) ? executionPlan.metrics : {};
+  const signals = isObject(executionPlan.signals) ? executionPlan.signals : {};
+  const lines = [
+    `- mode：${formatExecutionMode(executionPlan.mode)}`,
+    `- selectedBy：${executionPlan.selectedBy || '未知'}`,
+    `- policyVersion：${executionPlan.policyVersion || '未知'}`,
+    `- metrics：changedUnits=${formatMetric(metrics.changedUnits)}，candidates=${formatMetric(metrics.candidates)}，targets=${formatMetric(metrics.targets)}，requiredRuleRefs=${formatMetric(metrics.requiredRuleRefs)}，reviewItems=${formatMetric(metrics.reviewItems)}`,
+    `- userRequestedConcurrency：${signals.userRequestedConcurrency === true ? 'true' : 'false'}`,
+    `- reason：${executionPlan.reason || '未记录'}`,
+  ];
+  if (isObject(executionPlan.humanOverride)) {
+    lines.push(`- humanOverride：requestedMode=${executionPlan.humanOverride.requestedMode || '未知'}，risk=${executionPlan.humanOverride.risk || '未记录'}`);
+  }
+  return lines;
+}
+
+function formatMetric(value) {
+  return Number.isInteger(value) ? String(value) : '未知';
 }
 
 function formatList(value) {
