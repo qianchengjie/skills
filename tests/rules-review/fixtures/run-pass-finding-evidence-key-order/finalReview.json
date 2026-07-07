@@ -1,0 +1,26 @@
+{
+  "kind": "rules-review-final-review",
+  "schemaVersion": 2,
+  "runId": "run-pass-finding-evidence-key-order",
+  "protocolGate": "passed",
+  "scopeMode": "full",
+  "coverageClaim": "full_complete",
+  "semanticVerdict": "issues",
+  "excludedRuleRefs": [],
+  "findings": [
+    {
+      "findingId": "F001",
+      "reviewItemId": "RI001",
+      "ruleRef": "CORE-001",
+      "targetId": "T001",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 finding evidence"
+        }
+      ]
+    }
+  ],
+  "validationResults": [],
+  "summary": "full clean fixture"
+}

@@ -27,7 +27,7 @@
       "properties": {
         "changedUnits": { "type": "array", "items": { "$ref": "#/$defs/target" } },
         "candidates": { "type": "array", "items": { "$ref": "#/$defs/target" } },
-        "contextExpansions": { "type": "array" }
+        "contextExpansions": { "type": "array", "items": { "$ref": "#/$defs/contextExpansion" } }
       }
     },
     "reviewItems": { "type": "array", "items": { "$ref": "#/$defs/reviewItem" } },
@@ -37,6 +37,10 @@
     "ruleSource": {
       "type": "object",
       "required": ["namespace", "ruleRef", "sourceFile", "sourceHash", "trigger", "appliesTo"],
+      "anyOf": [
+        { "required": ["summary"] },
+        { "required": ["ruleText"] }
+      ],
       "properties": {
         "namespace": { "type": "string", "minLength": 1 },
         "ruleRef": { "type": "string", "minLength": 1 },
@@ -44,7 +48,17 @@
         "sourceHash": { "type": "string", "minLength": 1 },
         "trigger": {},
         "appliesTo": {},
-        "summary": { "type": "string" }
+        "summary": { "type": "string", "minLength": 1 },
+        "ruleText": { "type": "string", "minLength": 1 }
+      }
+    },
+    "contextExpansion": {
+      "type": "object",
+      "required": ["reason", "addedTargetIds"],
+      "properties": {
+        "expansionId": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 },
+        "addedTargetIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
       }
     },
     "target": {
@@ -54,6 +68,7 @@
         "targetId": { "type": "string", "minLength": 1 },
         "targetKind": { "type": "string", "minLength": 1 },
         "loc": { "type": "string" },
+        "source": { "type": "string" },
         "summary": { "type": "string" }
       }
     },

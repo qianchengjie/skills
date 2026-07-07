@@ -1,0 +1,18 @@
+{
+  "kind": "rules-review-shard",
+  "schemaVersion": 2,
+  "runId": "run-fail-required-rule-no-item",
+  "reviewBatchId": "B001",
+  "results": [
+    {
+      "reviewItemId": "RI001",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:10",
+          "summary": "CORE-001 已检查"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "kind": "rules-review-shard",
+  "schemaVersion": 2,
+  "runId": "run-fail-shard-missing-assigned-result",
+  "reviewBatchId": "B001",
+  "results": []
+}

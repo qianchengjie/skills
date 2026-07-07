@@ -1,0 +1,43 @@
+{
+  "kind": "rules-review-task",
+  "schemaVersion": 2,
+  "runId": "run-fail-duplicate-batch-assignment",
+  "reviewBatchId": "B002",
+  "ruleSetId": "RS001",
+  "reviewItems": [
+    {
+      "reviewItemId": "RI001",
+      "ruleRef": "CORE-001",
+      "targetKind": "changed_unit",
+      "targetId": "T001",
+      "required": true
+    }
+  ],
+  "rules": [
+    {
+      "namespace": "CORE",
+      "ruleRef": "CORE-001",
+      "sourceFile": ".agents/rules/core.md",
+      "sourceHash": "sha256-core",
+      "trigger": [
+        "always"
+      ],
+      "appliesTo": [
+        "*"
+      ],
+      "summary": "核心规则"
+    }
+  ],
+  "targets": [
+    {
+      "targetId": "T001",
+      "targetKind": "changed_unit",
+      "loc": "src/example.ts:10",
+      "summary": "修改请求参数"
+    }
+  ],
+  "outputContract": {
+    "format": "strict_json",
+    "schemaRef": "schemas/shard.schema.json"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "kind": "rules-review-final-review",
+  "schemaVersion": 2,
+  "runId": "run-fail-format-invalid-blocked",
+  "protocolGate": "blocked",
+  "scopeMode": "full",
+  "coverageClaim": "blocked",
+  "semanticVerdict": "unknown",
+  "excludedRuleRefs": [],
+  "findings": [],
+  "validationResults": [],
+  "summary": "run-fail-format-invalid-blocked fixture"
+}

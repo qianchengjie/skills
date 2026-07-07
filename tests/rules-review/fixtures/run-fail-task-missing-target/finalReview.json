@@ -1,0 +1,13 @@
+{
+  "kind": "rules-review-final-review",
+  "schemaVersion": 2,
+  "runId": "run-fail-task-missing-target",
+  "protocolGate": "passed",
+  "scopeMode": "full",
+  "coverageClaim": "full_complete",
+  "semanticVerdict": "clean",
+  "excludedRuleRefs": [],
+  "findings": [],
+  "validationResults": [],
+  "summary": "run-fail-task-missing-target fixture"
+}

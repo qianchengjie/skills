@@ -19,8 +19,21 @@
         "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
         "status": { "enum": ["passed", "finding", "not_applicable", "cannot_verify"] },
         "findingId": { "type": "string", "pattern": "^F\\d{3}$" },
-        "evidence": { "type": "array" },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
         "reason": { "type": "string" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["summary"],
+      "anyOf": [
+        { "required": ["loc"] },
+        { "required": ["source"] }
+      ],
+      "properties": {
+        "summary": { "type": "string", "minLength": 1 },
+        "loc": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1 }
       }
     }
   }

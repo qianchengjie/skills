@@ -1,0 +1,26 @@
+{
+  "kind": "rules-review-final-review",
+  "schemaVersion": 2,
+  "runId": "run-fail-extra-final-finding",
+  "protocolGate": "passed",
+  "scopeMode": "full",
+  "coverageClaim": "full_complete",
+  "semanticVerdict": "clean",
+  "excludedRuleRefs": [],
+  "findings": [
+    {
+      "findingId": "F999",
+      "reviewItemId": "RI999",
+      "ruleRef": "WRONG",
+      "targetId": "WRONG",
+      "evidence": [
+        {
+          "loc": "x",
+          "summary": "fake"
+        }
+      ]
+    }
+  ],
+  "validationResults": [],
+  "summary": "full clean fixture"
+}

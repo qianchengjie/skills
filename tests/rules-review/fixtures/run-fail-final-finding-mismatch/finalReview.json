@@ -1,0 +1,26 @@
+{
+  "kind": "rules-review-final-review",
+  "schemaVersion": 2,
+  "runId": "run-fail-final-finding-mismatch",
+  "protocolGate": "passed",
+  "scopeMode": "full",
+  "coverageClaim": "full_complete",
+  "semanticVerdict": "issues",
+  "excludedRuleRefs": [],
+  "findings": [
+    {
+      "findingId": "F001",
+      "reviewItemId": "RI001",
+      "ruleRef": "WRONG",
+      "targetId": "WRONG",
+      "evidence": [
+        {
+          "loc": "src/fake.ts:1",
+          "summary": "fake evidence"
+        }
+      ]
+    }
+  ],
+  "validationResults": [],
+  "summary": "run-fail-final-finding-mismatch fixture"
+}

@@ -1,0 +1,29 @@
+{
+  "kind": "rules-review-shard",
+  "schemaVersion": 2,
+  "runId": "run-pass-finding-evidence-key-order",
+  "reviewBatchId": "B001",
+  "results": [
+    {
+      "reviewItemId": "RI001",
+      "status": "finding",
+      "findingId": "F001",
+      "evidence": [
+        {
+          "summary": "CORE-001 finding evidence",
+          "loc": "src/example.ts:10"
+        }
+      ]
+    },
+    {
+      "reviewItemId": "RI002",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:12",
+          "summary": "TYPE-001 已检查"
+        }
+      ]
+    }
+  ]
+}

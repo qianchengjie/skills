@@ -32,8 +32,9 @@
 - `reviewBatchId` 与 `reviewBatches[].reviewBatchId` 一致。
 - `ruleSetId` 与 `dispatch.ruleSet.ruleSetId` 一致。
 - `reviewItems[]` 必须展开当前 batch 的每个 `reviewItem`，不得只写 ID 范围。
-- `rules[]` 只包含当前 batch 所需规则快照，每项必须包含 `namespace`、`ruleRef`、`sourceFile`、`sourceHash`、`trigger`、`appliesTo`。
-- `targets[]` 只包含当前 batch 所需目标，每项必须包含 `targetId`、`targetKind`。
+- `rules[]` 只包含当前 batch 所需规则快照，每项必须包含 `namespace`、`ruleRef`、`sourceFile`、`sourceHash`、`trigger`、`appliesTo`，以及 `summary` 或 `ruleText`。
+- `targets[]` 只包含当前 batch 所需目标，每项必须包含 `targetId`、`targetKind`，并覆盖本 batch 每个 `reviewItems[].targetId`。
+- 被 `reviewItems[].targetId` 引用的 target 必须包含非空 `summary`，并至少包含非空 `loc` 或 `source`。
 - `outputContract.format = "strict_json"`。
 - `outputContract.schemaRef = "schemas/shard.schema.json"`。
 
@@ -83,8 +84,10 @@ passed / finding / not_applicable / cannot_verify
 - `passed` 必须有非空 `evidence[]`。
 - `not_applicable` 必须有 `reason`，可选 `evidence[]`。
 - `cannot_verify` 必须有 `reason` 或非空 `evidence[]`。
+- `evidence[]` 的每项至少包含非空 `summary`，并包含 `loc` 或 `source` 之一。
 - 同一 `reviewItemId` 在同一 shard 内不得出现多条 result。
 - result 只能引用当前 `reviewBatchId` 的 `reviewItemIds[]`。
+- `results[]` 必须覆盖 task 分配的全部 `reviewItems[]`。
 
 ## 自校验
 
@@ -122,12 +125,12 @@ node <skill>/scripts/validate.js --mode shard --task tasks/<reviewBatchId>.json 
 1. subagent 返回不合规时，先在 `dispatch.json` 标记 `returnStatus = "format_invalid"`、`aggregateStatus = "not_aggregated"`。
 2. 可以重试时发送 `retryTask.json`。
 3. 仍不合规、越权返回或分片不可信时重派。
-4. 重派仍失败时，该 batch 标记未完成，最终 `protocolGate = "incomplete"` 或 `"blocked"`。
+4. 重派仍失败时，该 batch 标记未完成或阻塞；格式不合规、不可信、已返回但无法聚合或越权时，最终 `protocolGate = "blocked"`。
 
 ## 聚合要求
 
 - 主 agent 只聚合通过 validator 权威门禁的 shard。
 - 每个 `required: true` 的 `reviewItem` 必须有且只有一个合法 result。
 - 未返回 result 的 required reviewItem 导致 `protocolGate = "incomplete"`。
-- 重复 result、跨 batch result、未知 `reviewItemId`、source hash 不一致导致 `protocolGate = "blocked"`。
+- 重复 result、跨 batch result、未知 `reviewItemId`、source hash 不一致、缺少规则快照内容或缺少 task target 上下文导致 `protocolGate = "blocked"`。
 - `finding` 不导致协议失败；它只让 `semanticVerdict = "issues"`。

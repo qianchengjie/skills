@@ -29,7 +29,7 @@ const FINDING_RE = /^F\d{3}$/;
 const LABELS = {
   passed: '通过',
   incomplete: '未完成',
-  blocked: '阻断',
+  blocked: '阻塞',
   full: '完整范围',
   scoped: '限定范围',
   full_complete: '完整完成',
@@ -267,6 +267,13 @@ function validateRuleSet(ruleSet, artifact, result) {
   requireDisjoint(requiredRuleRefs, globallyNotApplicableRuleRefs, artifact, result, 'D022', '/ruleSet', 'requiredRuleRefs and globallyNotApplicableRuleRefs must not overlap');
   requireDisjoint(excludedRuleRefs, globallyNotApplicableRuleRefs, artifact, result, 'D023', '/ruleSet', 'excludedRuleRefs and globallyNotApplicableRuleRefs must not overlap');
 
+  const classifiedRuleRefs = new Set([...requiredRuleRefs, ...excludedRuleRefs, ...globallyNotApplicableRuleRefs]);
+  candidateRuleRefs.forEach((ruleRef) => {
+    if (!classifiedRuleRefs.has(ruleRef)) {
+      addViolation(result, 'D033', artifact, '/ruleSet/candidateRuleRefs', 'candidateRuleRef must be classified as required, excluded, or globallyNotApplicable', 'requiredRuleRefs | excludedRuleRefs | globallyNotApplicableRuleRefs', ruleRef);
+    }
+  });
+
   const ruleSourcesByRuleRef = new Map();
   if (!Array.isArray(ruleSet.ruleSources)) {
     addViolation(result, 'D024', artifact, '/ruleSet/ruleSources', 'ruleSources must be array', 'array', ruleSet.ruleSources);
@@ -279,6 +286,7 @@ function validateRuleSet(ruleSet, artifact, result) {
       if (!isNonEmptyString(source && source.sourceFile)) addViolation(result, 'D028', artifact, `${pointer}/sourceFile`, 'sourceFile must be non-empty string', 'string', source && source.sourceFile);
       if (!isNonEmptyString(source && source.sourceHash)) addViolation(result, 'D029', artifact, `${pointer}/sourceHash`, 'sourceHash is required', 'non-empty hash', source && source.sourceHash);
       if (!candidateRuleRefs.has(source && source.ruleRef)) addViolation(result, 'D030', artifact, `${pointer}/ruleRef`, 'ruleSources[].ruleRef must be in candidateRuleRefs', Array.from(candidateRuleRefs), source && source.ruleRef);
+      if (!hasRuleBody(source)) addViolation(result, 'D032', artifact, pointer, 'rule source requires summary or ruleText', 'non-empty summary or ruleText', source);
       if (source && source.ruleRef) ruleSourcesByRuleRef.set(source.ruleRef, source);
     });
   }
@@ -378,8 +386,13 @@ function validateReviewItems(reviewItems, ruleSet, targets, artifact, result) {
       if (target && item.targetKind !== target.targetKind) {
         addViolation(result, 'D069', artifact, `${pointer}/targetKind`, 'reviewItem targetKind must match target targetKind', target.targetKind, item.targetKind);
       }
+      validateReviewTargetContext(target, artifact, result, 'D071', `${pointer}/targetId`);
     }
     if (item && item.reviewItemId) itemMap.set(item.reviewItemId, item);
+  });
+  ruleSet.requiredRuleRefs.forEach((ruleRef) => {
+    const hasRequiredItem = Array.from(itemMap.values()).some((item) => item.required === true && item.ruleRef === ruleRef);
+    if (!hasRequiredItem) addViolation(result, 'D070', artifact, '/reviewItems', 'requiredRuleRef must generate at least one required reviewItem', ruleRef, Array.from(itemMap.values()));
   });
   return itemMap;
 }
@@ -390,6 +403,7 @@ function validateReviewBatches(reviewBatches, ruleSet, reviewItems, artifact, re
     return;
   }
   const batchIds = new Set();
+  const assignment = new Map();
   reviewBatches.forEach((batch, index) => {
     const pointer = `/reviewBatches/${index}`;
     requireFields(batch, artifact, result, 'D081', pointer, ['reviewBatchId', 'ruleSetId', 'reviewItemIds', 'taskRef', 'returnStatus', 'aggregateStatus']);
@@ -400,12 +414,24 @@ function validateReviewBatches(reviewBatches, ruleSet, reviewItems, artifact, re
     validateStringSet(batch && batch.reviewItemIds, artifact, result, 'D085', `${pointer}/reviewItemIds`);
     asArray(batch && batch.reviewItemIds).forEach((reviewItemId, itemIndex) => {
       if (!reviewItems.has(reviewItemId)) addViolation(result, 'D086', artifact, `${pointer}/reviewItemIds/${itemIndex}`, 'reviewBatch reviewItemIds must exist in reviewItems', Array.from(reviewItems.keys()), reviewItemId);
+      if (!assignment.has(reviewItemId)) assignment.set(reviewItemId, []);
+      assignment.get(reviewItemId).push(batch && batch.reviewBatchId);
     });
     if (!isNonEmptyString(batch && batch.taskRef)) addViolation(result, 'D087', artifact, `${pointer}/taskRef`, 'taskRef must be non-empty string', 'string', batch && batch.taskRef);
     if (!RETURN_STATUSES.includes(batch && batch.returnStatus)) addViolation(result, 'D088', artifact, `${pointer}/returnStatus`, 'returnStatus must be valid', RETURN_STATUSES, batch && batch.returnStatus);
     if (!AGGREGATE_STATUSES.includes(batch && batch.aggregateStatus)) addViolation(result, 'D089', artifact, `${pointer}/aggregateStatus`, 'aggregateStatus must be valid', AGGREGATE_STATUSES, batch && batch.aggregateStatus);
     if (batch && batch.aggregateStatus === 'aggregated' && batch.returnStatus !== 'returned') {
       addViolation(result, 'D090', artifact, pointer, 'aggregated reviewBatch must have returnStatus returned', 'returned', batch.returnStatus);
+    }
+  });
+  assignment.forEach((batchIdsForItem, reviewItemId) => {
+    if (batchIdsForItem.length > 1) {
+      addViolation(result, 'D091', artifact, '/reviewBatches', 'reviewItemId must not be assigned to multiple reviewBatches', 'single reviewBatch assignment', { reviewItemId, reviewBatchIds: batchIdsForItem });
+    }
+  });
+  reviewItems.forEach((item, reviewItemId) => {
+    if (item.required === true && !assignment.has(reviewItemId)) {
+      addViolation(result, 'D092', artifact, '/reviewBatches', 'required reviewItem must be assigned to one reviewBatch', reviewItemId, Array.from(assignment.keys()));
     }
   });
 }
@@ -427,6 +453,7 @@ function validateTask(task, artifact, result) {
     const pointer = `/rules/${index}`;
     requireFields(rule, artifact, result, 'T010', pointer, ['namespace', 'ruleRef', 'sourceFile', 'sourceHash', 'trigger', 'appliesTo']);
     if (!isNonEmptyString(rule && rule.sourceHash)) addViolation(result, 'T011', artifact, `${pointer}/sourceHash`, 'sourceHash is required', 'non-empty hash', rule && rule.sourceHash);
+    if (!hasRuleBody(rule)) addViolation(result, 'T016', artifact, pointer, 'task rule requires summary or ruleText', 'non-empty summary or ruleText', rule);
   });
   asArray(task.targets).forEach((target, index) => {
     const pointer = `/targets/${index}`;
@@ -473,6 +500,12 @@ function validateShard(shard, task, artifact, result) {
       addViolation(result, 'S021', artifact, `${pointer}/reviewItemId`, 'result must reference assigned reviewItemId', Array.from(taskItemIds), reviewResult && reviewResult.reviewItemId);
     }
   });
+  if (task) {
+    const actual = new Set(asArray(shard.results).map((reviewResult) => reviewResult && reviewResult.reviewItemId).filter(Boolean));
+    if (!setsEqual(actual, taskItemIds)) {
+      addViolation(result, 'S022', artifact, '/results', 'shard results must cover every task reviewItem', Array.from(taskItemIds), Array.from(actual));
+    }
+  }
 }
 
 function validateReviewResult(reviewResult, artifact, result, pointer, prefix) {
@@ -482,16 +515,19 @@ function validateReviewResult(reviewResult, artifact, result, pointer, prefix) {
 
   if (reviewResult && reviewResult.status === 'finding') {
     if (!FINDING_RE.test(reviewResult.findingId)) addViolation(result, `${prefix}013`, artifact, `${pointer}/findingId`, 'finding result requires findingId and evidence', 'Fxxx', reviewResult.findingId);
-    if (!isNonEmptyArray(reviewResult.evidence)) addViolation(result, `${prefix}014`, artifact, `${pointer}/evidence`, 'finding result requires findingId and evidence', 'non-empty evidence[]', reviewResult.evidence);
+    validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}014`, `${pointer}/evidence`, 'finding result requires findingId and evidence');
   }
-  if (reviewResult && reviewResult.status === 'passed' && !isNonEmptyArray(reviewResult.evidence)) {
-    addViolation(result, `${prefix}015`, artifact, `${pointer}/evidence`, 'passed result requires evidence', 'non-empty evidence[]', reviewResult.evidence);
+  if (reviewResult && reviewResult.status === 'passed') {
+    validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}015`, `${pointer}/evidence`, 'passed result requires evidence');
   }
   if (reviewResult && reviewResult.status === 'not_applicable' && !isNonEmptyString(reviewResult.reason)) {
     addViolation(result, `${prefix}016`, artifact, `${pointer}/reason`, 'not_applicable result requires reason', 'non-empty reason', reviewResult.reason);
   }
-  if (reviewResult && reviewResult.status === 'cannot_verify' && !isNonEmptyString(reviewResult.reason) && !isNonEmptyArray(reviewResult.evidence)) {
+  if (reviewResult && reviewResult.status === 'cannot_verify' && !isNonEmptyString(reviewResult.reason) && !hasValidEvidenceArray(reviewResult.evidence)) {
     addViolation(result, `${prefix}017`, artifact, pointer, 'cannot_verify result requires reason or evidence', 'reason or evidence[]', reviewResult);
+  }
+  if (reviewResult && reviewResult.status === 'not_applicable' && reviewResult.evidence !== undefined) {
+    validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}018`, `${pointer}/evidence`, 'not_applicable evidence must be reviewable when present');
   }
 }
 
@@ -548,10 +584,13 @@ function validateRunArtifacts(runDir, dispatch, result) {
 
     const completeBatch = batch.returnStatus === 'returned' && batch.aggregateStatus === 'aggregated';
     if (!completeBatch) {
+      const statusImpact = ['format_invalid', 'untrusted'].includes(batch.returnStatus) || (batch.returnStatus === 'returned' && batch.aggregateStatus === 'not_aggregated')
+        ? 'blocked'
+        : 'incomplete';
       addViolation(result, 'RUN011', rel(runDir, 'dispatch.json'), batchPointer, 'reviewBatch was not returned and aggregated', 'returned + aggregated', {
         returnStatus: batch.returnStatus,
         aggregateStatus: batch.aggregateStatus,
-      }, 1, 'incomplete');
+      }, 1, statusImpact);
       return;
     }
 
@@ -597,6 +636,22 @@ function validateTaskAgainstDispatch(task, dispatch, batch, reviewItems, artifac
     });
   });
 
+  const dispatchTargets = buildDispatchTargetMap(dispatch);
+  const taskTargets = new Map(asArray(task.targets).map((target) => [target && target.targetId, target]));
+  asArray(task.reviewItems).forEach((item, index) => {
+    const taskTarget = taskTargets.get(item && item.targetId);
+    const dispatchTarget = dispatchTargets.get(item && item.targetId);
+    if (!taskTarget) {
+      addViolation(result, 'RUN028', artifact, `/reviewItems/${index}/targetId`, 'task.targets[] must include each task reviewItem targetId', item && item.targetId, Array.from(taskTargets.keys()));
+      return;
+    }
+    if (taskTarget.targetKind !== item.targetKind) {
+      addViolation(result, 'RUN029', artifact, `/targets/${item.targetId}/targetKind`, 'task targetKind must match reviewItem targetKind', item.targetKind, taskTarget.targetKind);
+    }
+    validateReviewTargetContext(taskTarget, artifact, result, 'RUN032', `/targets/${item.targetId}`);
+    if (dispatchTarget) validateTargetSnapshot(taskTarget, dispatchTarget, artifact, result, 'RUN030', `/targets/${item.targetId}`);
+  });
+
   const taskRulesByRuleRef = new Map(asArray(task.rules).map((rule) => [rule.ruleRef, rule]));
   expectedItemIds.forEach((reviewItemId) => {
     const item = reviewItems.get(reviewItemId);
@@ -612,6 +667,9 @@ function validateTaskAgainstDispatch(task, dispatch, batch, reviewItems, artifac
     }
     if (rule.sourceHash !== source.sourceHash) {
       addViolation(result, 'RUN027', artifact, `/rules/${index}/sourceHash`, 'task.rules[].sourceHash must match dispatch ruleSources[].sourceHash', source.sourceHash, rule.sourceHash);
+    }
+    if (!rulesHaveSameBody(rule, source)) {
+      addViolation(result, 'RUN031', artifact, `/rules/${index}`, 'task rule summary or ruleText must match dispatch ruleSource', { summary: source.summary || null, ruleText: source.ruleText || null }, { summary: rule.summary || null, ruleText: rule.ruleText || null });
     }
   });
 }
@@ -661,10 +719,10 @@ function calculateGate(dispatch, results, result) {
 }
 
 function deriveSemanticVerdict(results, protocolGate) {
+  if (protocolGate !== 'passed') return 'unknown';
   if (asArray(results).some((reviewResult) => reviewResult && reviewResult.status === 'finding')) return 'issues';
   if (asArray(results).some((reviewResult) => reviewResult && reviewResult.status === 'cannot_verify')) return 'unknown';
-  if (protocolGate === 'passed') return 'clean';
-  return 'unknown';
+  return 'clean';
 }
 
 function validateFinalReviewShape(finalReview, artifact, result) {
@@ -691,7 +749,7 @@ function validateFinalReviewShape(finalReview, artifact, result) {
   if (!Array.isArray(finalReview.validationResults)) addViolation(result, 'FR011', artifact, '/validationResults', 'validationResults must be array', 'array', finalReview.validationResults);
   asArray(finalReview.findings).forEach((finding, index) => {
     requireFields(finding, artifact, result, 'FR012', `/findings/${index}`, ['findingId', 'reviewItemId', 'ruleRef', 'targetId', 'evidence']);
-    if (!isNonEmptyArray(finding && finding.evidence)) addViolation(result, 'FR013', artifact, `/findings/${index}/evidence`, 'final finding requires evidence[]', 'non-empty evidence[]', finding && finding.evidence);
+    validateEvidenceArray(finding && finding.evidence, artifact, result, 'FR013', `/findings/${index}/evidence`, 'final finding requires evidence');
   });
   asArray(finalReview.validationResults).forEach((validation, index) => {
     if (validation && validation.ok === false) addViolation(result, 'FR014', artifact, `/validationResults/${index}`, 'finalReview.validationResults contains failed validation', 'all ok or omitted failure', validation);
@@ -724,15 +782,36 @@ function validateFinalReviewAgainstComputed(finalReview, dispatch, results, comp
   const derivedSemantic = deriveSemanticVerdict(results, computed.protocolGate);
   if (computed.protocolGate === 'passed') {
     if (finalReview.semanticVerdict !== derivedSemantic) addViolation(result, 'FR027', artifact, '/semanticVerdict', 'finalReview semanticVerdict must equal validator result', derivedSemantic, finalReview.semanticVerdict);
-  } else if (![derivedSemantic, 'unknown'].includes(finalReview.semanticVerdict)) {
-    addViolation(result, 'FR028', artifact, '/semanticVerdict', 'incomplete or blocked semanticVerdict can only be unknown or derived from legal results', [derivedSemantic, 'unknown'], finalReview.semanticVerdict);
+  } else if (finalReview.semanticVerdict !== 'unknown') {
+    addViolation(result, 'FR028', artifact, '/semanticVerdict', 'incomplete or blocked semanticVerdict must be unknown', 'unknown', finalReview.semanticVerdict);
   }
 
   const resultFindings = asArray(results).filter((reviewResult) => reviewResult && reviewResult.status === 'finding');
   const finalFindings = asArray(finalReview.findings);
+  const reviewItems = new Map(asArray(dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
+  const resultFindingKeys = new Set(resultFindings.map((finding) => `${finding.findingId}\0${finding.reviewItemId}`));
   resultFindings.forEach((finding) => {
-    const matched = finalFindings.some((entry) => entry.findingId === finding.findingId && entry.reviewItemId === finding.reviewItemId);
-    if (!matched) addViolation(result, 'FR029', artifact, '/findings', 'finding result must appear in finalReview.findings[]', { findingId: finding.findingId, reviewItemId: finding.reviewItemId }, finalFindings);
+    const expectedItem = reviewItems.get(finding.reviewItemId);
+    const matched = finalFindings.find((entry) => entry.findingId === finding.findingId && entry.reviewItemId === finding.reviewItemId);
+    if (!matched) {
+      addViolation(result, 'FR029', artifact, '/findings', 'finding result must appear in finalReview.findings[]', { findingId: finding.findingId, reviewItemId: finding.reviewItemId }, finalFindings);
+      return;
+    }
+    if (expectedItem && matched.ruleRef !== expectedItem.ruleRef) {
+      addViolation(result, 'FR030', artifact, '/findings', 'final finding ruleRef must match dispatch reviewItem', expectedItem.ruleRef, matched.ruleRef);
+    }
+    if (expectedItem && matched.targetId !== expectedItem.targetId) {
+      addViolation(result, 'FR031', artifact, '/findings', 'final finding targetId must match dispatch reviewItem', expectedItem.targetId, matched.targetId);
+    }
+    if (!evidenceArraysEqual(matched.evidence, finding.evidence)) {
+      addViolation(result, 'FR032', artifact, '/findings', 'final finding evidence must match shard result evidence', finding.evidence, matched.evidence);
+    }
+  });
+  finalFindings.forEach((finding, index) => {
+    const key = `${finding && finding.findingId}\0${finding && finding.reviewItemId}`;
+    if (!resultFindingKeys.has(key)) {
+      addViolation(result, 'FR033', artifact, `/findings/${index}`, 'finalReview finding must come from shard finding result', 'existing shard finding result', { findingId: finding && finding.findingId, reviewItemId: finding && finding.reviewItemId });
+    }
   });
 }
 
@@ -881,6 +960,62 @@ function requireSubset(left, right, artifact, result, code, pointer, message) {
 function requireDisjoint(left, right, artifact, result, code, pointer, message) {
   const overlap = Array.from(left).filter((item) => right.has(item));
   if (overlap.length > 0) addViolation(result, code, artifact, pointer, message, 'disjoint sets', overlap);
+}
+
+function hasRuleBody(rule) {
+  return isNonEmptyString(rule && rule.summary) || isNonEmptyString(rule && rule.ruleText);
+}
+
+function rulesHaveSameBody(left, right) {
+  return (left.summary || null) === (right.summary || null) && (left.ruleText || null) === (right.ruleText || null);
+}
+
+function validateEvidenceArray(evidence, artifact, result, code, pointer, message) {
+  if (!hasValidEvidenceArray(evidence)) {
+    addViolation(result, code, artifact, pointer, message, 'non-empty evidence[] with summary and loc/source', evidence);
+  }
+}
+
+function hasValidEvidenceArray(evidence) {
+  return Array.isArray(evidence)
+    && evidence.length > 0
+    && evidence.every((item) => isObject(item) && isNonEmptyString(item.summary) && (isNonEmptyString(item.loc) || isNonEmptyString(item.source)));
+}
+
+function evidenceArraysEqual(left, right) {
+  return Array.isArray(left)
+    && Array.isArray(right)
+    && left.length === right.length
+    && left.every((item, index) => evidenceItemsEqual(item, right[index]));
+}
+
+function evidenceItemsEqual(left, right) {
+  return ['summary', 'loc', 'source'].every((field) => (left && left[field] ? left[field] : null) === (right && right[field] ? right[field] : null));
+}
+
+function buildDispatchTargetMap(dispatch) {
+  const targetMap = new Map();
+  asArray(dispatch && dispatch.targets && dispatch.targets.changedUnits).forEach((target) => {
+    if (target && target.targetId) targetMap.set(target.targetId, target);
+  });
+  asArray(dispatch && dispatch.targets && dispatch.targets.candidates).forEach((target) => {
+    if (target && target.targetId) targetMap.set(target.targetId, target);
+  });
+  return targetMap;
+}
+
+function validateTargetSnapshot(actual, expected, artifact, result, code, pointer) {
+  ['targetKind', 'loc', 'source', 'summary'].forEach((field) => {
+    if (expected[field] !== undefined && actual[field] !== expected[field]) {
+      addViolation(result, code, artifact, `${pointer}/${field}`, 'task target snapshot must match dispatch target', expected[field], actual[field]);
+    }
+  });
+}
+
+function validateReviewTargetContext(target, artifact, result, code, pointer) {
+  if (!isNonEmptyString(target && target.summary) || (!isNonEmptyString(target && target.loc) && !isNonEmptyString(target && target.source))) {
+    addViolation(result, code, artifact, pointer, 'reviewItem target must include summary and loc or source', 'non-empty summary plus loc or source', target);
+  }
 }
 
 function isObject(value) {

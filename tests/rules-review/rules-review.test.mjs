@@ -31,6 +31,24 @@ async function assertRunFails(fixture, pattern) {
   assert.fail(`Expected fixture to fail: ${fixture}`);
 }
 
+async function assertShardFails(fixture, pattern) {
+  try {
+    await runValidate([
+      "--mode",
+      "shard",
+      "--task",
+      path.join(fixtures, fixture, "tasks/B001.json"),
+      "--input",
+      path.join(fixtures, fixture, "shards/B001.json"),
+    ]);
+  } catch (error) {
+    const output = `${error.stdout}${error.stderr}`;
+    assert.match(output, pattern);
+    return;
+  }
+  assert.fail(`Expected shard fixture to fail: ${fixture}`);
+}
+
 await assertRunPass("run-pass-full-clean", {
   protocolGate: "passed",
   scopeMode: "full",
@@ -43,6 +61,13 @@ await assertRunPass("run-pass-scoped-clean", {
   scopeMode: "scoped",
   coverageClaim: "scoped_complete",
   semanticVerdict: "clean",
+});
+
+await assertRunPass("run-pass-finding-evidence-key-order", {
+  protocolGate: "passed",
+  scopeMode: "full",
+  coverageClaim: "full_complete",
+  semanticVerdict: "issues",
 });
 
 const response = await runValidate([
@@ -61,12 +86,26 @@ await assertRunFails("run-fail-missing-result", /required reviewItem must have e
 await assertRunFails("run-fail-unassigned-result", /result must reference assigned reviewItemId/);
 await assertRunFails("run-fail-duplicate-result", /reviewItem has duplicate results/);
 await assertRunFails("run-fail-finding-no-evidence", /finding result requires findingId and evidence/);
+await assertRunFails("run-fail-finding-no-evidence", /incomplete or blocked semanticVerdict must be unknown/);
 await assertRunFails("run-fail-passed-no-evidence", /passed result requires evidence/);
 await assertRunFails("run-fail-not-applicable-no-reason", /not_applicable result requires reason/);
 await assertRunFails("run-fail-cannot-verify-no-proof", /cannot_verify result requires reason or evidence/);
 await assertRunFails("run-fail-missing-source-hash", /sourceHash is required/);
+await assertRunFails("run-fail-unclassified-candidate", /candidateRuleRef must be classified as required, excluded, or globallyNotApplicable/);
 await assertRunFails("run-fail-scoped-no-excluded", /scoped scopeMode requires excludedRuleRefs/);
 await assertRunFails("run-fail-bad-context-expansion", /contextExpansions\[\]\.addedTargetIds\[\] must exist in targets\.candidates\[\]/);
 await assertRunFails("run-fail-bad-review-target", /reviewItem targetId must exist/);
+await assertRunFails("run-fail-thin-review-target", /reviewItem target must include summary and loc or source/);
+await assertRunFails("run-fail-task-missing-target", /task\.targets\[\] must include each task reviewItem targetId/);
+await assertRunFails("run-fail-required-rule-no-item", /requiredRuleRef must generate at least one required reviewItem/);
+await assertShardFails("run-fail-shard-missing-assigned-result", /shard results must cover every task reviewItem/);
+await assertRunFails("run-fail-duplicate-batch-assignment", /reviewItemId must not be assigned to multiple reviewBatches/);
+await assertRunFails("run-fail-missing-rule-body", /rule source requires summary or ruleText/);
+await assertRunFails("run-fail-empty-evidence-item", /passed result requires evidence/);
+await assertRunFails("run-fail-final-finding-mismatch", /final finding ruleRef must match dispatch reviewItem/);
+await assertRunFails("run-fail-extra-final-finding", /finalReview finding must come from shard finding result/);
+await assertRunFails("run-fail-format-invalid-blocked", /"protocolGate": "blocked"/);
+await assertRunFails("run-fail-untrusted-blocked", /"protocolGate": "blocked"/);
+await assertRunFails("run-fail-returned-not-aggregated-blocked", /"protocolGate": "blocked"/);
 
 console.log("rules-review tests passed");

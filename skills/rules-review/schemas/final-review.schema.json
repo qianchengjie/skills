@@ -26,7 +26,20 @@
         "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
         "ruleRef": { "type": "string", "minLength": 1 },
         "targetId": { "type": "string", "minLength": 1 },
-        "evidence": { "type": "array" }
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["summary"],
+      "anyOf": [
+        { "required": ["loc"] },
+        { "required": ["source"] }
+      ],
+      "properties": {
+        "summary": { "type": "string", "minLength": 1 },
+        "loc": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1 }
       }
     }
   }

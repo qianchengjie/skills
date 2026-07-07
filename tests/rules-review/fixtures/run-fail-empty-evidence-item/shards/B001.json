@@ -1,0 +1,25 @@
+{
+  "kind": "rules-review-shard",
+  "schemaVersion": 2,
+  "runId": "run-fail-empty-evidence-item",
+  "reviewBatchId": "B001",
+  "results": [
+    {
+      "reviewItemId": "RI001",
+      "status": "passed",
+      "evidence": [
+        {}
+      ]
+    },
+    {
+      "reviewItemId": "RI002",
+      "status": "passed",
+      "evidence": [
+        {
+          "loc": "src/example.ts:12",
+          "summary": "TYPE-001 已检查"
+        }
+      ]
+    }
+  ]
+}
