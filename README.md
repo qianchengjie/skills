@@ -23,3 +23,9 @@ scripts/
 ```bash
 ./scripts/install.sh
 ```
+
+未克隆仓库且 GitHub 仓库可访问时：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/qianchengjie/skills/master/scripts/install.sh | sh
+```
