@@ -9,6 +9,8 @@ const MODES = new Set([
   'retry-task',
   'shard',
   'final-review',
+  'build-tasks',
+  'aggregate-final',
   'render-final',
   'render-response',
   'final-md',
@@ -153,7 +155,7 @@ function addViolation(result, code, artifact, jsonPointer, message, expected, ac
 
 function run(args) {
   const mode = args.mode;
-  const artifact = args.dir || args.input || args.output || null;
+  const artifact = args.dir || args.input || args.output || args.dispatch || args.out || null;
   const result = createResult(mode, artifact);
 
   if (!mode || !MODES.has(mode)) {
@@ -182,6 +184,10 @@ function run(args) {
     } else if (mode === 'final-review') {
       const finalReview = readJson(args.input, args.input, result, 'FR001');
       if (finalReview) validateFinalReviewShape(finalReview, args.input, result);
+    } else if (mode === 'build-tasks') {
+      buildTasksMode(args, result);
+    } else if (mode === 'aggregate-final') {
+      aggregateFinalMode(args, result);
     } else if (mode === 'render-final') {
       renderFinalMode(args, result);
     } else if (mode === 'render-response') {
@@ -1017,6 +1023,8 @@ function validateRun(runDir, result) {
     return;
   }
 
+  validateRunDirectoryFiles(runDir, result);
+
   const dispatchPath = path.join(runDir, 'dispatch.json');
   const finalReviewPath = path.join(runDir, 'finalReview.json');
   const finalMdPath = path.join(runDir, 'final.md');
@@ -1038,6 +1046,31 @@ function validateRun(runDir, result) {
   } else {
     validateFinalMarkdown(finalReview, finalMdPath, result, dispatch);
   }
+}
+
+function validateRunDirectoryFiles(runDir, result) {
+  if (!fs.existsSync(runDir) || !fs.statSync(runDir).isDirectory()) {
+    addViolation(result, 'RUN002', null, '/dir', 'run directory must exist', 'directory', runDir, 2);
+    return;
+  }
+  collectFiles(runDir).forEach((filePath) => {
+    const relativePath = rel(runDir, filePath);
+    if (!isAllowedRunArtifact(relativePath)) {
+      addViolation(result, 'RUN003', relativePath, null, 'run directory must only contain rules-review protocol artifacts', 'dispatch/finalReview/final/response or JSON under tasks/retries/shards/validations', relativePath);
+    }
+  });
+}
+
+function collectFiles(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = path.join(dir, entry.name);
+    return entry.isDirectory() ? collectFiles(entryPath) : [entryPath];
+  });
+}
+
+function isAllowedRunArtifact(relativePath) {
+  if (['dispatch.json', 'finalReview.json', 'final.md', 'response.md'].includes(relativePath)) return true;
+  return /^(tasks|retries|shards|validations)\/[^/]+\.json$/.test(relativePath);
 }
 
 function validateRunArtifacts(runDir, dispatch, result) {
@@ -1353,6 +1386,123 @@ function deriveCannotVerifyItems(results, dispatch) {
         reason: reviewResult.reason || formatEvidence(reviewResult.evidence) || '未记录原因',
       };
     });
+}
+
+function buildTasksMode(args, result) {
+  const dispatch = readJson(args.dispatch, args.dispatch, result, 'D001');
+  if (!dispatch) return;
+  validateDispatch(dispatch, args.dispatch, result);
+  if (!args.out || args.out === true) {
+    addViolation(result, 'BT001', null, '/out', 'build-tasks requires --out', 'output directory', args.out || null, 2);
+    return;
+  }
+  if (result.violations.length > 0) return;
+
+  const outputDir = path.resolve(args.out);
+  const tasks = buildTasks(dispatch);
+  fs.mkdirSync(outputDir, { recursive: true });
+  const written = [];
+  const reviewItems = new Map(asArray(dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
+  tasks.forEach(({ batch, task }) => {
+    const outputPath = path.join(outputDir, path.basename(batch.taskRef || `${batch.reviewBatchId}.json`));
+    fs.writeFileSync(outputPath, `${JSON.stringify(task, null, 2)}\n`);
+    validateTask(task, outputPath, result);
+    validateTaskAgainstDispatch(task, dispatch, batch, reviewItems, outputPath, result);
+    written.push(outputPath);
+  });
+  result.rendered = written;
+}
+
+function buildTasks(dispatch) {
+  const reviewItemsById = new Map(asArray(dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
+  const targetsById = buildDispatchTargetMap(dispatch);
+  const ruleSourcesByRuleRef = new Map(asArray(dispatch.ruleSet && dispatch.ruleSet.ruleSources).map((source) => [source.ruleRef, source]));
+  return asArray(dispatch.reviewBatches).map((batch) => {
+    const itemIds = asArray(batch.reviewItemIds);
+    const reviewItems = itemIds.map((reviewItemId) => reviewItemsById.get(reviewItemId)).filter(Boolean);
+    const ruleRefs = new Set(reviewItems.map((item) => item.ruleRef));
+    const targetIds = new Set(reviewItems.map((item) => item.targetId));
+    const applicabilityRows = asArray(dispatch.applicabilityMatrix)
+      .filter((entry) => entry && entry.reviewItemId && itemIds.includes(entry.reviewItemId));
+    return {
+      batch,
+      task: {
+        kind: 'rules-review-task',
+        schemaVersion: SCHEMA_VERSION,
+        runId: dispatch.runId,
+        reviewBatchId: batch.reviewBatchId,
+        ruleSetId: dispatch.ruleSet.ruleSetId,
+        reviewItems,
+        rules: asArray(dispatch.ruleSet.ruleSources).filter((source) => source && ruleRefs.has(source.ruleRef) && ruleSourcesByRuleRef.has(source.ruleRef)),
+        targets: [...asArray(dispatch.targets && dispatch.targets.changedUnits), ...asArray(dispatch.targets && dispatch.targets.candidates)]
+          .filter((target) => target && targetIds.has(target.targetId) && targetsById.has(target.targetId)),
+        applicabilityMatrix: applicabilityRows,
+        outputContract: {
+          format: 'strict_json',
+          schemaRef: 'schemas/shard.schema.json',
+        },
+      },
+    };
+  });
+}
+
+function aggregateFinalMode(args, result) {
+  const runDir = args.dir;
+  if (!runDir || runDir === true) {
+    addViolation(result, 'AF001', null, '/dir', 'aggregate-final requires --dir', 'run directory', runDir || null, 2);
+    return;
+  }
+  if (!args.output || args.output === true) {
+    addViolation(result, 'AF002', null, '/output', 'aggregate-final requires --output', 'output path', args.output || null, 2);
+    return;
+  }
+
+  validateRunDirectoryFiles(runDir, result);
+  const dispatchPath = path.join(runDir, 'dispatch.json');
+  const dispatch = readJson(dispatchPath, rel(runDir, dispatchPath), result, 'D001');
+  if (dispatch) validateDispatch(dispatch, rel(runDir, dispatchPath), result);
+  const runState = dispatch ? validateRunArtifacts(runDir, dispatch, result) : { results: [], resultOwners: new Map() };
+  if (dispatch) validateRequiredResults(dispatch, runState.results, runState.resultOwners, result);
+  const gate = calculateGate(dispatch, runState.results, result);
+  result.gate = gate;
+  if (!dispatch) return;
+
+  const finalReview = buildFinalReview(dispatch, runState.results, gate);
+  fs.mkdirSync(path.dirname(args.output), { recursive: true });
+  fs.writeFileSync(args.output, `${JSON.stringify(finalReview, null, 2)}\n`);
+  validateFinalReviewShape(finalReview, args.output, result);
+  validateFinalReviewAgainstComputed(finalReview, dispatch, runState.results, gate, args.output, result);
+  result.rendered = args.output;
+}
+
+function buildFinalReview(dispatch, results, gate) {
+  const finalReview = {
+    kind: 'rules-review-final-review',
+    schemaVersion: SCHEMA_VERSION,
+    runId: dispatch.runId,
+    protocolGate: gate.protocolGate,
+    scopeMode: gate.scopeMode,
+    coverageClaim: gate.coverageClaim,
+    semanticVerdict: gate.semanticVerdict,
+    excludedRuleRefs: asArray(dispatch.ruleSet && dispatch.ruleSet.excludedRuleRefs),
+    findings: deriveFindingItems(results, dispatch),
+    observations: deriveObservationItems(results, dispatch),
+    issueSummary: gate.issueSummary,
+    recommendation: gate.recommendation,
+    validationResults: [
+      {
+        mode: 'run',
+        ok: gate.protocolGate === 'passed',
+        protocolGate: gate.protocolGate,
+        semanticVerdict: gate.semanticVerdict,
+        issueSummary: gate.issueSummary,
+        recommendation: gate.recommendation,
+      },
+    ],
+  };
+  const cannotVerifyItems = deriveCannotVerifyItems(results, dispatch);
+  if (cannotVerifyItems.length > 0) finalReview.cannotVerifyItems = cannotVerifyItems;
+  return finalReview;
 }
 
 function validateFinalReviewShape(finalReview, artifact, result) {

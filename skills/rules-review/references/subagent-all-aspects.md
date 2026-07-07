@@ -7,6 +7,7 @@
 - 主 agent 必须先生成 `.rules-review-tmp/<run-id>/dispatch.json`。
 - `dispatch.json.executionPlan.mode` 必须是 `multi_batch`。
 - `dispatch.json` 是规则集合、目标、适用性矩阵、reviewItem 和 reviewBatch 的唯一机器事实源。
+- `tasks/*.json` 必须由 `validate.js --mode build-tasks --dispatch dispatch.json --out tasks/` 从 dispatch 投影生成，不得手写或用临时生成脚本制造。
 - 每个 subagent 只接收一个 `task.json`，不得依赖线程历史、Markdown 摘要或“详见主台账”补齐输入。
 - 容量不足时按 `reviewBatches[]` 顺序分批启动；启动失败、容量不足或等待超时必须写回 `dispatch.json`。
 - 未启动、未返回、格式不合规或未聚合的 batch 不得写成已完成。

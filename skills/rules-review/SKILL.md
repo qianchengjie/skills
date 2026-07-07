@@ -93,6 +93,16 @@ ruleRef x targetId = reviewItem
 
 所有 agent-to-agent 工件必须是 `JSON.parse` 可直接解析的 strict JSON；不允许 JSONC、注释、尾逗号、代码围栏或前后解释文本。
 
+工件来源边界：
+
+- `dispatch.json` 是主 agent 的计划判断产物，可以由主 agent 写入；它记录规则、目标、适用性、reviewItems 和 batch 计划，不得包含审查结论。
+- `tasks/*.json` 是 `dispatch.json` 的机械投影，必须由 `validate.js --mode build-tasks` 生成；主 agent 不得手写或用临时脚本生成。
+- `shards/*.json` 是 reviewer 的审查判断产物，是唯一产生 `passed / finding / cannot_verify` 的位置；不得由生成器根据 `dispatch.json` 批量制造。
+- `finalReview.json` 是 `dispatch.json + shards/*.json` 的机械聚合，必须由 `validate.js --mode aggregate-final` 生成；主 agent 不得手写。
+- `final.md` 和最终回复是展示层，必须由 `validate.js --mode render-final` / `render-response` 渲染。
+
+只允许使用 rules-review 内置 `validate.js` 做投影、校验、聚合和渲染；不得创建或运行本次 review 专用的临时生成脚本来批量制造 `dispatch.json`、`tasks/*.json`、`shards/*.json` 或 `finalReview.json`。
+
 ### dispatch.json
 
 `dispatch.json` 是主 agent 的计划、分派和聚合台账，至少包含：
@@ -205,7 +215,7 @@ aggregateStatus: aggregated / not_aggregated
 
 ### task.json
 
-`task.json` 是 batch 输入包，只能包含当前 `reviewBatchId` 所需内容：
+`task.json` 是 batch 输入包，只能由 `validate.js --mode build-tasks --dispatch dispatch.json --out tasks/` 从 `dispatch.json` 投影生成；它只能包含当前 `reviewBatchId` 所需内容：
 
 - `kind = "rules-review-task"`
 - `schemaVersion = 2`
@@ -301,7 +311,7 @@ SHOULD / ADVISORY => should_fix
 
 ### finalReview.json
 
-`finalReview.json` 是最终聚合产物；其 gate 字段必须由 validator 重新计算并校验后才可信。它至少包含：
+`finalReview.json` 是最终聚合产物，只能由 `validate.js --mode aggregate-final --dir .rules-review-tmp/<run-id> --output finalReview.json` 从 `dispatch.json + shards/*.json` 生成；其 gate 字段必须由 validator 重新计算并校验后才可信。它至少包含：
 
 - `kind = "rules-review-final-review"`
 - `schemaVersion = 2`
@@ -393,6 +403,8 @@ validate.js --mode task --input tasks/<reviewBatchId>.json
 validate.js --mode retry-task --input retries/<reviewBatchId>-retry-<n>.json
 validate.js --mode shard --task tasks/<reviewBatchId>.json --input shards/<reviewBatchId>.json
 validate.js --mode final-review --input finalReview.json
+validate.js --mode build-tasks --dispatch dispatch.json --out tasks/
+validate.js --mode aggregate-final --dir .rules-review-tmp/<run-id> --output finalReview.json
 validate.js --mode render-final --input finalReview.json --dispatch dispatch.json --output final.md
 validate.js --mode render-response --dir .rules-review-tmp/<run-id>
 validate.js --mode final-md --final-review finalReview.json --dispatch dispatch.json --input final.md
@@ -442,6 +454,7 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 - `finalReview.cannotVerifyItems[]` 必须匹配 `cannot_verify` result + dispatch reviewItem 派生事实。
 - `finalReview.validationResults[mode=run]` 必须匹配本次 validator 复算结果。
 - scoped 模式必须有 `excludedRuleRefs`，且不得声明 `coverageClaim = "full_complete"`。
+- `.rules-review-tmp/<run-id>/` 只能包含协议工件：`dispatch.json`、`finalReview.json`、`final.md`、`response.md`，以及 `tasks/`、`retries/`、`shards/`、`validations/` 下的一层 JSON 文件；出现临时脚本或其它非协议文件 => `blocked`。
 
 `semanticVerdict` 派生规则：
 
@@ -472,6 +485,7 @@ stdout 一律输出 strict JSON。
 
 渲染规则：
 
+- 先运行 `validate.js --mode aggregate-final --dir .rules-review-tmp/<run-id> --output finalReview.json` 生成聚合产物。
 - 优先运行 `validate.js --mode render-final --input finalReview.json --dispatch dispatch.json --output final.md`。
 - 最终回复必须运行 `validate.js --mode render-response --dir .rules-review-tmp/<run-id>`。
 - `render-response` 必须先执行并通过同一 run gate；run gate FAIL 时不得生成最终聊天回复。

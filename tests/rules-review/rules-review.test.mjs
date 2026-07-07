@@ -165,6 +165,35 @@ await assertRunPass("run-pass-human-override-single", {
   recommendation: "ready_for_merge",
 });
 
+const builtTasksDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-built-tasks-"));
+const builtTasks = await runValidate([
+  "--mode",
+  "build-tasks",
+  "--dispatch",
+  path.join(fixtures, "run-pass-large-multi", "dispatch.json"),
+  "--out",
+  builtTasksDir,
+]);
+const builtTasksOutput = JSON.parse(builtTasks.stdout);
+assert.equal(builtTasksOutput.ok, true);
+assert.deepEqual(readJson(path.join(builtTasksDir, "B001.json")), readJson(path.join(fixtures, "run-pass-large-multi", "tasks/B001.json")));
+assert.deepEqual(readJson(path.join(builtTasksDir, "B002.json")), readJson(path.join(fixtures, "run-pass-large-multi", "tasks/B002.json")));
+
+const aggregatedFinalPath = path.join(os.tmpdir(), `rules-review-aggregate-${Date.now()}.json`);
+const aggregatedFinal = await runValidate([
+  "--mode",
+  "aggregate-final",
+  "--dir",
+  path.join(fixtures, "run-pass-finding-evidence-key-order"),
+  "--output",
+  aggregatedFinalPath,
+]);
+const aggregatedFinalOutput = JSON.parse(aggregatedFinal.stdout);
+assert.equal(aggregatedFinalOutput.ok, true);
+const expectedAggregatedFinal = readJson(path.join(fixtures, "run-pass-finding-evidence-key-order", "finalReview.json"));
+delete expectedAggregatedFinal.summary;
+assert.deepEqual(readJson(aggregatedFinalPath), expectedAggregatedFinal);
+
 const response = await runValidate([
   "--mode",
   "render-response",
@@ -409,6 +438,11 @@ const forbiddenPriorArtifactDispatch = readJson(forbiddenPriorArtifactDispatchPa
 forbiddenPriorArtifactDispatch.targets.changedUnits[0].source = ".rules-review-tmp/old/final.md";
 writeJson(forbiddenPriorArtifactDispatchPath, forbiddenPriorArtifactDispatch);
 await assertRunDirFails(forbiddenPriorArtifactDir, /dispatch must not reference prior review artifacts/);
+
+const forbiddenRunScriptDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-forbidden-run-script-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), forbiddenRunScriptDir, { recursive: true });
+fs.writeFileSync(path.join(forbiddenRunScriptDir, "generate.mjs"), "export {};\n");
+await assertRunDirFails(forbiddenRunScriptDir, /run directory must only contain rules-review protocol artifacts/);
 
 const shouldFixDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-should-fix-"));
 fs.cpSync(path.join(fixtures, "run-pass-full-clean"), shouldFixDir, { recursive: true });
