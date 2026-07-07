@@ -388,54 +388,27 @@ emptyRequiredContextExpansionDispatch.targets.contextExpansions.push({
 writeJson(emptyRequiredContextExpansionDispatchPath, emptyRequiredContextExpansionDispatch);
 await assertRunDirFails(emptyRequiredContextExpansionDir, /contextExpansions with requiredContextRefs must add candidate targets/);
 
-const priorDiscrepancyDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-prior-discrepancy-"));
-fs.cpSync(path.join(fixtures, "run-pass-full-clean"), priorDiscrepancyDir, { recursive: true });
-const priorDiscrepancyDispatchPath = path.join(priorDiscrepancyDir, "dispatch.json");
-const priorDiscrepancyDispatch = readJson(priorDiscrepancyDispatchPath);
-priorDiscrepancyDispatch.priorReviewCheck = {
-  status: "checked_with_discrepancy",
-  reason: "Prior review had a finding not reproduced in this run.",
-  evidence: [{ source: ".rules-review-tmp/old/final.md", summary: "Prior final.md was compared." }],
-  priorReviewRefs: [".rules-review-tmp/old/final.md"],
-  discrepancies: [{ summary: "Prior F001 was not reconciled.", status: "unexplained" }],
+const forbiddenPriorReviewDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-forbidden-prior-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), forbiddenPriorReviewDir, { recursive: true });
+const forbiddenPriorReviewDispatchPath = path.join(forbiddenPriorReviewDir, "dispatch.json");
+const forbiddenPriorReviewDispatch = readJson(forbiddenPriorReviewDispatchPath);
+forbiddenPriorReviewDispatch.priorReviewCheck = {
+  status: "none_found",
+  reason: "Legacy field should not be accepted.",
+  evidence: [{ source: "manual", summary: "legacy" }],
+  priorReviewRefs: [],
+  discrepancies: [],
 };
-writeJson(priorDiscrepancyDispatchPath, priorDiscrepancyDispatch);
-await assertRunDirFails(priorDiscrepancyDir, /unexplained prior review discrepancy must be represented by cannot_verify result/);
+writeJson(forbiddenPriorReviewDispatchPath, forbiddenPriorReviewDispatch);
+await assertRunDirFails(forbiddenPriorReviewDir, /priorReviewCheck is forbidden/);
 
-const priorDiscrepancyCannotVerifyDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-prior-cannot-verify-"));
-fs.cpSync(path.join(fixtures, "run-pass-full-clean"), priorDiscrepancyCannotVerifyDir, { recursive: true });
-const priorDiscrepancyCannotVerifyDispatchPath = path.join(priorDiscrepancyCannotVerifyDir, "dispatch.json");
-const priorDiscrepancyCannotVerifyDispatch = readJson(priorDiscrepancyCannotVerifyDispatchPath);
-priorDiscrepancyCannotVerifyDispatch.priorReviewCheck = {
-  status: "checked_with_discrepancy",
-  reason: "Prior review had a finding not reproduced in this run.",
-  evidence: [{ source: ".rules-review-tmp/old/final.md", summary: "Prior final.md was compared." }],
-  priorReviewRefs: [".rules-review-tmp/old/final.md"],
-  discrepancies: [{ summary: "Prior F001 was not reconciled.", status: "unexplained", reviewItemId: "RI001" }],
-};
-writeJson(priorDiscrepancyCannotVerifyDispatchPath, priorDiscrepancyCannotVerifyDispatch);
-const priorDiscrepancyCannotVerifyShardPath = path.join(priorDiscrepancyCannotVerifyDir, "shards/B001.json");
-const priorDiscrepancyCannotVerifyShard = readJson(priorDiscrepancyCannotVerifyShardPath);
-priorDiscrepancyCannotVerifyShard.results[0] = {
-  reviewItemId: "RI001",
-  status: "cannot_verify",
-  reason: "Prior F001 needs manual reconciliation.",
-};
-writeJson(priorDiscrepancyCannotVerifyShardPath, priorDiscrepancyCannotVerifyShard);
-const priorDiscrepancyCannotVerifyFinalReviewPath = path.join(priorDiscrepancyCannotVerifyDir, "finalReview.json");
-const priorDiscrepancyCannotVerifyFinalReview = readJson(priorDiscrepancyCannotVerifyFinalReviewPath);
-priorDiscrepancyCannotVerifyFinalReview.semanticVerdict = "unknown";
-priorDiscrepancyCannotVerifyFinalReview.issueSummary = issueSummary({ cannotVerify: 1 });
-priorDiscrepancyCannotVerifyFinalReview.recommendation = "manual_verification_required";
-priorDiscrepancyCannotVerifyFinalReview.cannotVerifyItems = [
-  { reviewItemId: "RI001", ruleRef: "CORE-001", targetId: "T001", reason: "Prior F001 needs manual reconciliation." },
-];
-priorDiscrepancyCannotVerifyFinalReview.validationResults = [runValidationResult(priorDiscrepancyCannotVerifyFinalReview)];
-writeJson(priorDiscrepancyCannotVerifyFinalReviewPath, priorDiscrepancyCannotVerifyFinalReview);
-await renderFinalInDir(priorDiscrepancyCannotVerifyDir);
-const priorDiscrepancyCannotVerifyPass = await runValidate(["--mode", "run", "--dir", priorDiscrepancyCannotVerifyDir]);
-const priorDiscrepancyCannotVerifyOutput = JSON.parse(priorDiscrepancyCannotVerifyPass.stdout);
-assert.equal(priorDiscrepancyCannotVerifyOutput.gate.recommendation, "manual_verification_required");
+const forbiddenPriorArtifactDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-forbidden-prior-artifact-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), forbiddenPriorArtifactDir, { recursive: true });
+const forbiddenPriorArtifactDispatchPath = path.join(forbiddenPriorArtifactDir, "dispatch.json");
+const forbiddenPriorArtifactDispatch = readJson(forbiddenPriorArtifactDispatchPath);
+forbiddenPriorArtifactDispatch.targets.changedUnits[0].source = ".rules-review-tmp/old/final.md";
+writeJson(forbiddenPriorArtifactDispatchPath, forbiddenPriorArtifactDispatch);
+await assertRunDirFails(forbiddenPriorArtifactDir, /dispatch must not reference prior review artifacts/);
 
 const shouldFixDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-should-fix-"));
 fs.cpSync(path.join(fixtures, "run-pass-full-clean"), shouldFixDir, { recursive: true });

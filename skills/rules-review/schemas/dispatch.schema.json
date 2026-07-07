@@ -3,7 +3,7 @@
   "$id": "https://agents.local/rules-review/dispatch.schema.json",
   "title": "rules-review dispatch",
   "type": "object",
-  "required": ["kind", "schemaVersion", "runId", "ruleSet", "targets", "applicabilityMatrix", "reviewItems", "executionPlan", "reviewBatches", "priorReviewCheck"],
+  "required": ["kind", "schemaVersion", "runId", "ruleSet", "targets", "applicabilityMatrix", "reviewItems", "executionPlan", "reviewBatches"],
   "properties": {
     "kind": { "const": "rules-review-dispatch" },
     "schemaVersion": { "const": 2 },
@@ -34,7 +34,7 @@
     "reviewItems": { "type": "array", "items": { "$ref": "#/$defs/reviewItem" } },
     "executionPlan": { "$ref": "#/$defs/executionPlan" },
     "reviewBatches": { "type": "array", "items": { "$ref": "#/$defs/reviewBatch" } },
-    "priorReviewCheck": { "$ref": "#/$defs/priorReviewCheck" }
+    "priorReviewCheck": false
   },
   "$defs": {
     "executionPlan": {
@@ -175,30 +175,6 @@
         "returnStatus": { "enum": ["not_started", "started", "returned", "not_returned", "format_invalid", "untrusted"] },
         "aggregateStatus": { "enum": ["aggregated", "not_aggregated"] },
         "unaggregatedReason": { "type": ["string", "null"] }
-      }
-    },
-    "priorReviewCheck": {
-      "type": "object",
-      "required": ["status", "reason", "evidence", "priorReviewRefs", "discrepancies"],
-      "properties": {
-        "status": {
-          "enum": ["not_applicable", "none_found", "checked_no_discrepancy", "checked_with_discrepancy"]
-        },
-        "reason": { "type": "string", "minLength": 1 },
-        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
-        "priorReviewRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
-        "discrepancies": { "type": "array", "items": { "$ref": "#/$defs/priorReviewDiscrepancy" } }
-      }
-    },
-    "priorReviewDiscrepancy": {
-      "type": "object",
-      "required": ["summary", "status"],
-      "properties": {
-        "summary": { "type": "string", "minLength": 1 },
-        "status": { "enum": ["explained", "unexplained"] },
-        "reason": { "type": "string", "minLength": 1 },
-        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
-        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } }
       }
     },
     "evidence": {

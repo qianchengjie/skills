@@ -29,7 +29,6 @@
 - applicabilityMatrix：31
 - reviewItems：31
 - reviewBatches：2
-- priorReviewCheck：none_found
 - 验证命令：`node skills/rules-review/scripts/validate.js --mode run --dir tests/rules-review/fixtures/run-pass-large-multi`
 - 验证摘要：protocolGate=passed，semanticVerdict=clean，findings=0，mustFix=0，shouldFix=0，cannotVerify=0，observations=0，recommendation=ready_for_merge
 

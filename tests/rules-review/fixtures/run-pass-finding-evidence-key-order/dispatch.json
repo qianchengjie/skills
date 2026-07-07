@@ -199,17 +199,5 @@
         }
       ]
     }
-  ],
-  "priorReviewCheck": {
-    "status": "none_found",
-    "reason": "No prior final.md applies to this fixture run.",
-    "evidence": [
-      {
-        "source": "tests/rules-review/fixtures/run-pass-finding-evidence-key-order",
-        "summary": "Fixture run has no prior review to reconcile."
-      }
-    ],
-    "priorReviewRefs": [],
-    "discrepancies": []
-  }
+  ]
 }

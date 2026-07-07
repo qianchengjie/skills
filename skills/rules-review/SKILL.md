@@ -106,7 +106,6 @@ ruleRef x targetId = reviewItem
 - `reviewItems`
 - `executionPlan`
 - `reviewBatches`
-- `priorReviewCheck`
 
 `ruleSet` 至少包含：
 
@@ -125,7 +124,7 @@ ruleRef x targetId = reviewItem
 - `failureConditions[]`：规则失败条件，包含稳定 `conditionId` 和 `summary`。存在时，`passed.failureChecks[]` 必须覆盖所有 `conditionId`。
 - `requiredContext[]`：规则驱动的必查上下文，包含稳定 `contextId` 和 `summary`。存在时，`targets.contextExpansions[].requiredContextRefs[]` 必须引用并承接。
 
-这些字段只让机器校验“义务是否被记录和承接”，不让机器判断 failure condition 或必查上下文的业务解释是否充分。
+`failureConditions[]` 和 `requiredContext[]` 只能来自 `.agents/rules` 中被消费规则的规则快照；rules-review 不得在 dispatch、task 或审查过程中临时新增、改写或推断这些义务。若规则源未声明 `requiredContext[]`，agent 可以按规则自行扩展上下文目标，但不得把该扩展包装成 requiredContext obligation。这些字段只让机器校验“义务是否被记录和承接”，不让机器判断 failure condition 或必查上下文的业务解释是否充分。
 
 规则集合关系必须闭合：
 
@@ -161,15 +160,7 @@ ruleRef x targetId = reviewItem
 - `targetId`
 - `required`
 
-`priorReviewCheck` 必须记录同一目标是否已有 `.rules-review-tmp/*/final.md` 或等价历史审查结果：
-
-- `status`: `not_applicable / none_found / checked_no_discrepancy / checked_with_discrepancy`
-- `reason`
-- `evidence[]`：例如查找命令、候选目录或不适用原因。
-- `priorReviewRefs[]`
-- `discrepancies[]`
-
-历史差异可标记为 `explained / unexplained`。`unexplained` 差异必须绑定 `reviewItemId` 且由对应 `cannot_verify` result 承接；否则最终 gate 阻塞。
+禁止把其它 review 的结论产物作为输入。建立目标边界、分派、审查和聚合时，不得自动读取或引用既有 `.rules-review-tmp/*/final.md`、`finalReview.json`、旧 `shards/*.json`、旧 `tasks/*.json`、其它 review 报告、MR 评论里的旧审查结论，或任何由“上一次 review 结果”派生的 finding / discrepancy。旧 review 结果不能作为 evidence、context、target、rule 解释或 cannot_verify 来源；如果用户明确粘贴旧结论，只能把它当用户陈述的线索，必须回到规则、diff 和代码证据重新验证。
 
 `executionPlan` 必须在 `ruleSet` 已闭合、`targets`、`applicabilityMatrix` 和 `reviewItems` 已形成后生成。它只记录执行模式选择，不证明选择最优：
 
@@ -419,7 +410,7 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 - `task.applicabilityMatrix[]` 必须等于本 batch `reviewItems[]` 对应的 dispatch 矩阵行。
 - 规则快照声明 `requiredContext[]` 时，`contextExpansions[].requiredContextRefs[]` 必须承接对应 `contextId`。
 - 带 `requiredContextRefs[]` 的 `contextExpansions[]` 必须包含非空 `addedTargetIds[]`。
-- `priorReviewCheck` 必须存在；未解释的历史审查差异必须由对应 `cannot_verify` result 承接，否则进入 `blocked`。
+- `dispatch.json` 不得包含 `priorReviewCheck`，也不得引用既有 `.rules-review-tmp/` review 产物；出现即 `blocked`。
 - result 必须引用已分派的 `reviewItemId`。
 - 同一 `reviewItemId` 多个 result => `blocked`。
 - 同一 `reviewItemId` 不得跨 `reviewBatch` 重复分派。

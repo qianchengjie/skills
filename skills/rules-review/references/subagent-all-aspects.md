@@ -52,8 +52,10 @@
 
 - 只使用 task 分配的 `reviewItems[]`、`rules[]` 和 `targets[]`。
 - 只使用 task 分配的 `applicabilityMatrix[]` 判断本 batch 为什么被分派；不得自行扩写适用性矩阵。
+- 不新增、删除或改写 `rules[].failureConditions[]`、`rules[].requiredContext[]`；这些义务只能来自 task 中的规则快照。
 - 不自行维护 `.agents/rules/`，不补规则，不改 ruleRef。
 - 不从 `git diff` / `git status` 重建目标台账。
+- 不读取或引用其它 review 的结论产物，包括既有 `.rules-review-tmp/*/final.md`、`finalReview.json`、旧 shard/task 或 Markdown review 报告。
 - 输出必须是单个 strict JSON 对象，且符合 `schemas/shard.schema.json`。
 - 不输出最终 Markdown、全局 `protocolGate` 或 `semanticVerdict`。
 - 不生成最终 `finding` 汇总；只在 `results[]` 中按 `reviewItemId` 返回局部结论。

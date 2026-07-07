@@ -29,7 +29,6 @@
 - applicabilityMatrix：4
 - reviewItems：3
 - reviewBatches：1
-- priorReviewCheck：none_found
 - 验证命令：`node skills/rules-review/scripts/validate.js --mode run --dir tests/rules-review/fixtures/run-pass-full-clean`
 - 验证摘要：protocolGate=passed，semanticVerdict=clean，findings=0，mustFix=0，shouldFix=0，cannotVerify=0，observations=0，recommendation=ready_for_merge
 

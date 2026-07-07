@@ -35,8 +35,6 @@ const EXECUTION_MODES = ['single_batch', 'multi_batch'];
 const EXECUTION_SELECTED_BY = ['ai', 'human_override'];
 const APPLICABILITY_STATUSES = ['applicable', 'not_applicable'];
 const FAILURE_CHECK_OUTCOMES = ['checked_no_violation', 'not_triggered'];
-const PRIOR_REVIEW_STATUSES = ['not_applicable', 'none_found', 'checked_no_discrepancy', 'checked_with_discrepancy'];
-const PRIOR_REVIEW_DISCREPANCY_STATUSES = ['explained', 'unexplained'];
 const REVIEW_ITEM_RE = /^RI\d{3}$/;
 const FINDING_RE = /^F\d{3}$/;
 
@@ -252,15 +250,15 @@ function readText(filePath, artifact, result, code, gateImpact = 'blocked') {
 function validateDispatch(dispatch, artifact, result) {
   expectKind(dispatch, artifact, result, 'D002', 'rules-review-dispatch');
   validateSchemaVersion(dispatch, artifact, result, 'D003');
-  requireFields(dispatch, artifact, result, 'D004', '', ['kind', 'schemaVersion', 'runId', 'ruleSet', 'targets', 'applicabilityMatrix', 'reviewItems', 'executionPlan', 'reviewBatches', 'priorReviewCheck']);
+  requireFields(dispatch, artifact, result, 'D004', '', ['kind', 'schemaVersion', 'runId', 'ruleSet', 'targets', 'applicabilityMatrix', 'reviewItems', 'executionPlan', 'reviewBatches']);
   if (!isNonEmptyString(dispatch.runId)) addViolation(result, 'D005', artifact, '/runId', 'runId must be non-empty string', 'string', dispatch.runId);
+  validateNoPriorReviewInputs(dispatch, artifact, result);
 
   const ruleSet = validateRuleSet(dispatch.ruleSet, artifact, result);
   const targets = validateTargets(dispatch.targets, artifact, result);
   const reviewItems = validateReviewItems(dispatch.reviewItems, ruleSet, targets, artifact, result);
   validateApplicabilityMatrix(dispatch.applicabilityMatrix, ruleSet, targets, reviewItems, artifact, result);
   validateRequiredContextCoverage(ruleSet, dispatch.targets, artifact, result);
-  validatePriorReviewCheck(dispatch.priorReviewCheck, reviewItems, artifact, result);
   validateReviewBatches(dispatch.reviewBatches, ruleSet, reviewItems, artifact, result);
   validateExecutionPlan(dispatch.executionPlan, dispatch, ruleSet, reviewItems, artifact, result);
 }
@@ -545,52 +543,31 @@ function validateRequiredContextCoverage(ruleSet, targets, artifact, result) {
   });
 }
 
-function validatePriorReviewCheck(value, reviewItems, artifact, result) {
-  if (!isObject(value)) {
-    addViolation(result, 'D180', artifact, '/priorReviewCheck', 'priorReviewCheck must be object', 'object', value);
+function validateNoPriorReviewInputs(dispatch, artifact, result) {
+  if (Object.prototype.hasOwnProperty.call(dispatch, 'priorReviewCheck')) {
+    addViolation(result, 'D180', artifact, '/priorReviewCheck', 'priorReviewCheck is forbidden; rules-review must not consume prior review results', 'field absent', dispatch.priorReviewCheck);
+  }
+  validateNoPriorReviewArtifactRefs(dispatch, artifact, result, '');
+}
+
+function validateNoPriorReviewArtifactRefs(value, artifact, result, pointer) {
+  if (typeof value === 'string') {
+    if (value.includes('.rules-review-tmp/') || value.includes('.rules-review-tmp\\')) {
+      addViolation(result, 'D181', artifact, pointer || '/', 'dispatch must not reference prior review artifacts', 'no prior review artifact reference', value);
+    }
     return;
   }
-
-  requireFields(value, artifact, result, 'D181', '/priorReviewCheck', ['status', 'reason', 'evidence', 'priorReviewRefs', 'discrepancies']);
-  if (!PRIOR_REVIEW_STATUSES.includes(value.status)) {
-    addViolation(result, 'D182', artifact, '/priorReviewCheck/status', 'priorReviewCheck.status must be valid', PRIOR_REVIEW_STATUSES, value.status);
-  }
-  if (!isNonEmptyString(value.reason)) {
-    addViolation(result, 'D183', artifact, '/priorReviewCheck/reason', 'priorReviewCheck.reason must be non-empty string', 'non-empty reason', value.reason);
-  }
-  validateEvidenceArray(value.evidence, artifact, result, 'D184', '/priorReviewCheck/evidence', 'priorReviewCheck requires evidence');
-  const priorReviewRefs = validateStringSet(value.priorReviewRefs, artifact, result, 'D185', '/priorReviewCheck/priorReviewRefs');
-  if (!Array.isArray(value.discrepancies)) {
-    addViolation(result, 'D186', artifact, '/priorReviewCheck/discrepancies', 'priorReviewCheck.discrepancies must be array', 'array', value.discrepancies);
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => validateNoPriorReviewArtifactRefs(item, artifact, result, `${pointer}/${index}`));
     return;
   }
+  if (isObject(value)) {
+    Object.entries(value).forEach(([key, item]) => validateNoPriorReviewArtifactRefs(item, artifact, result, `${pointer}/${escapeJsonPointer(key)}`));
+  }
+}
 
-  if (['checked_no_discrepancy', 'checked_with_discrepancy'].includes(value.status) && priorReviewRefs.size === 0) {
-    addViolation(result, 'D187', artifact, '/priorReviewCheck/priorReviewRefs', 'checked prior review status requires priorReviewRefs', 'non-empty priorReviewRefs', value.priorReviewRefs);
-  }
-  if (['not_applicable', 'none_found'].includes(value.status) && (priorReviewRefs.size > 0 || value.discrepancies.length > 0)) {
-    addViolation(result, 'D196', artifact, '/priorReviewCheck', 'not_applicable or none_found prior review status requires empty priorReviewRefs and discrepancies', { priorReviewRefs: [], discrepancies: [] }, value);
-  }
-  if (value.status === 'checked_no_discrepancy' && value.discrepancies.length > 0) {
-    addViolation(result, 'D188', artifact, '/priorReviewCheck/discrepancies', 'checked_no_discrepancy requires empty discrepancies', [], value.discrepancies);
-  }
-  if (value.status === 'checked_with_discrepancy' && value.discrepancies.length === 0) {
-    addViolation(result, 'D189', artifact, '/priorReviewCheck/discrepancies', 'checked_with_discrepancy requires discrepancies', 'non-empty discrepancies', value.discrepancies);
-  }
-
-  value.discrepancies.forEach((entry, index) => {
-    const pointer = `/priorReviewCheck/discrepancies/${index}`;
-    requireFields(entry, artifact, result, 'D190', pointer, ['summary', 'status']);
-    if (!isNonEmptyString(entry && entry.summary)) addViolation(result, 'D191', artifact, `${pointer}/summary`, 'prior review discrepancy summary must be non-empty string', 'string', entry && entry.summary);
-    if (!PRIOR_REVIEW_DISCREPANCY_STATUSES.includes(entry && entry.status)) addViolation(result, 'D192', artifact, `${pointer}/status`, 'prior review discrepancy status must be valid', PRIOR_REVIEW_DISCREPANCY_STATUSES, entry && entry.status);
-    if (entry && entry.status === 'explained' && !isNonEmptyString(entry.reason) && !hasValidEvidenceArray(entry.evidence)) {
-      addViolation(result, 'D193', artifact, pointer, 'explained discrepancy requires reason or evidence', 'reason or evidence[]', entry);
-    }
-    if (entry && entry.evidence !== undefined) validateEvidenceArray(entry.evidence, artifact, result, 'D194', `${pointer}/evidence`, 'prior review discrepancy evidence must be reviewable when present');
-    if (entry && entry.reviewItemId !== undefined && !reviewItems.has(entry.reviewItemId)) {
-      addViolation(result, 'D195', artifact, `${pointer}/reviewItemId`, 'prior review discrepancy reviewItemId must exist in reviewItems', Array.from(reviewItems.keys()), entry.reviewItemId);
-    }
-  });
+function escapeJsonPointer(value) {
+  return String(value).replace(/~/g, '~0').replace(/\//g, '~1');
 }
 
 function validateReviewBatches(reviewBatches, ruleSet, reviewItems, artifact, result) {
@@ -1051,7 +1028,6 @@ function validateRun(runDir, result) {
 
   const runState = dispatch ? validateRunArtifacts(runDir, dispatch, result) : { results: [], resultOwners: new Map() };
   if (dispatch) validateRequiredResults(dispatch, runState.results, runState.resultOwners, result);
-  if (dispatch) validatePriorReviewDiscrepancies(dispatch, runState.results, result);
 
   const beforeFinalGate = calculateGate(dispatch, runState.results, result);
   if (finalReview && dispatch) validateFinalReviewAgainstComputed(finalReview, dispatch, runState.results, beforeFinalGate, rel(runDir, finalReviewPath), result);
@@ -1234,18 +1210,6 @@ function validateRequiredResults(dispatch, results, resultOwners, result) {
       addViolation(result, 'RUN041', result.artifact, `/reviewItems/${item.reviewItemId}`, 'required reviewItem must have exactly one result', 'one result', 0, 1, 'incomplete');
     } else if (owners.length > 1) {
       addViolation(result, 'RUN042', result.artifact, `/reviewItems/${item.reviewItemId}`, 'reviewItem has duplicate results', 'one result', owners.length);
-    }
-  });
-}
-
-function validatePriorReviewDiscrepancies(dispatch, results, result) {
-  const resultsByReviewItemId = new Map(asArray(results).map((reviewResult) => [reviewResult && reviewResult.reviewItemId, reviewResult]));
-  asArray(dispatch && dispatch.priorReviewCheck && dispatch.priorReviewCheck.discrepancies).forEach((discrepancy, index) => {
-    if (!discrepancy || discrepancy.status !== 'unexplained') return;
-    const pointer = `/priorReviewCheck/discrepancies/${index}`;
-    const reviewResult = resultsByReviewItemId.get(discrepancy.reviewItemId);
-    if (!reviewResult || reviewResult.status !== 'cannot_verify') {
-      addViolation(result, 'RUN050', 'dispatch.json', pointer, 'unexplained prior review discrepancy must be represented by cannot_verify result or explained before final gate', 'matching status=cannot_verify result', discrepancy);
     }
   });
 }
@@ -2052,7 +2016,6 @@ function formatAuditLines(finalReview, dispatch, runDir) {
     `- applicabilityMatrix：${asArray(dispatch && dispatch.applicabilityMatrix).length}`,
     `- reviewItems：${asArray(dispatch && dispatch.reviewItems).length}`,
     `- reviewBatches：${asArray(dispatch && dispatch.reviewBatches).length}`,
-    `- priorReviewCheck：${dispatch && dispatch.priorReviewCheck ? dispatch.priorReviewCheck.status : '未知'}`,
     `- 验证命令：\`${formatRunCommand(runDir)}\``,
     `- 验证摘要：protocolGate=${validation.protocolGate || '未知'}，semanticVerdict=${validation.semanticVerdict || '未知'}，findings=${formatMetric(validation.issueSummary && validation.issueSummary.findings)}，mustFix=${formatMetric(validation.issueSummary && validation.issueSummary.mustFix)}，shouldFix=${formatMetric(validation.issueSummary && validation.issueSummary.shouldFix)}，cannotVerify=${formatMetric(validation.issueSummary && validation.issueSummary.cannotVerify)}，observations=${formatMetric(validation.issueSummary && validation.issueSummary.observations)}，recommendation=${validation.recommendation || '未知'}`,
   ];
