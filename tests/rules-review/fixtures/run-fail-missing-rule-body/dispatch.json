@@ -29,7 +29,8 @@
         ],
         "appliesTo": [
           "*"
-        ]
+        ],
+        "ruleLevel": "MUST"
       },
       {
         "namespace": "TYPE",
@@ -41,7 +42,8 @@
         ],
         "appliesTo": [
           "src/**/*.ts"
-        ]
+        ],
+        "ruleLevel": "SHOULD"
       },
       {
         "namespace": "UI",
@@ -53,7 +55,8 @@
         ],
         "appliesTo": [
           "src/**/*.tsx"
-        ]
+        ],
+        "ruleLevel": "ADVISORY"
       }
     ]
   },

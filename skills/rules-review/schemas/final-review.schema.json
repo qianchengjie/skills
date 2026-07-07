@@ -3,7 +3,7 @@
   "$id": "https://agents.local/rules-review/final-review.schema.json",
   "title": "rules-review final review",
   "type": "object",
-  "required": ["kind", "schemaVersion", "runId", "protocolGate", "scopeMode", "coverageClaim", "semanticVerdict", "excludedRuleRefs", "findings", "issueSummary", "recommendation", "validationResults"],
+  "required": ["kind", "schemaVersion", "runId", "protocolGate", "scopeMode", "coverageClaim", "semanticVerdict", "excludedRuleRefs", "findings", "observations", "issueSummary", "recommendation", "validationResults"],
   "properties": {
     "kind": { "const": "rules-review-final-review" },
     "schemaVersion": { "const": 2 },
@@ -14,8 +14,9 @@
     "semanticVerdict": { "enum": ["clean", "issues", "unknown"] },
     "excludedRuleRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
     "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+    "observations": { "type": "array", "items": { "$ref": "#/$defs/observation" } },
     "issueSummary": { "$ref": "#/$defs/issueSummary" },
-    "recommendation": { "enum": ["ready_for_merge", "must_fix_before_merge", "manual_verification_required", "review_incomplete", "review_blocked"] },
+    "recommendation": { "enum": ["ready_for_merge", "must_fix_before_merge", "should_review_before_merge", "manual_verification_required", "review_incomplete", "review_blocked"] },
     "cannotVerifyItems": { "type": "array", "items": { "$ref": "#/$defs/cannotVerifyItem" } },
     "validationResults": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/validationResult" } },
     "summary": { "type": "string" }
@@ -23,10 +24,13 @@
   "$defs": {
     "issueSummary": {
       "type": "object",
-      "required": ["findings", "cannotVerify"],
+      "required": ["findings", "mustFix", "shouldFix", "cannotVerify", "observations"],
       "properties": {
         "findings": { "type": "integer", "minimum": 0 },
-        "cannotVerify": { "type": "integer", "minimum": 0 }
+        "mustFix": { "type": "integer", "minimum": 0 },
+        "shouldFix": { "type": "integer", "minimum": 0 },
+        "cannotVerify": { "type": "integer", "minimum": 0 },
+        "observations": { "type": "integer", "minimum": 0 }
       }
     },
     "cannotVerifyItem": {
@@ -48,19 +52,61 @@
         "protocolGate": { "enum": ["passed", "incomplete", "blocked"] },
         "semanticVerdict": { "enum": ["clean", "issues", "unknown"] },
         "issueSummary": { "$ref": "#/$defs/issueSummary" },
-        "recommendation": { "enum": ["ready_for_merge", "must_fix_before_merge", "manual_verification_required", "review_incomplete", "review_blocked"] }
+        "recommendation": { "enum": ["ready_for_merge", "must_fix_before_merge", "should_review_before_merge", "manual_verification_required", "review_incomplete", "review_blocked"] }
       }
     },
     "finding": {
       "type": "object",
-      "required": ["findingId", "reviewItemId", "ruleRef", "targetId", "evidence"],
+      "required": ["findingId", "reviewItemId", "ruleRef", "targetId", "ruleLevel", "origin", "priority", "evidence"],
       "properties": {
         "findingId": { "type": "string", "pattern": "^F\\d{3}$" },
         "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
         "ruleRef": { "type": "string", "minLength": 1 },
         "targetId": { "type": "string", "minLength": 1 },
+        "ruleLevel": { "enum": ["MUST", "SHOULD", "ADVISORY"] },
+        "origin": { "enum": ["introduced_by_change", "worsened_by_change", "exposed_by_change", "pre_existing"] },
+        "priority": { "enum": ["must_fix", "should_fix"] },
+        "priorityReason": { "type": "string", "minLength": 1 },
+        "upgradeReason": { "type": "string", "minLength": 1 },
+        "originReason": { "type": "string", "minLength": 1 },
+        "acceptedRisk": { "$ref": "#/$defs/acceptedRisk" },
         "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } }
       }
+    },
+    "observation": {
+      "type": "object",
+      "required": ["reviewItemId", "ruleRef", "targetId", "ruleLevel", "origin"],
+      "anyOf": [
+        { "required": ["reason"] },
+        { "required": ["evidence"] }
+      ],
+      "properties": {
+        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
+        "ruleRef": { "type": "string", "minLength": 1 },
+        "targetId": { "type": "string", "minLength": 1 },
+        "ruleLevel": { "enum": ["MUST", "SHOULD", "ADVISORY"] },
+        "origin": { "enum": ["introduced_by_change", "worsened_by_change", "exposed_by_change", "pre_existing"] },
+        "reason": { "type": "string", "minLength": 1 },
+        "upgradeReason": { "type": "string", "minLength": 1 },
+        "originReason": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } }
+      }
+    },
+    "acceptedRisk": {
+      "type": "object",
+      "required": ["status", "acceptedBy", "scope", "reason"],
+      "properties": {
+        "status": { "const": "accepted" },
+        "acceptedBy": { "enum": ["human", "user", "project_owner"] },
+        "scope": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 },
+        "expiresAt": { "type": "string", "minLength": 1 },
+        "followUp": { "type": "string", "minLength": 1 }
+      },
+      "anyOf": [
+        { "required": ["expiresAt"] },
+        { "required": ["followUp"] }
+      ]
     },
     "evidence": {
       "type": "object",

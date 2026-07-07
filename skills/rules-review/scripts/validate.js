@@ -18,12 +18,18 @@ const MODES = new Set([
 const SCHEMA_VERSION = 2;
 const RETURN_STATUSES = ['not_started', 'started', 'returned', 'not_returned', 'format_invalid', 'untrusted'];
 const AGGREGATE_STATUSES = ['aggregated', 'not_aggregated'];
-const RESULT_STATUSES = ['passed', 'finding', 'not_applicable', 'cannot_verify'];
+const RESULT_STATUSES = ['passed', 'finding', 'observation', 'not_applicable', 'cannot_verify'];
 const PROTOCOL_GATES = ['passed', 'incomplete', 'blocked'];
 const SCOPE_MODES = ['full', 'scoped'];
 const COVERAGE_CLAIMS = ['full_complete', 'scoped_complete', 'incomplete', 'blocked'];
 const SEMANTIC_VERDICTS = ['clean', 'issues', 'unknown'];
-const RECOMMENDATIONS = ['ready_for_merge', 'must_fix_before_merge', 'manual_verification_required', 'review_incomplete', 'review_blocked'];
+const RECOMMENDATIONS = ['ready_for_merge', 'must_fix_before_merge', 'should_review_before_merge', 'manual_verification_required', 'review_incomplete', 'review_blocked'];
+const RULE_LEVELS = ['MUST', 'SHOULD', 'ADVISORY'];
+const FINDING_ORIGINS = ['introduced_by_change', 'worsened_by_change', 'exposed_by_change', 'pre_existing'];
+const FINDING_PRIORITIES = ['must_fix', 'should_fix'];
+const ACCEPTED_RISK_STATUSES = ['accepted'];
+const ACCEPTED_RISK_ACCEPTED_BY = ['human', 'user', 'project_owner'];
+const ISSUE_SUMMARY_FIELDS = ['findings', 'mustFix', 'shouldFix', 'cannotVerify', 'observations'];
 const EXECUTION_POLICY_VERSION = 'review-execution-policy/v1';
 const EXECUTION_MODES = ['single_batch', 'multi_batch'];
 const EXECUTION_SELECTED_BY = ['ai', 'human_override'];
@@ -43,9 +49,16 @@ const LABELS = {
   unknown: '未知',
   ready_for_merge: '可以合并',
   must_fix_before_merge: '合并前必须修复',
+  should_review_before_merge: '合并前建议确认',
   manual_verification_required: '需要人工验证',
   review_incomplete: '审查未完成',
   review_blocked: '审查阻塞',
+  must_fix: '必须修复',
+  should_fix: '建议修复',
+  introduced_by_change: '本次引入',
+  worsened_by_change: '本次加重',
+  exposed_by_change: '本次暴露',
+  pre_existing: '历史存在',
 };
 
 const PROTOCOL_GATE_LABELS = {
@@ -296,12 +309,13 @@ function validateRuleSet(ruleSet, artifact, result) {
   } else {
     ruleSet.ruleSources.forEach((source, index) => {
       const pointer = `/ruleSet/ruleSources/${index}`;
-      requireFields(source, artifact, result, 'D025', pointer, ['namespace', 'ruleRef', 'sourceFile', 'sourceHash', 'trigger', 'appliesTo']);
+      requireFields(source, artifact, result, 'D025', pointer, ['namespace', 'ruleRef', 'ruleLevel', 'sourceFile', 'sourceHash', 'trigger', 'appliesTo']);
       if (!isNonEmptyString(source && source.namespace)) addViolation(result, 'D026', artifact, `${pointer}/namespace`, 'namespace must be non-empty string', 'string', source && source.namespace);
       if (!isNonEmptyString(source && source.ruleRef)) addViolation(result, 'D027', artifact, `${pointer}/ruleRef`, 'ruleRef must be non-empty string', 'string', source && source.ruleRef);
       if (!isNonEmptyString(source && source.sourceFile)) addViolation(result, 'D028', artifact, `${pointer}/sourceFile`, 'sourceFile must be non-empty string', 'string', source && source.sourceFile);
       if (!isNonEmptyString(source && source.sourceHash)) addViolation(result, 'D029', artifact, `${pointer}/sourceHash`, 'sourceHash is required', 'non-empty hash', source && source.sourceHash);
       if (!candidateRuleRefs.has(source && source.ruleRef)) addViolation(result, 'D030', artifact, `${pointer}/ruleRef`, 'ruleSources[].ruleRef must be in candidateRuleRefs', Array.from(candidateRuleRefs), source && source.ruleRef);
+      if (!RULE_LEVELS.includes(source && source.ruleLevel)) addViolation(result, 'D034', artifact, `${pointer}/ruleLevel`, 'ruleSources[].ruleLevel must be valid', RULE_LEVELS, source && source.ruleLevel);
       if (!hasRuleBody(source)) addViolation(result, 'D032', artifact, pointer, 'rule source requires summary or ruleText', 'non-empty summary or ruleText', source);
       if (source && source.ruleRef) ruleSourcesByRuleRef.set(source.ruleRef, source);
     });
@@ -589,7 +603,8 @@ function validateTask(task, artifact, result) {
   });
   asArray(task.rules).forEach((rule, index) => {
     const pointer = `/rules/${index}`;
-    requireFields(rule, artifact, result, 'T010', pointer, ['namespace', 'ruleRef', 'sourceFile', 'sourceHash', 'trigger', 'appliesTo']);
+    requireFields(rule, artifact, result, 'T010', pointer, ['namespace', 'ruleRef', 'ruleLevel', 'sourceFile', 'sourceHash', 'trigger', 'appliesTo']);
+    if (!RULE_LEVELS.includes(rule && rule.ruleLevel)) addViolation(result, 'T017', artifact, `${pointer}/ruleLevel`, 'task ruleLevel must be valid', RULE_LEVELS, rule && rule.ruleLevel);
     if (!isNonEmptyString(rule && rule.sourceHash)) addViolation(result, 'T011', artifact, `${pointer}/sourceHash`, 'sourceHash is required', 'non-empty hash', rule && rule.sourceHash);
     if (!hasRuleBody(rule)) addViolation(result, 'T016', artifact, pointer, 'task rule requires summary or ruleText', 'non-empty summary or ruleText', rule);
   });
@@ -625,11 +640,12 @@ function validateShard(shard, task, artifact, result) {
     addViolation(result, 'S007', artifact, '/results', 'results must be array', 'array', shard.results);
     return;
   }
+  const taskContext = buildTaskContext(task);
   const taskItemIds = new Set(asArray(task && task.reviewItems).map((item) => item.reviewItemId));
   const seen = new Set();
   shard.results.forEach((reviewResult, index) => {
     const pointer = `/results/${index}`;
-    validateReviewResult(reviewResult, artifact, result, pointer, 'S');
+    validateReviewResult(reviewResult, artifact, result, pointer, 'S', taskContext);
     if (seen.has(reviewResult && reviewResult.reviewItemId)) {
       addViolation(result, 'S020', artifact, `${pointer}/reviewItemId`, 'reviewItem has duplicate results in shard', 'one result per reviewItemId', reviewResult && reviewResult.reviewItemId);
     }
@@ -646,7 +662,13 @@ function validateShard(shard, task, artifact, result) {
   }
 }
 
-function validateReviewResult(reviewResult, artifact, result, pointer, prefix) {
+function buildTaskContext(task) {
+  const reviewItems = new Map(asArray(task && task.reviewItems).map((item) => [item.reviewItemId, item]));
+  const rules = new Map(asArray(task && task.rules).map((rule) => [rule.ruleRef, rule]));
+  return { reviewItems, rules };
+}
+
+function validateReviewResult(reviewResult, artifact, result, pointer, prefix, taskContext) {
   requireFields(reviewResult, artifact, result, `${prefix}010`, pointer, ['reviewItemId', 'status']);
   if (!REVIEW_ITEM_RE.test(reviewResult && reviewResult.reviewItemId)) addViolation(result, `${prefix}011`, artifact, `${pointer}/reviewItemId`, 'reviewItemId must match RIxxx', 'RIxxx', reviewResult && reviewResult.reviewItemId);
   if (!RESULT_STATUSES.includes(reviewResult && reviewResult.status)) addViolation(result, `${prefix}012`, artifact, `${pointer}/status`, 'result status must be valid', RESULT_STATUSES, reviewResult && reviewResult.status);
@@ -654,6 +676,14 @@ function validateReviewResult(reviewResult, artifact, result, pointer, prefix) {
   if (reviewResult && reviewResult.status === 'finding') {
     if (!FINDING_RE.test(reviewResult.findingId)) addViolation(result, `${prefix}013`, artifact, `${pointer}/findingId`, 'finding result requires findingId and evidence', 'Fxxx', reviewResult.findingId);
     validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}014`, `${pointer}/evidence`, 'finding result requires findingId and evidence');
+    validateReviewResultDisposition(reviewResult, taskContext, artifact, result, pointer, prefix);
+  }
+  if (reviewResult && reviewResult.status === 'observation') {
+    if (!hasValidEvidenceArray(reviewResult.evidence) && !isNonEmptyString(reviewResult.reason)) {
+      addViolation(result, `${prefix}019`, artifact, pointer, 'observation result requires reason or evidence', 'reason or evidence[]', reviewResult);
+    }
+    if (reviewResult.evidence !== undefined) validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}020`, `${pointer}/evidence`, 'observation evidence must be reviewable when present');
+    validateReviewResultDisposition(reviewResult, taskContext, artifact, result, pointer, prefix);
   }
   if (reviewResult && reviewResult.status === 'passed') {
     validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}015`, `${pointer}/evidence`, 'passed result requires evidence');
@@ -667,6 +697,89 @@ function validateReviewResult(reviewResult, artifact, result, pointer, prefix) {
   if (reviewResult && reviewResult.status === 'not_applicable' && reviewResult.evidence !== undefined) {
     validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}018`, `${pointer}/evidence`, 'not_applicable evidence must be reviewable when present');
   }
+}
+
+function validateReviewResultDisposition(reviewResult, taskContext, artifact, result, pointer, prefix) {
+  const origin = reviewResult && reviewResult.origin;
+  const ruleLevel = ruleLevelForReviewResult(reviewResult, taskContext);
+  if (!FINDING_ORIGINS.includes(origin)) addViolation(result, `${prefix}023`, artifact, `${pointer}/origin`, 'finding or observation origin must be valid', FINDING_ORIGINS, origin);
+  if (reviewResult.priority !== undefined && !FINDING_PRIORITIES.includes(reviewResult.priority)) {
+    addViolation(result, `${prefix}024`, artifact, `${pointer}/priority`, 'finding priority must be valid', FINDING_PRIORITIES, reviewResult.priority);
+  }
+  if (!RULE_LEVELS.includes(ruleLevel)) return;
+  if (!FINDING_ORIGINS.includes(origin)) return;
+
+  const expectedStatus = defaultResultStatus(ruleLevel, origin);
+  if (reviewResult.status !== expectedStatus) {
+    if (reviewResult.status === 'finding' && expectedStatus === 'observation') {
+      if (!isNonEmptyString(reviewResult.upgradeReason)) addViolation(result, `${prefix}025`, artifact, `${pointer}/upgradeReason`, 'upgraded finding requires upgradeReason', 'non-empty upgradeReason', reviewResult.upgradeReason);
+      if (origin === 'pre_existing' && !isNonEmptyString(reviewResult.originReason)) addViolation(result, `${prefix}026`, artifact, `${pointer}/originReason`, 'pre_existing finding upgrade requires originReason', 'non-empty originReason', reviewResult.originReason);
+    } else {
+      addViolation(result, `${prefix}027`, artifact, `${pointer}/status`, 'result status must follow ruleLevel and origin default mapping', expectedStatus, reviewResult.status);
+    }
+  }
+
+  if (reviewResult.status === 'finding') {
+    const expectedPriority = defaultFindingPriority(ruleLevel);
+    const actualPriority = reviewResult.priority || expectedPriority;
+    if (!FINDING_PRIORITIES.includes(actualPriority)) return;
+    if (ruleLevel === 'MUST' && actualPriority !== 'must_fix') {
+      validateAcceptedRisk(reviewResult.acceptedRisk, artifact, result, `${prefix}028`, `${pointer}/acceptedRisk`);
+    }
+    if (actualPriority !== expectedPriority && ruleLevel !== 'MUST' && !isNonEmptyString(reviewResult.priorityReason)) {
+      addViolation(result, `${prefix}029`, artifact, `${pointer}/priorityReason`, 'priority override requires priorityReason', 'non-empty priorityReason', reviewResult.priorityReason);
+    }
+  }
+}
+
+function ruleLevelForReviewResult(reviewResult, taskContext) {
+  const item = taskContext && taskContext.reviewItems ? taskContext.reviewItems.get(reviewResult && reviewResult.reviewItemId) : null;
+  const rule = item && taskContext && taskContext.rules ? taskContext.rules.get(item.ruleRef) : null;
+  return rule && rule.ruleLevel;
+}
+
+function defaultResultStatus(ruleLevel, origin) {
+  if (ruleLevel === 'ADVISORY') return 'observation';
+  if (origin === 'introduced_by_change' || origin === 'worsened_by_change') return 'finding';
+  return 'observation';
+}
+
+function defaultFindingPriority(ruleLevel) {
+  return ruleLevel === 'MUST' ? 'must_fix' : 'should_fix';
+}
+
+function validateAcceptedRisk(value, artifact, result, code, pointer) {
+  if (!isObject(value)) {
+    addViolation(result, code, artifact, pointer, 'acceptedRisk must be object for MUST downgrade', 'acceptedRisk object', value);
+    return false;
+  }
+  let ok = true;
+  const required = ['status', 'acceptedBy', 'scope', 'reason'];
+  required.forEach((field) => {
+    if (!(field in value)) {
+      addViolation(result, code, artifact, `${pointer}/${field}`, 'acceptedRisk required field is missing', field, null);
+      ok = false;
+    }
+  });
+  if (!ACCEPTED_RISK_STATUSES.includes(value.status)) {
+    addViolation(result, code, artifact, `${pointer}/status`, 'acceptedRisk.status must be accepted', ACCEPTED_RISK_STATUSES, value.status);
+    ok = false;
+  }
+  if (!ACCEPTED_RISK_ACCEPTED_BY.includes(value.acceptedBy)) {
+    addViolation(result, code, artifact, `${pointer}/acceptedBy`, 'acceptedRisk.acceptedBy must be valid', ACCEPTED_RISK_ACCEPTED_BY, value.acceptedBy);
+    ok = false;
+  }
+  ['scope', 'reason'].forEach((field) => {
+    if (!isNonEmptyString(value[field])) {
+      addViolation(result, code, artifact, `${pointer}/${field}`, 'acceptedRisk field must be non-empty string', 'string', value[field]);
+      ok = false;
+    }
+  });
+  if (!isNonEmptyString(value.expiresAt) && !isNonEmptyString(value.followUp)) {
+    addViolation(result, code, artifact, pointer, 'acceptedRisk requires expiresAt or followUp', 'expiresAt or followUp', value);
+    ok = false;
+  }
+  return ok;
 }
 
 function validateRun(runDir, result) {
@@ -806,6 +919,9 @@ function validateTaskAgainstDispatch(task, dispatch, batch, reviewItems, artifac
     if (rule.sourceHash !== source.sourceHash) {
       addViolation(result, 'RUN027', artifact, `/rules/${index}/sourceHash`, 'task.rules[].sourceHash must match dispatch ruleSources[].sourceHash', source.sourceHash, rule.sourceHash);
     }
+    if (rule.ruleLevel !== source.ruleLevel) {
+      addViolation(result, 'RUN033', artifact, `/rules/${index}/ruleLevel`, 'task.rules[].ruleLevel must match dispatch ruleSources[].ruleLevel', source.ruleLevel, rule.ruleLevel);
+    }
     if (!rulesHaveSameBody(rule, source)) {
       addViolation(result, 'RUN031', artifact, `/rules/${index}`, 'task rule summary or ruleText must match dispatch ruleSource', { summary: source.summary || null, ruleText: source.ruleText || null }, { summary: rule.summary || null, ruleText: rule.ruleText || null });
     }
@@ -853,7 +969,7 @@ function calculateGate(dispatch, results, result) {
         ? 'scoped_complete'
         : 'full_complete';
   const semanticVerdict = deriveSemanticVerdict(results, protocolGate);
-  const issueSummary = deriveIssueSummary(results);
+  const issueSummary = deriveIssueSummary(results, dispatch);
   const recommendation = deriveRecommendation(protocolGate, issueSummary);
   return { protocolGate, scopeMode, coverageClaim, semanticVerdict, issueSummary, recommendation };
 }
@@ -865,32 +981,107 @@ function deriveSemanticVerdict(results, protocolGate) {
   return 'clean';
 }
 
-function deriveIssueSummary(results) {
+function deriveIssueSummary(results, dispatch) {
+  const findings = asArray(results).filter((reviewResult) => reviewResult && reviewResult.status === 'finding');
   return {
-    findings: asArray(results).filter((reviewResult) => reviewResult && reviewResult.status === 'finding').length,
+    findings: findings.length,
+    mustFix: findings.filter((reviewResult) => deriveFindingPriority(reviewResult, dispatch) === 'must_fix').length,
+    shouldFix: findings.filter((reviewResult) => deriveFindingPriority(reviewResult, dispatch) === 'should_fix').length,
     cannotVerify: asArray(results).filter((reviewResult) => reviewResult && reviewResult.status === 'cannot_verify').length,
+    observations: asArray(results).filter((reviewResult) => reviewResult && reviewResult.status === 'observation').length,
   };
 }
 
 function issueSummaryFromFinalReview(finalReview) {
+  const findings = asArray(finalReview && finalReview.findings);
+  const observations = asArray(finalReview && finalReview.observations);
   if (isObject(finalReview && finalReview.issueSummary)) {
     return {
-      findings: Number.isInteger(finalReview.issueSummary.findings) ? finalReview.issueSummary.findings : asArray(finalReview.findings).length,
+      findings: Number.isInteger(finalReview.issueSummary.findings) ? finalReview.issueSummary.findings : findings.length,
+      mustFix: Number.isInteger(finalReview.issueSummary.mustFix) ? finalReview.issueSummary.mustFix : findings.filter((finding) => finding && finding.priority === 'must_fix').length,
+      shouldFix: Number.isInteger(finalReview.issueSummary.shouldFix) ? finalReview.issueSummary.shouldFix : findings.filter((finding) => finding && finding.priority === 'should_fix').length,
       cannotVerify: Number.isInteger(finalReview.issueSummary.cannotVerify) ? finalReview.issueSummary.cannotVerify : asArray(finalReview.cannotVerifyItems).length,
+      observations: Number.isInteger(finalReview.issueSummary.observations) ? finalReview.issueSummary.observations : observations.length,
     };
   }
   return {
-    findings: asArray(finalReview && finalReview.findings).length,
+    findings: findings.length,
+    mustFix: findings.filter((finding) => finding && finding.priority === 'must_fix').length,
+    shouldFix: findings.filter((finding) => finding && finding.priority === 'should_fix').length,
     cannotVerify: asArray(finalReview && finalReview.cannotVerifyItems).length,
+    observations: observations.length,
   };
 }
 
 function deriveRecommendation(protocolGate, issueSummary) {
   if (protocolGate === 'blocked') return 'review_blocked';
   if (protocolGate === 'incomplete') return 'review_incomplete';
-  if (issueSummary.findings > 0) return 'must_fix_before_merge';
+  if (issueSummary.mustFix > 0) return 'must_fix_before_merge';
   if (issueSummary.cannotVerify > 0) return 'manual_verification_required';
+  if (issueSummary.shouldFix > 0) return 'should_review_before_merge';
   return 'ready_for_merge';
+}
+
+function deriveFindingPriority(reviewResult, dispatch) {
+  if (FINDING_PRIORITIES.includes(reviewResult && reviewResult.priority)) return reviewResult.priority;
+  return defaultFindingPriority(ruleLevelForDispatchResult(reviewResult, dispatch));
+}
+
+function ruleLevelForDispatchResult(reviewResult, dispatch) {
+  const reviewItems = new Map(asArray(dispatch && dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
+  const ruleSources = new Map(asArray(dispatch && dispatch.ruleSet && dispatch.ruleSet.ruleSources).map((source) => [source.ruleRef, source]));
+  const item = reviewItems.get(reviewResult && reviewResult.reviewItemId);
+  const source = item ? ruleSources.get(item.ruleRef) : null;
+  return source && source.ruleLevel;
+}
+
+function deriveFindingItems(results, dispatch) {
+  const reviewItems = new Map(asArray(dispatch && dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
+  const ruleSources = new Map(asArray(dispatch && dispatch.ruleSet && dispatch.ruleSet.ruleSources).map((source) => [source.ruleRef, source]));
+  return asArray(results)
+    .filter((reviewResult) => reviewResult && reviewResult.status === 'finding')
+    .map((reviewResult) => {
+      const item = reviewItems.get(reviewResult.reviewItemId) || {};
+      const source = ruleSources.get(item.ruleRef) || {};
+      const finding = {
+        findingId: reviewResult.findingId,
+        reviewItemId: reviewResult.reviewItemId,
+        ruleRef: item.ruleRef || 'unknown',
+        targetId: item.targetId || 'unknown',
+        ruleLevel: source.ruleLevel || 'unknown',
+        origin: reviewResult.origin,
+        priority: deriveFindingPriority(reviewResult, dispatch),
+        evidence: reviewResult.evidence,
+      };
+      copyOptionalFields(reviewResult, finding, ['priorityReason', 'upgradeReason', 'originReason', 'acceptedRisk']);
+      return finding;
+    });
+}
+
+function deriveObservationItems(results, dispatch) {
+  const reviewItems = new Map(asArray(dispatch && dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
+  const ruleSources = new Map(asArray(dispatch && dispatch.ruleSet && dispatch.ruleSet.ruleSources).map((source) => [source.ruleRef, source]));
+  return asArray(results)
+    .filter((reviewResult) => reviewResult && reviewResult.status === 'observation')
+    .map((reviewResult) => {
+      const item = reviewItems.get(reviewResult.reviewItemId) || {};
+      const source = ruleSources.get(item.ruleRef) || {};
+      const observation = {
+        reviewItemId: reviewResult.reviewItemId,
+        ruleRef: item.ruleRef || 'unknown',
+        targetId: item.targetId || 'unknown',
+        ruleLevel: source.ruleLevel || 'unknown',
+        origin: reviewResult.origin,
+      };
+      copyOptionalFields(reviewResult, observation, ['reason', 'evidence', 'upgradeReason', 'originReason']);
+      return observation;
+    });
+}
+
+function copyOptionalFields(source, target, fields) {
+  fields.forEach((field) => {
+    if (source && source[field] !== undefined) target[field] = source[field];
+  });
 }
 
 function deriveCannotVerifyItems(results, dispatch) {
@@ -921,6 +1112,7 @@ function validateFinalReviewShape(finalReview, artifact, result) {
     'semanticVerdict',
     'excludedRuleRefs',
     'findings',
+    'observations',
     'issueSummary',
     'recommendation',
     'validationResults',
@@ -933,11 +1125,26 @@ function validateFinalReviewShape(finalReview, artifact, result) {
   if (!RECOMMENDATIONS.includes(finalReview.recommendation)) addViolation(result, 'FR016', artifact, '/recommendation', 'recommendation must be valid', RECOMMENDATIONS, finalReview.recommendation);
   validateStringSet(finalReview.excludedRuleRefs, artifact, result, 'FR009', '/excludedRuleRefs');
   if (!Array.isArray(finalReview.findings)) addViolation(result, 'FR010', artifact, '/findings', 'findings must be array', 'array', finalReview.findings);
+  if (!Array.isArray(finalReview.observations)) addViolation(result, 'FR058', artifact, '/observations', 'observations must be array', 'array', finalReview.observations);
   validateValidationResults(finalReview, artifact, result);
   if (finalReview.cannotVerifyItems !== undefined) validateCannotVerifyItems(finalReview.cannotVerifyItems, artifact, result);
   asArray(finalReview.findings).forEach((finding, index) => {
-    requireFields(finding, artifact, result, 'FR012', `/findings/${index}`, ['findingId', 'reviewItemId', 'ruleRef', 'targetId', 'evidence']);
+    requireFields(finding, artifact, result, 'FR012', `/findings/${index}`, ['findingId', 'reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin', 'priority', 'evidence']);
+    if (!RULE_LEVELS.includes(finding && finding.ruleLevel)) addViolation(result, 'FR059', artifact, `/findings/${index}/ruleLevel`, 'final finding ruleLevel must be valid', RULE_LEVELS, finding && finding.ruleLevel);
+    if (!FINDING_ORIGINS.includes(finding && finding.origin)) addViolation(result, 'FR060', artifact, `/findings/${index}/origin`, 'final finding origin must be valid', FINDING_ORIGINS, finding && finding.origin);
+    if (!FINDING_PRIORITIES.includes(finding && finding.priority)) addViolation(result, 'FR061', artifact, `/findings/${index}/priority`, 'final finding priority must be valid', FINDING_PRIORITIES, finding && finding.priority);
+    if (finding && finding.acceptedRisk !== undefined) validateAcceptedRisk(finding.acceptedRisk, artifact, result, 'FR062', `/findings/${index}/acceptedRisk`);
     validateEvidenceArray(finding && finding.evidence, artifact, result, 'FR013', `/findings/${index}/evidence`, 'final finding requires evidence');
+  });
+  asArray(finalReview.observations).forEach((observation, index) => {
+    requireFields(observation, artifact, result, 'FR063', `/observations/${index}`, ['reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin']);
+    if (!REVIEW_ITEM_RE.test(observation && observation.reviewItemId)) addViolation(result, 'FR064', artifact, `/observations/${index}/reviewItemId`, 'observation reviewItemId must match RIxxx', 'RIxxx', observation && observation.reviewItemId);
+    if (!isNonEmptyString(observation && observation.ruleRef)) addViolation(result, 'FR065', artifact, `/observations/${index}/ruleRef`, 'observation ruleRef must be non-empty string', 'string', observation && observation.ruleRef);
+    if (!isNonEmptyString(observation && observation.targetId)) addViolation(result, 'FR066', artifact, `/observations/${index}/targetId`, 'observation targetId must be non-empty string', 'string', observation && observation.targetId);
+    if (!RULE_LEVELS.includes(observation && observation.ruleLevel)) addViolation(result, 'FR067', artifact, `/observations/${index}/ruleLevel`, 'observation ruleLevel must be valid', RULE_LEVELS, observation && observation.ruleLevel);
+    if (!FINDING_ORIGINS.includes(observation && observation.origin)) addViolation(result, 'FR068', artifact, `/observations/${index}/origin`, 'observation origin must be valid', FINDING_ORIGINS, observation && observation.origin);
+    if (!hasValidEvidenceArray(observation && observation.evidence) && !isNonEmptyString(observation && observation.reason)) addViolation(result, 'FR069', artifact, `/observations/${index}`, 'observation requires reason or evidence', 'reason or evidence[]', observation);
+    if (observation && observation.evidence !== undefined) validateEvidenceArray(observation.evidence, artifact, result, 'FR070', `/observations/${index}/evidence`, 'observation evidence must be reviewable when present');
   });
 }
 
@@ -978,34 +1185,8 @@ function validateFinalReviewAgainstComputed(finalReview, dispatch, results, comp
   }
   validateRunValidationSummary(finalReview, computed, artifact, result);
   validateCannotVerifyItemsAgainstComputed(finalReview, deriveCannotVerifyItems(results, dispatch), artifact, result);
-
-  const resultFindings = asArray(results).filter((reviewResult) => reviewResult && reviewResult.status === 'finding');
-  const finalFindings = asArray(finalReview.findings);
-  const reviewItems = new Map(asArray(dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
-  const resultFindingKeys = new Set(resultFindings.map((finding) => `${finding.findingId}\0${finding.reviewItemId}`));
-  resultFindings.forEach((finding) => {
-    const expectedItem = reviewItems.get(finding.reviewItemId);
-    const matched = finalFindings.find((entry) => entry.findingId === finding.findingId && entry.reviewItemId === finding.reviewItemId);
-    if (!matched) {
-      addViolation(result, 'FR029', artifact, '/findings', 'finding result must appear in finalReview.findings[]', { findingId: finding.findingId, reviewItemId: finding.reviewItemId }, finalFindings);
-      return;
-    }
-    if (expectedItem && matched.ruleRef !== expectedItem.ruleRef) {
-      addViolation(result, 'FR030', artifact, '/findings', 'final finding ruleRef must match dispatch reviewItem', expectedItem.ruleRef, matched.ruleRef);
-    }
-    if (expectedItem && matched.targetId !== expectedItem.targetId) {
-      addViolation(result, 'FR031', artifact, '/findings', 'final finding targetId must match dispatch reviewItem', expectedItem.targetId, matched.targetId);
-    }
-    if (!evidenceArraysEqual(matched.evidence, finding.evidence)) {
-      addViolation(result, 'FR032', artifact, '/findings', 'final finding evidence must match shard result evidence', finding.evidence, matched.evidence);
-    }
-  });
-  finalFindings.forEach((finding, index) => {
-    const key = `${finding && finding.findingId}\0${finding && finding.reviewItemId}`;
-    if (!resultFindingKeys.has(key)) {
-      addViolation(result, 'FR033', artifact, `/findings/${index}`, 'finalReview finding must come from shard finding result', 'existing shard finding result', { findingId: finding && finding.findingId, reviewItemId: finding && finding.reviewItemId });
-    }
-  });
+  validateFindingItemsAgainstComputed(finalReview, deriveFindingItems(results, dispatch), artifact, result);
+  validateObservationItemsAgainstComputed(finalReview, deriveObservationItems(results, dispatch), artifact, result);
 }
 
 function renderFinalMode(args, result) {
@@ -1071,7 +1252,10 @@ function validateFinalMarkdown(finalReview, markdownPath, result, dispatch) {
     reviewConclusion(finalReview.protocolGate, issueSummary),
     label(recommendation),
     `问题数：${issueSummary.findings}`,
+    `必须修复：${issueSummary.mustFix}`,
+    `建议修复：${issueSummary.shouldFix}`,
     `无法验证：${issueSummary.cannotVerify}`,
+    `观察项：${issueSummary.observations}`,
     `runId：${finalReview.runId}`,
     '验证摘要：',
   ];
@@ -1091,6 +1275,7 @@ function validateFinalMarkdown(finalReview, markdownPath, result, dispatch) {
 
 function renderFinalMarkdown(finalReview, dispatch, runDir) {
   const findings = asArray(finalReview.findings);
+  const observations = asArray(finalReview.observations);
   const issueSummary = issueSummaryFromFinalReview(finalReview);
   const recommendation = finalReview.recommendation || deriveRecommendation(finalReview.protocolGate, issueSummary);
   const executionPlan = dispatch && dispatch.executionPlan;
@@ -1102,7 +1287,10 @@ function renderFinalMarkdown(finalReview, dispatch, runDir) {
     `- 审查结论：${reviewConclusion(finalReview.protocolGate, issueSummary)}`,
     `- 修复建议：${label(recommendation)}`,
     `- 问题数：${issueSummary.findings}`,
+    `- 必须修复：${issueSummary.mustFix}`,
+    `- 建议修复：${issueSummary.shouldFix}`,
     `- 无法验证：${issueSummary.cannotVerify}`,
+    `- 观察项：${issueSummary.observations}`,
     '',
     '## 范围',
     `- 范围模式：${label(finalReview.scopeMode)}`,
@@ -1118,9 +1306,13 @@ function renderFinalMarkdown(finalReview, dispatch, runDir) {
     '## 问题',
     findings.length === 0 ? '- 无' : null,
   ].filter((line) => line !== null);
-  findings.forEach((finding) => {
-    lines.push(`- ${finding.findingId} | ${finding.reviewItemId} | ${finding.ruleRef} | ${finding.targetId}：${formatEvidence(finding.evidence)}`);
-  });
+  appendFindingLines(lines, findings);
+  if (observations.length > 0) {
+    lines.push('', '## 观察项');
+    observations.forEach((observation) => {
+      lines.push(`- ${observation.reviewItemId} | ${observation.ruleRef} | ${observation.ruleLevel} | ${label(observation.origin)} | ${observation.targetId}：${observation.reason || formatEvidence(observation.evidence)}`);
+    });
+  }
   if (issueSummary.cannotVerify > 0) {
     lines.push('', '## 无法验证', '', '| Review Item | Rule | Target | Reason |', '|---|---|---|---|');
     const items = asArray(finalReview.cannotVerifyItems);
@@ -1156,7 +1348,10 @@ function renderResponseMarkdown(runDir, finalReview, executionPlan, gate) {
     `- 审查结论：${reviewConclusion(protocolGate, issueSummary)}`,
     `- 修复建议：${label(recommendation)}`,
     `- 问题数：${issueSummary.findings}`,
+    `- 必须修复：${issueSummary.mustFix}`,
+    `- 建议修复：${issueSummary.shouldFix}`,
     `- 无法验证：${issueSummary.cannotVerify}`,
+    `- 观察项：${issueSummary.observations}`,
     '',
     '## 报告',
     `- 完整报告：${formatMarkdownFileLink('final.md', finalMdPath)}`,
@@ -1170,6 +1365,22 @@ function renderResponseMarkdown(runDir, finalReview, executionPlan, gate) {
     `- \`${runCommand}\`：协议校验成功`,
     '',
   ].join('\n');
+}
+
+function appendFindingLines(lines, findings) {
+  const groups = [
+    ['must_fix', '必须修复'],
+    ['should_fix', '建议修复'],
+  ];
+  groups.forEach(([priority, title]) => {
+    const items = findings.filter((finding) => finding && finding.priority === priority);
+    if (items.length === 0) return;
+    lines.push(`### ${title}`);
+    items.forEach((finding) => {
+      const reason = finding.priorityReason ? `；原因：${finding.priorityReason}` : '';
+      lines.push(`- ${finding.findingId} | ${finding.reviewItemId} | ${finding.ruleRef} | ${finding.ruleLevel} | ${label(finding.origin)} | ${finding.targetId}：${formatEvidence(finding.evidence)}${reason}`);
+    });
+  });
 }
 
 function expectKind(doc, artifact, result, code, expected) {
@@ -1211,7 +1422,7 @@ function validateIssueSummary(value, artifact, result, code, pointer) {
     addViolation(result, code, artifact, pointer, 'issueSummary must be object', 'object', value);
     return;
   }
-  ['findings', 'cannotVerify'].forEach((field) => {
+  ISSUE_SUMMARY_FIELDS.forEach((field) => {
     if (!Number.isInteger(value[field]) || value[field] < 0) {
       addViolation(result, code, artifact, `${pointer}/${field}`, 'issueSummary count must be non-negative integer', 'non-negative integer', value[field]);
     }
@@ -1262,8 +1473,7 @@ function validateRunValidationSummary(finalReview, computed, artifact, result) {
 function issueSummariesEqual(left, right) {
   return isObject(left)
     && isObject(right)
-    && left.findings === right.findings
-    && left.cannotVerify === right.cannotVerify;
+    && ISSUE_SUMMARY_FIELDS.every((field) => left[field] === right[field]);
 }
 
 function validateCannotVerifyItems(value, artifact, result) {
@@ -1293,6 +1503,75 @@ function validateCannotVerifyItemsAgainstComputed(finalReview, expectedItems, ar
   if (!cannotVerifyItemsEqual(actualItems, expectedItems)) {
     addViolation(result, 'FR056', artifact, '/cannotVerifyItems', 'cannotVerifyItems must equal validator result', expectedItems, actualItems);
   }
+}
+
+function validateFindingItemsAgainstComputed(finalReview, expectedItems, artifact, result) {
+  const actualItems = asArray(finalReview.findings);
+  if (actualItems.length !== expectedItems.length) {
+    addViolation(result, 'FR029', artifact, '/findings', 'finalReview findings must include every derived finding and no extras', expectedItems, actualItems);
+    return;
+  }
+  if (!findingItemsEqual(actualItems, expectedItems)) {
+    addViolation(result, 'FR032', artifact, '/findings', 'finalReview findings must equal validator result', expectedItems, actualItems);
+  }
+}
+
+function validateObservationItemsAgainstComputed(finalReview, expectedItems, artifact, result) {
+  const actualItems = asArray(finalReview.observations);
+  if (actualItems.length !== expectedItems.length) {
+    addViolation(result, 'FR071', artifact, '/observations', 'finalReview observations must include every derived observation and no extras', expectedItems, actualItems);
+    return;
+  }
+  if (!observationItemsEqual(actualItems, expectedItems)) {
+    addViolation(result, 'FR072', artifact, '/observations', 'finalReview observations must equal validator result', expectedItems, actualItems);
+  }
+}
+
+function findingItemsEqual(left, right) {
+  return unorderedItemsEqual(left, right, findingItemEqual);
+}
+
+function observationItemsEqual(left, right) {
+  return unorderedItemsEqual(left, right, observationItemEqual);
+}
+
+function unorderedItemsEqual(left, right, equal) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  const used = new Set();
+  return left.every((leftItem) => {
+    const index = right.findIndex((rightItem, candidateIndex) => !used.has(candidateIndex) && equal(leftItem, rightItem));
+    if (index === -1) return false;
+    used.add(index);
+    return true;
+  });
+}
+
+function findingItemEqual(left, right) {
+  const fields = ['findingId', 'reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin', 'priority', 'priorityReason', 'upgradeReason', 'originReason'];
+  return fields.every((field) => optionalField(left, field) === optionalField(right, field))
+    && evidenceArraysEqual(left && left.evidence, right && right.evidence)
+    && acceptedRiskEqual(left && left.acceptedRisk, right && right.acceptedRisk);
+}
+
+function observationItemEqual(left, right) {
+  const fields = ['reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin', 'reason', 'upgradeReason', 'originReason'];
+  return fields.every((field) => optionalField(left, field) === optionalField(right, field))
+    && optionalEvidenceArraysEqual(left && left.evidence, right && right.evidence);
+}
+
+function optionalField(value, field) {
+  return value && value[field] !== undefined ? value[field] : null;
+}
+
+function optionalEvidenceArraysEqual(left, right) {
+  if (left === undefined && right === undefined) return true;
+  return evidenceArraysEqual(left, right);
+}
+
+function acceptedRiskEqual(left, right) {
+  if (left === undefined && right === undefined) return true;
+  if (!isObject(left) || !isObject(right)) return false;
+  return ['status', 'acceptedBy', 'scope', 'reason', 'expiresAt', 'followUp'].every((field) => optionalField(left, field) === optionalField(right, field));
 }
 
 function cannotVerifyItemsEqual(left, right) {
@@ -1432,7 +1711,7 @@ function formatAuditLines(finalReview, dispatch, runDir) {
     `- reviewItems：${asArray(dispatch && dispatch.reviewItems).length}`,
     `- reviewBatches：${asArray(dispatch && dispatch.reviewBatches).length}`,
     `- 验证命令：\`${formatRunCommand(runDir)}\``,
-    `- 验证摘要：protocolGate=${validation.protocolGate || '未知'}，semanticVerdict=${validation.semanticVerdict || '未知'}，findings=${formatMetric(validation.issueSummary && validation.issueSummary.findings)}，cannotVerify=${formatMetric(validation.issueSummary && validation.issueSummary.cannotVerify)}，recommendation=${validation.recommendation || '未知'}`,
+    `- 验证摘要：protocolGate=${validation.protocolGate || '未知'}，semanticVerdict=${validation.semanticVerdict || '未知'}，findings=${formatMetric(validation.issueSummary && validation.issueSummary.findings)}，mustFix=${formatMetric(validation.issueSummary && validation.issueSummary.mustFix)}，shouldFix=${formatMetric(validation.issueSummary && validation.issueSummary.shouldFix)}，cannotVerify=${formatMetric(validation.issueSummary && validation.issueSummary.cannotVerify)}，observations=${formatMetric(validation.issueSummary && validation.issueSummary.observations)}，recommendation=${validation.recommendation || '未知'}`,
   ];
 }
 

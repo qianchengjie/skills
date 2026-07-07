@@ -13,7 +13,9 @@
           "summary": "CORE-001 finding evidence",
           "loc": "src/example.ts:10"
         }
-      ]
+      ],
+      "origin": "introduced_by_change",
+      "priority": "must_fix"
     },
     {
       "reviewItemId": "RI002",

@@ -5,7 +5,10 @@
 - 审查结论：发现问题
 - 修复建议：合并前必须修复
 - 问题数：1
+- 必须修复：1
+- 建议修复：0
 - 无法验证：0
+- 观察项：0
 
 ## 范围
 - 范围模式：完整范围
@@ -14,27 +17,22 @@
 
 ## 审计
 - runId：run-fail-finding-no-evidence
-- ruleSetId：RS001
-- sourceIndexHash：sha256-index
-- candidateRuleRefs：3
-- requiredRuleRefs：2
+- ruleSetId：未知
+- sourceIndexHash：未知
+- candidateRuleRefs：0
+- requiredRuleRefs：0
 - excludedRuleRefs：0
-- globallyNotApplicableRuleRefs：1
-- changedUnits：1
-- candidates：1
-- contextExpansions：1
-- reviewItems：3
-- reviewBatches：1
+- globallyNotApplicableRuleRefs：0
+- changedUnits：0
+- candidates：0
+- contextExpansions：0
+- reviewItems：0
+- reviewBatches：0
 - 验证命令：`node skills/rules-review/scripts/validate.js --mode run --dir tests/rules-review/fixtures/run-fail-finding-no-evidence`
-- 验证摘要：protocolGate=passed，semanticVerdict=clean，findings=1，cannotVerify=0，recommendation=must_fix_before_merge
+- 验证摘要：protocolGate=passed，semanticVerdict=clean，findings=1，mustFix=1，shouldFix=0，cannotVerify=0，observations=0，recommendation=must_fix_before_merge
 
 ## 执行计划
-- mode：single_batch
-- selectedBy：ai
-- policyVersion：review-execution-policy/v1
-- metrics：changedUnits=1，candidates=1，targets=2，requiredRuleRefs=2，reviewItems=3
-- userRequestedConcurrency：false
-- reason：reviewItems/targets/rules are within single-batch default range.
+- 未记录
 
 ## 问题
 - 无

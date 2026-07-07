@@ -81,7 +81,7 @@
     },
     "ruleSource": {
       "type": "object",
-      "required": ["namespace", "ruleRef", "sourceFile", "sourceHash", "trigger", "appliesTo"],
+      "required": ["namespace", "ruleRef", "ruleLevel", "sourceFile", "sourceHash", "trigger", "appliesTo"],
       "anyOf": [
         { "required": ["summary"] },
         { "required": ["ruleText"] }
@@ -89,6 +89,7 @@
       "properties": {
         "namespace": { "type": "string", "minLength": 1 },
         "ruleRef": { "type": "string", "minLength": 1 },
+        "ruleLevel": { "enum": ["MUST", "SHOULD", "ADVISORY"] },
         "sourceFile": { "type": "string", "minLength": 1 },
         "sourceHash": { "type": "string", "minLength": 1 },
         "trigger": {},

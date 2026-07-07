@@ -16,7 +16,10 @@
       "semanticVerdict": "clean",
       "issueSummary": {
         "findings": 0,
-        "cannotVerify": 0
+        "cannotVerify": 0,
+        "mustFix": 0,
+        "shouldFix": 0,
+        "observations": 0
       },
       "recommendation": "ready_for_merge"
     }
@@ -24,7 +27,11 @@
   "summary": "run-fail-required-rule-no-item fixture",
   "issueSummary": {
     "findings": 0,
-    "cannotVerify": 0
+    "cannotVerify": 0,
+    "mustFix": 0,
+    "shouldFix": 0,
+    "observations": 0
   },
-  "recommendation": "ready_for_merge"
+  "recommendation": "ready_for_merge",
+  "observations": []
 }

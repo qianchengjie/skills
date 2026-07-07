@@ -18,7 +18,10 @@
           "loc": "src/example.ts:10",
           "summary": "CORE-001 finding evidence"
         }
-      ]
+      ],
+      "ruleLevel": "MUST",
+      "origin": "introduced_by_change",
+      "priority": "must_fix"
     }
   ],
   "validationResults": [
@@ -29,7 +32,10 @@
       "semanticVerdict": "issues",
       "issueSummary": {
         "findings": 1,
-        "cannotVerify": 0
+        "cannotVerify": 0,
+        "mustFix": 1,
+        "shouldFix": 0,
+        "observations": 0
       },
       "recommendation": "must_fix_before_merge"
     }
@@ -37,7 +43,11 @@
   "summary": "full clean fixture",
   "issueSummary": {
     "findings": 1,
-    "cannotVerify": 0
+    "cannotVerify": 0,
+    "mustFix": 1,
+    "shouldFix": 0,
+    "observations": 0
   },
-  "recommendation": "must_fix_before_merge"
+  "recommendation": "must_fix_before_merge",
+  "observations": []
 }

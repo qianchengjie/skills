@@ -235,7 +235,8 @@
       "appliesTo": [
         "*"
       ],
-      "summary": "核心规则"
+      "summary": "核心规则",
+      "ruleLevel": "MUST"
     }
   ],
   "targets": [

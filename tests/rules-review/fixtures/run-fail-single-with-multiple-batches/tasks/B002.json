@@ -32,7 +32,8 @@
       "appliesTo": [
         "src/**/*.ts"
       ],
-      "summary": "类型规则"
+      "summary": "类型规则",
+      "ruleLevel": "SHOULD"
     },
     {
       "namespace": "UI",
@@ -45,7 +46,8 @@
       "appliesTo": [
         "src/**/*.tsx"
       ],
-      "summary": "界面规则"
+      "summary": "界面规则",
+      "ruleLevel": "ADVISORY"
     }
   ],
   "targets": [

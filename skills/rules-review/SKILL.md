@@ -109,6 +109,8 @@ ruleRef x targetId = reviewItem
 - `globallyNotApplicableRuleRefs[]`
 - `ruleSources[]`
 
+`ruleSources[]` 是 `.agents/rules` 的规则快照，必须包含 `ruleLevel: MUST / SHOULD / ADVISORY`。`ruleLevel` 是 finding 优先级的规则级真源；rules-review 只消费该字段，不维护 `.agents/rules`，也不兼容缺少 `ruleLevel` 的旧规则快照。
+
 规则集合关系必须闭合：
 
 - `candidateRuleRefs` 必须全部被分类为 `requiredRuleRefs`、`excludedRuleRefs` 或 `globallyNotApplicableRuleRefs`。
@@ -190,7 +192,7 @@ aggregateStatus: aggregated / not_aggregated
 - 本 batch 所需 `targets[]`
 - `outputContract`
 
-`rules[].sourceHash` 必须存在，并与 `dispatch.ruleSet.ruleSources[]` 中对应 `ruleRef` 或 `namespace + sourceFile` 的 `sourceHash` 一致。reviewer 不再自由读取另一套规则。
+`rules[].sourceHash` 和 `rules[].ruleLevel` 必须存在，并与 `dispatch.ruleSet.ruleSources[]` 中对应 `ruleRef` 或 `namespace + sourceFile` 的 `sourceHash`、`ruleLevel` 一致。reviewer 不再自由读取另一套规则，也不得在 `reviewItem` 中重复存储或改写规则级别。
 
 `rules[]` 必须保留 `dispatch.ruleSet.ruleSources[]` 中对应规则的 `summary` 或 `ruleText`；`targets[]` 必须包含本 batch 每个 `reviewItems[].targetId`，并与 dispatch 中对应 target 的 `targetKind`、`loc`、`source`、`summary` 快照一致。
 
@@ -220,17 +222,45 @@ aggregateStatus: aggregated / not_aggregated
 结果状态 enum：
 
 ```text
-passed / finding / not_applicable / cannot_verify
+passed / finding / observation / not_applicable / cannot_verify
 ```
 
 字段门禁：
 
-- `finding` 必须有 `findingId` 和非空 `evidence[]`。
+- `finding` 必须有 `findingId`、`origin` 和非空 `evidence[]`。
+- `observation` 必须有 `origin`，并包含 `reason` 或非空 `evidence[]`；不再增加第二套 observation status/result。
 - `passed` 必须有非空 `evidence[]`。
 - `not_applicable` 必须有 `reason`，可选 `evidence[]`。
 - `cannot_verify` 必须有 `reason` 或非空 `evidence[]`。
 
 `evidence[]` 不是任意非空数组。每个 evidence item 至少包含非空 `summary`，并包含 `loc` 或 `source` 之一，保证后续可定位复核；validator 不判断证据内容是否充分。
+
+`origin` enum 固定为：
+
+```text
+introduced_by_change / worsened_by_change / exposed_by_change / pre_existing
+```
+
+默认 result 映射固定为：
+
+```text
+MUST 或 SHOULD + introduced_by_change / worsened_by_change => finding
+MUST 或 SHOULD + exposed_by_change / pre_existing => observation
+ADVISORY + 任意 origin => observation
+```
+
+从默认 `observation` 升级为 `finding` 时，必须提供 `upgradeReason`；`origin = pre_existing` 的升级还必须提供 `originReason`。从默认 `finding` 降级为 `observation` 不允许。
+
+finding priority 由 `ruleLevel` 派生：
+
+```text
+MUST => must_fix
+SHOULD / ADVISORY => should_fix
+```
+
+`MUST` 不允许直接降级为 `should_fix`。唯一例外是显式 waiver：`acceptedRisk.status = accepted`，`acceptedBy = human / user / project_owner`，并包含 `scope`、`reason`、以及 `expiresAt` 或 `followUp`。validator 只检查 waiver 结构，不判断理由是否合理。
+
+非 `MUST` finding 覆盖默认 priority 时必须提供 `priorityReason`；validator 只检查字段存在，不判断理由是否充分。
 
 ### finalReview.json
 
@@ -245,6 +275,7 @@ passed / finding / not_applicable / cannot_verify
 - `semanticVerdict`: `clean / issues / unknown`
 - `excludedRuleRefs[]`
 - `findings[]`
+- `observations[]`
 - `issueSummary`
 - `recommendation`
 - `validationResults[]`
@@ -254,7 +285,10 @@ passed / finding / not_applicable / cannot_verify
 `issueSummary` 至少包含：
 
 - `findings`: result 中 `status = "finding"` 的数量。
+- `mustFix`: finding 中 `priority = "must_fix"` 的数量。
+- `shouldFix`: finding 中 `priority = "should_fix"` 的数量。
 - `cannotVerify`: result 中 `status = "cannot_verify"` 的数量。
+- `observations`: result 中 `status = "observation"` 的数量。
 
 当 `cannotVerify > 0` 时，`cannotVerifyItems[]` 必须包含每个 `status = "cannot_verify"` result 的派生明细：
 
@@ -266,16 +300,17 @@ passed / finding / not_applicable / cannot_verify
 `recommendation` enum：
 
 ```text
-ready_for_merge / must_fix_before_merge / manual_verification_required / review_incomplete / review_blocked
+ready_for_merge / must_fix_before_merge / should_review_before_merge / manual_verification_required / review_incomplete / review_blocked
 ```
 
 推荐派生规则：
 
 - `protocolGate = "blocked"` => `review_blocked`
 - `protocolGate = "incomplete"` => `review_incomplete`
-- `protocolGate = "passed"` 且 `issueSummary.findings > 0` => `must_fix_before_merge`
-- `protocolGate = "passed"` 且 `issueSummary.findings = 0` 且 `issueSummary.cannotVerify > 0` => `manual_verification_required`
-- `protocolGate = "passed"` 且 `issueSummary.findings = 0` 且 `issueSummary.cannotVerify = 0` => `ready_for_merge`
+- `protocolGate = "passed"` 且 `issueSummary.mustFix > 0` => `must_fix_before_merge`
+- `protocolGate = "passed"` 且 `issueSummary.cannotVerify > 0` => `manual_verification_required`
+- `protocolGate = "passed"` 且 `issueSummary.shouldFix > 0` => `should_review_before_merge`
+- `protocolGate = "passed"` 且无 finding、无 cannot_verify => `ready_for_merge`
 
 `validationResults[]` 不是人工自述，至少必须包含 `mode = "run"` 的 validator 摘要：
 
@@ -287,7 +322,7 @@ ready_for_merge / must_fix_before_merge / manual_verification_required / review_
 
 validator 必须复算并校验 `validationResults[mode=run]` 与当前 run 结果一致；不一致时进入 `blocked`。
 
-`finalReview.json` 中已有字段只是被校验对象，不能作为事实源。validator 必须从 `dispatch.json`、`task.json`、`shard.json` 重新计算 `protocolGate`、`coverageClaim`、`semanticVerdict`、`issueSummary`、`recommendation`、`cannotVerifyItems[]` 和 `validationResults[mode=run]`；声明值与计算值不一致时，`protocolGate = blocked`。`finalReview.findings[]` 必须与 shard result 和 dispatch reviewItem 派生事实一致：`findingId`、`reviewItemId`、`ruleRef`、`targetId` 和 `evidence` 不得伪造、改写或额外添加；`evidence` 按 `summary`、`loc`、`source` 结构比较，不依赖 JSON key 顺序。
+`finalReview.json` 中已有字段只是被校验对象，不能作为事实源。validator 必须从 `dispatch.json`、`task.json`、`shard.json` 重新计算 `protocolGate`、`coverageClaim`、`semanticVerdict`、`issueSummary`、`recommendation`、`cannotVerifyItems[]` 和 `validationResults[mode=run]`；声明值与计算值不一致时，`protocolGate = blocked`。`finalReview.findings[]` 必须与 shard result 和 dispatch reviewItem 派生事实一致：`findingId`、`reviewItemId`、`ruleRef`、`targetId`、`ruleLevel`、`origin`、`priority` 和 `evidence` 不得伪造、改写或额外添加；`finalReview.observations[]` 必须与 `status = "observation"` 的 result 派生事实一致；`evidence` 按 `summary`、`loc`、`source` 结构比较，不依赖 JSON key 顺序。
 
 ---
 
@@ -341,7 +376,11 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 - `mode = "single_batch"` 时 `reviewBatches.length` 必须等于 1；`mode = "multi_batch"` 时 `reviewBatches.length` 必须大于等于 2。
 - `reviewItems > 30`、`targets > 20` 或 `signals.userRequestedConcurrency = true` 时，非 `human_override` 必须选择 `multi_batch`。
 - `selectedBy = "human_override"` 时必须记录 `humanOverride.requestedMode` 和 `humanOverride.risk`。
-- `finding` 必须有 `findingId` 和 `evidence[]`。
+- `ruleSet.ruleSources[].ruleLevel` 和 `task.rules[].ruleLevel` 必须存在，且 task 中的值必须匹配 dispatch 快照。
+- `finding` 必须有 `findingId`、`origin` 和 `evidence[]`。
+- `observation` 必须有 `origin`，并包含 `reason` 或 `evidence[]`。
+- `finding / observation` 的 `status` 必须符合 `ruleLevel + origin` 默认映射；默认 `observation` 升级为 `finding` 必须有 `upgradeReason`，`pre_existing` 升级还必须有 `originReason`。
+- `MUST` finding 默认是 `must_fix`；降为 `should_fix` 必须有结构化 `acceptedRisk`。`SHOULD / ADVISORY` finding 默认是 `should_fix`；覆盖 priority 必须有 `priorityReason`。
 - `passed` 必须有 `evidence[]`。
 - `not_applicable` 必须有 `reason`。
 - `cannot_verify` 必须有 `reason` 或 `evidence[]`。
@@ -355,6 +394,7 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 - `contextExpansions[].addedTargetIds[]` 必须存在于 `targets.candidates[]`。
 - `reviewItem.targetId` 必须存在于 `targets.changedUnits[]` 或 `targets.candidates[]`。
 - `finalReview.findings[]` 必须匹配 result + dispatch 派生事实，且不得包含 shard `results[]` 中不存在的 finding。
+- `finalReview.observations[]` 必须匹配 `observation` result + dispatch reviewItem 派生事实。
 - `finalReview.cannotVerifyItems[]` 必须匹配 `cannot_verify` result + dispatch reviewItem 派生事实。
 - `finalReview.validationResults[mode=run]` 必须匹配本次 validator 复算结果。
 - scoped 模式必须有 `excludedRuleRefs`，且不得声明 `coverageClaim = "full_complete"`。
@@ -368,7 +408,7 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 
 `finding` 不导致 `protocolGate` 失败。`protocolGate` 只表示审查协议是否闭合；`semanticVerdict` 才表示是否发现问题。人类输出不得把 `protocolGate = "passed"` 单独写成“通过”，必须写成“协议通过”，并同时展示审查结论、问题数、无法验证数量和修复建议。
 
-`validate.js --mode run` 输出 gate 计算结果；`protocolGate !== "passed"` 时自动化 gate 不视为通过。JSON 输出保留英文 enum，并在 `gate.issueSummary` 与 `gate.recommendation` 中给出派生结论。human-readable 摘要必须使用“协议门禁通过；审查结论：...；问题数：...；无法验证：...”这类组合表达，不得把 passed 简化为“通过”。
+`validate.js --mode run` 输出 gate 计算结果；`protocolGate !== "passed"` 时自动化 gate 不视为通过。JSON 输出保留英文 enum，并在 `gate.issueSummary` 与 `gate.recommendation` 中给出派生结论。human-readable 摘要必须使用“协议门禁通过；审查结论：...；问题数：...；必须修复：...；建议修复：...；无法验证：...”这类组合表达，不得把 passed 简化为“通过”。
 
 退出码：
 
@@ -400,5 +440,5 @@ stdout 一律输出 strict JSON。
   - `rules-review：协议通过，未发现问题`
   - `rules-review：审查未完成，协议未闭合`
   - `rules-review：审查阻塞，协议输入或结果不可用`
-- `final.md` 顶部必须包含固定结论区：协议门禁、审查结论、修复建议、问题数、无法验证。
+- `final.md` 顶部必须包含固定结论区：协议门禁、审查结论、修复建议、问题数、必须修复、建议修复、无法验证、观察项。
 - `final.md` 必须包含审计区，展示 `runId`、`ruleSetId`、`sourceIndexHash`、规则/目标/reviewItem/reviewBatch 计数、context expansion 数量、验证命令和 validator run 摘要。

@@ -16,7 +16,10 @@
       "semanticVerdict": "unknown",
       "issueSummary": {
         "findings": 0,
-        "cannotVerify": 0
+        "cannotVerify": 0,
+        "mustFix": 0,
+        "shouldFix": 0,
+        "observations": 0
       },
       "recommendation": "review_blocked"
     }
@@ -24,7 +27,11 @@
   "summary": "run-fail-returned-not-aggregated-blocked fixture",
   "issueSummary": {
     "findings": 0,
-    "cannotVerify": 0
+    "cannotVerify": 0,
+    "mustFix": 0,
+    "shouldFix": 0,
+    "observations": 0
   },
-  "recommendation": "review_blocked"
+  "recommendation": "review_blocked",
+  "observations": []
 }

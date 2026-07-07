@@ -16,7 +16,10 @@
       "semanticVerdict": "clean",
       "issueSummary": {
         "findings": 0,
-        "cannotVerify": 1
+        "cannotVerify": 1,
+        "mustFix": 0,
+        "shouldFix": 0,
+        "observations": 0
       },
       "recommendation": "manual_verification_required"
     }
@@ -24,7 +27,10 @@
   "summary": "full clean fixture",
   "issueSummary": {
     "findings": 0,
-    "cannotVerify": 1
+    "cannotVerify": 1,
+    "mustFix": 0,
+    "shouldFix": 0,
+    "observations": 0
   },
   "recommendation": "manual_verification_required",
   "cannotVerifyItems": [
@@ -34,5 +40,6 @@
       "targetId": "T001",
       "reason": "未记录原因"
     }
-  ]
+  ],
+  "observations": []
 }

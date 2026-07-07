@@ -18,7 +18,10 @@
           "loc": "x",
           "summary": "fake"
         }
-      ]
+      ],
+      "ruleLevel": "MUST",
+      "origin": "introduced_by_change",
+      "priority": "must_fix"
     }
   ],
   "validationResults": [
@@ -29,7 +32,10 @@
       "semanticVerdict": "clean",
       "issueSummary": {
         "findings": 0,
-        "cannotVerify": 0
+        "cannotVerify": 0,
+        "mustFix": 0,
+        "shouldFix": 0,
+        "observations": 0
       },
       "recommendation": "ready_for_merge"
     }
@@ -37,7 +43,11 @@
   "summary": "full clean fixture",
   "issueSummary": {
     "findings": 0,
-    "cannotVerify": 0
+    "cannotVerify": 0,
+    "mustFix": 0,
+    "shouldFix": 0,
+    "observations": 0
   },
-  "recommendation": "ready_for_merge"
+  "recommendation": "ready_for_merge",
+  "observations": []
 }

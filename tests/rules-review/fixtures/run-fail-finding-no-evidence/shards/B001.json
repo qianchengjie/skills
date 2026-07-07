@@ -8,7 +8,9 @@
       "reviewItemId": "RI001",
       "status": "finding",
       "findingId": "F001",
-      "evidence": []
+      "evidence": [],
+      "origin": "introduced_by_change",
+      "priority": "must_fix"
     },
     {
       "reviewItemId": "RI002",
