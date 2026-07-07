@@ -23,6 +23,7 @@ const PROTOCOL_GATES = ['passed', 'incomplete', 'blocked'];
 const SCOPE_MODES = ['full', 'scoped'];
 const COVERAGE_CLAIMS = ['full_complete', 'scoped_complete', 'incomplete', 'blocked'];
 const SEMANTIC_VERDICTS = ['clean', 'issues', 'unknown'];
+const RECOMMENDATIONS = ['ready_for_merge', 'must_fix_before_merge', 'manual_verification_required', 'review_incomplete', 'review_blocked'];
 const EXECUTION_POLICY_VERSION = 'review-execution-policy/v1';
 const EXECUTION_MODES = ['single_batch', 'multi_batch'];
 const EXECUTION_SELECTED_BY = ['ai', 'human_override'];
@@ -30,16 +31,27 @@ const REVIEW_ITEM_RE = /^RI\d{3}$/;
 const FINDING_RE = /^F\d{3}$/;
 
 const LABELS = {
-  passed: '通过',
+  passed: '协议通过',
   incomplete: '未完成',
   blocked: '阻塞',
   full: '完整范围',
   scoped: '限定范围',
-  full_complete: '完整完成',
-  scoped_complete: '限定范围完成',
+  full_complete: '协议覆盖完整',
+  scoped_complete: '限定协议覆盖完整',
   clean: '未发现问题',
   issues: '发现问题',
   unknown: '未知',
+  ready_for_merge: '可以合并',
+  must_fix_before_merge: '合并前必须修复',
+  manual_verification_required: '需要人工验证',
+  review_incomplete: '审查未完成',
+  review_blocked: '审查阻塞',
+};
+
+const PROTOCOL_GATE_LABELS = {
+  passed: '协议通过',
+  incomplete: '协议未完成',
+  blocked: '协议阻塞',
 };
 
 function main() {
@@ -841,7 +853,9 @@ function calculateGate(dispatch, results, result) {
         ? 'scoped_complete'
         : 'full_complete';
   const semanticVerdict = deriveSemanticVerdict(results, protocolGate);
-  return { protocolGate, scopeMode, coverageClaim, semanticVerdict };
+  const issueSummary = deriveIssueSummary(results);
+  const recommendation = deriveRecommendation(protocolGate, issueSummary);
+  return { protocolGate, scopeMode, coverageClaim, semanticVerdict, issueSummary, recommendation };
 }
 
 function deriveSemanticVerdict(results, protocolGate) {
@@ -849,6 +863,49 @@ function deriveSemanticVerdict(results, protocolGate) {
   if (asArray(results).some((reviewResult) => reviewResult && reviewResult.status === 'finding')) return 'issues';
   if (asArray(results).some((reviewResult) => reviewResult && reviewResult.status === 'cannot_verify')) return 'unknown';
   return 'clean';
+}
+
+function deriveIssueSummary(results) {
+  return {
+    findings: asArray(results).filter((reviewResult) => reviewResult && reviewResult.status === 'finding').length,
+    cannotVerify: asArray(results).filter((reviewResult) => reviewResult && reviewResult.status === 'cannot_verify').length,
+  };
+}
+
+function issueSummaryFromFinalReview(finalReview) {
+  if (isObject(finalReview && finalReview.issueSummary)) {
+    return {
+      findings: Number.isInteger(finalReview.issueSummary.findings) ? finalReview.issueSummary.findings : asArray(finalReview.findings).length,
+      cannotVerify: Number.isInteger(finalReview.issueSummary.cannotVerify) ? finalReview.issueSummary.cannotVerify : asArray(finalReview.cannotVerifyItems).length,
+    };
+  }
+  return {
+    findings: asArray(finalReview && finalReview.findings).length,
+    cannotVerify: asArray(finalReview && finalReview.cannotVerifyItems).length,
+  };
+}
+
+function deriveRecommendation(protocolGate, issueSummary) {
+  if (protocolGate === 'blocked') return 'review_blocked';
+  if (protocolGate === 'incomplete') return 'review_incomplete';
+  if (issueSummary.findings > 0) return 'must_fix_before_merge';
+  if (issueSummary.cannotVerify > 0) return 'manual_verification_required';
+  return 'ready_for_merge';
+}
+
+function deriveCannotVerifyItems(results, dispatch) {
+  const reviewItems = new Map(asArray(dispatch && dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
+  return asArray(results)
+    .filter((reviewResult) => reviewResult && reviewResult.status === 'cannot_verify')
+    .map((reviewResult) => {
+      const item = reviewItems.get(reviewResult.reviewItemId) || {};
+      return {
+        reviewItemId: reviewResult.reviewItemId,
+        ruleRef: item.ruleRef || 'unknown',
+        targetId: item.targetId || 'unknown',
+        reason: reviewResult.reason || formatEvidence(reviewResult.evidence) || '未记录原因',
+      };
+    });
 }
 
 function validateFinalReviewShape(finalReview, artifact, result) {
@@ -864,21 +921,23 @@ function validateFinalReviewShape(finalReview, artifact, result) {
     'semanticVerdict',
     'excludedRuleRefs',
     'findings',
+    'issueSummary',
+    'recommendation',
     'validationResults',
   ]);
   if (!PROTOCOL_GATES.includes(finalReview.protocolGate)) addViolation(result, 'FR005', artifact, '/protocolGate', 'protocolGate must be valid', PROTOCOL_GATES, finalReview.protocolGate);
   if (!SCOPE_MODES.includes(finalReview.scopeMode)) addViolation(result, 'FR006', artifact, '/scopeMode', 'scopeMode must be valid', SCOPE_MODES, finalReview.scopeMode);
   if (!COVERAGE_CLAIMS.includes(finalReview.coverageClaim)) addViolation(result, 'FR007', artifact, '/coverageClaim', 'coverageClaim must be valid', COVERAGE_CLAIMS, finalReview.coverageClaim);
   if (!SEMANTIC_VERDICTS.includes(finalReview.semanticVerdict)) addViolation(result, 'FR008', artifact, '/semanticVerdict', 'semanticVerdict must be valid', SEMANTIC_VERDICTS, finalReview.semanticVerdict);
+  validateIssueSummary(finalReview.issueSummary, artifact, result, 'FR015', '/issueSummary');
+  if (!RECOMMENDATIONS.includes(finalReview.recommendation)) addViolation(result, 'FR016', artifact, '/recommendation', 'recommendation must be valid', RECOMMENDATIONS, finalReview.recommendation);
   validateStringSet(finalReview.excludedRuleRefs, artifact, result, 'FR009', '/excludedRuleRefs');
   if (!Array.isArray(finalReview.findings)) addViolation(result, 'FR010', artifact, '/findings', 'findings must be array', 'array', finalReview.findings);
-  if (!Array.isArray(finalReview.validationResults)) addViolation(result, 'FR011', artifact, '/validationResults', 'validationResults must be array', 'array', finalReview.validationResults);
+  validateValidationResults(finalReview, artifact, result);
+  if (finalReview.cannotVerifyItems !== undefined) validateCannotVerifyItems(finalReview.cannotVerifyItems, artifact, result);
   asArray(finalReview.findings).forEach((finding, index) => {
     requireFields(finding, artifact, result, 'FR012', `/findings/${index}`, ['findingId', 'reviewItemId', 'ruleRef', 'targetId', 'evidence']);
     validateEvidenceArray(finding && finding.evidence, artifact, result, 'FR013', `/findings/${index}/evidence`, 'final finding requires evidence');
-  });
-  asArray(finalReview.validationResults).forEach((validation, index) => {
-    if (validation && validation.ok === false) addViolation(result, 'FR014', artifact, `/validationResults/${index}`, 'finalReview.validationResults contains failed validation', 'all ok or omitted failure', validation);
   });
 }
 
@@ -911,6 +970,14 @@ function validateFinalReviewAgainstComputed(finalReview, dispatch, results, comp
   } else if (finalReview.semanticVerdict !== 'unknown') {
     addViolation(result, 'FR028', artifact, '/semanticVerdict', 'incomplete or blocked semanticVerdict must be unknown', 'unknown', finalReview.semanticVerdict);
   }
+  if (!issueSummariesEqual(finalReview.issueSummary, computed.issueSummary)) {
+    addViolation(result, 'FR034', artifact, '/issueSummary', 'finalReview issueSummary must equal validator result', computed.issueSummary, finalReview.issueSummary);
+  }
+  if (finalReview.recommendation !== computed.recommendation) {
+    addViolation(result, 'FR035', artifact, '/recommendation', 'finalReview recommendation must equal validator result', computed.recommendation, finalReview.recommendation);
+  }
+  validateRunValidationSummary(finalReview, computed, artifact, result);
+  validateCannotVerifyItemsAgainstComputed(finalReview, deriveCannotVerifyItems(results, dispatch), artifact, result);
 
   const resultFindings = asArray(results).filter((reviewResult) => reviewResult && reviewResult.status === 'finding');
   const finalFindings = asArray(finalReview.findings);
@@ -951,7 +1018,8 @@ function renderFinalMode(args, result) {
   const dispatch = args.dispatch && args.dispatch !== true ? readJson(args.dispatch, args.dispatch, result, 'D001') : null;
   if (dispatch) validateDispatch(dispatch, args.dispatch, result);
   if (result.violations.length > 0) return;
-  const markdown = renderFinalMarkdown(finalReview, dispatch && dispatch.executionPlan);
+  const runDir = path.dirname(path.resolve(args.input));
+  const markdown = renderFinalMarkdown(finalReview, dispatch, runDir);
   fs.mkdirSync(path.dirname(args.output), { recursive: true });
   fs.writeFileSync(args.output, markdown);
   result.rendered = args.output;
@@ -975,7 +1043,7 @@ function renderResponseMode(args, result) {
   if (!dispatch || result.violations.length > 0) return;
 
   const outputPath = !args.output || args.output === true ? path.join(runDir, 'response.md') : args.output;
-  const markdown = renderResponseMarkdown(runDir, finalReview, dispatch.executionPlan);
+  const markdown = renderResponseMarkdown(runDir, finalReview, dispatch.executionPlan, result.gate);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, markdown);
   result.rendered = outputPath;
@@ -994,70 +1062,112 @@ function validateFinalMarkdownMode(args, result) {
 function validateFinalMarkdown(finalReview, markdownPath, result, dispatch) {
   const markdown = readText(markdownPath, markdownPath, result, 'FM001');
   if (markdown == null || !finalReview) return;
+  const issueSummary = issueSummaryFromFinalReview(finalReview);
+  const recommendation = finalReview.recommendation || deriveRecommendation(finalReview.protocolGate, issueSummary);
   const required = [
-    label(finalReview.protocolGate),
+    reviewTitle(finalReview.protocolGate, issueSummary),
+    protocolGateLabel(finalReview.protocolGate),
     label(finalReview.coverageClaim),
-    label(finalReview.semanticVerdict),
+    reviewConclusion(finalReview.protocolGate, issueSummary),
+    label(recommendation),
+    `问题数：${issueSummary.findings}`,
+    `无法验证：${issueSummary.cannotVerify}`,
+    `runId：${finalReview.runId}`,
+    '验证摘要：',
   ];
-  if (dispatch && dispatch.executionPlan) required.push(formatExecutionMode(dispatch.executionPlan.mode));
+  if (dispatch && dispatch.executionPlan) {
+    required.push(
+      formatExecutionMode(dispatch.executionPlan.mode),
+      `ruleSetId：${dispatch.ruleSet && dispatch.ruleSet.ruleSetId ? dispatch.ruleSet.ruleSetId : '未知'}`,
+      `sourceIndexHash：${dispatch.ruleSet && dispatch.ruleSet.sourceIndexHash ? dispatch.ruleSet.sourceIndexHash : '未知'}`,
+      `reviewItems：${asArray(dispatch.reviewItems).length}`,
+      `reviewBatches：${asArray(dispatch.reviewBatches).length}`,
+    );
+  }
   required.forEach((token, index) => {
     if (!markdown.includes(token)) addViolation(result, `FM00${index + 2}`, markdownPath, null, 'final Markdown must include rendered finalReview status labels', token, markdown);
   });
 }
 
-function renderFinalMarkdown(finalReview, executionPlan) {
+function renderFinalMarkdown(finalReview, dispatch, runDir) {
   const findings = asArray(finalReview.findings);
+  const issueSummary = issueSummaryFromFinalReview(finalReview);
+  const recommendation = finalReview.recommendation || deriveRecommendation(finalReview.protocolGate, issueSummary);
+  const executionPlan = dispatch && dispatch.executionPlan;
   const lines = [
-    '**结论**',
-    `协议门禁：${label(finalReview.protocolGate)}。覆盖声明：${label(finalReview.coverageClaim)}。语义结论：${label(finalReview.semanticVerdict)}。`,
+    `# ${reviewTitle(finalReview.protocolGate, issueSummary)}`,
     '',
-    '**范围**',
+    '## 结论',
+    `- 协议门禁：${protocolGateLabel(finalReview.protocolGate)}`,
+    `- 审查结论：${reviewConclusion(finalReview.protocolGate, issueSummary)}`,
+    `- 修复建议：${label(recommendation)}`,
+    `- 问题数：${issueSummary.findings}`,
+    `- 无法验证：${issueSummary.cannotVerify}`,
+    '',
+    '## 范围',
     `- 范围模式：${label(finalReview.scopeMode)}`,
+    `- 覆盖声明：${label(finalReview.coverageClaim)}`,
     `- 排除规则：${formatList(finalReview.excludedRuleRefs)}`,
     '',
-    '**执行计划**',
+    '## 审计',
+    ...formatAuditLines(finalReview, dispatch, runDir),
+    '',
+    '## 执行计划',
     ...formatExecutionPlanLines(executionPlan),
     '',
-    '**发现**',
+    '## 问题',
     findings.length === 0 ? '- 无' : null,
   ].filter((line) => line !== null);
   findings.forEach((finding) => {
     lines.push(`- ${finding.findingId} | ${finding.reviewItemId} | ${finding.ruleRef} | ${finding.targetId}：${formatEvidence(finding.evidence)}`);
   });
-  lines.push('', '**验证**', `- protocolGate：${label(finalReview.protocolGate)}`);
+  if (issueSummary.cannotVerify > 0) {
+    lines.push('', '## 无法验证', '', '| Review Item | Rule | Target | Reason |', '|---|---|---|---|');
+    const items = asArray(finalReview.cannotVerifyItems);
+    if (items.length === 0) {
+      lines.push('| 未记录 | 未记录 | 未记录 | 请查看 shard results 中 status=cannot_verify 的结果 |');
+    } else {
+      items.forEach((item) => {
+        lines.push(`| ${escapeTableCell(item.reviewItemId)} | ${escapeTableCell(item.ruleRef)} | ${escapeTableCell(item.targetId)} | ${escapeTableCell(item.reason)} |`);
+      });
+    }
+  }
+  lines.push('', '## 验证', `- protocolGate：${protocolGateLabel(finalReview.protocolGate)}`);
   asArray(finalReview.validationResults).forEach((validation) => {
-    lines.push(`- ${validation.mode || 'validation'}：${validation.ok === false ? '失败' : '通过'}`);
+    lines.push(`- ${validation.mode || 'validation'}：${validation.ok === false ? '失败' : '成功'}`);
   });
   return `${lines.join('\n')}\n`;
 }
 
-function renderResponseMarkdown(runDir, finalReview, executionPlan) {
+function renderResponseMarkdown(runDir, finalReview, executionPlan, gate) {
   const finalMdPath = path.resolve(runDir, 'final.md');
   const finalReviewPath = path.resolve(runDir, 'finalReview.json');
   const dispatchPath = path.resolve(runDir, 'dispatch.json');
-  const runCommand = [
-    'node',
-    formatCommandPath(path.relative(process.cwd(), __filename) || __filename),
-    '--mode',
-    'run',
-    '--dir',
-    formatCommandPath(path.relative(process.cwd(), path.resolve(runDir)) || runDir),
-  ].join(' ');
+  const issueSummary = gate && gate.issueSummary ? gate.issueSummary : issueSummaryFromFinalReview(finalReview);
+  const protocolGate = gate && gate.protocolGate ? gate.protocolGate : finalReview.protocolGate;
+  const recommendation = gate && gate.recommendation ? gate.recommendation : finalReview.recommendation || deriveRecommendation(protocolGate, issueSummary);
+  const runCommand = formatRunCommand(runDir);
 
   return [
-    '**结论**',
-    `\`${label(finalReview.protocolGate)}\`。覆盖声明：\`${label(finalReview.coverageClaim)}\`；语义结论：\`${label(finalReview.semanticVerdict)}\`。`,
+    `# ${reviewTitle(protocolGate, issueSummary)}`,
     '',
-    '**报告**',
+    '## 结论',
+    `- 协议门禁：${protocolGateLabel(protocolGate)}`,
+    `- 审查结论：${reviewConclusion(protocolGate, issueSummary)}`,
+    `- 修复建议：${label(recommendation)}`,
+    `- 问题数：${issueSummary.findings}`,
+    `- 无法验证：${issueSummary.cannotVerify}`,
+    '',
+    '## 报告',
     `- 完整报告：${formatMarkdownFileLink('final.md', finalMdPath)}`,
     `- 事实源：${formatMarkdownFileLink('finalReview.json', finalReviewPath)}`,
     `- 分派源：${formatMarkdownFileLink('dispatch.json', dispatchPath)}`,
     '',
-    '**执行计划**',
+    '## 执行计划',
     ...formatExecutionPlanLines(executionPlan),
     '',
-    '**验证**',
-    `- \`${runCommand}\`：通过`,
+    '## 验证',
+    `- \`${runCommand}\`：协议校验成功`,
     '',
   ].join('\n');
 }
@@ -1094,6 +1204,100 @@ function validateStringSet(value, artifact, result, code, pointer) {
   });
   if (new Set(value).size !== value.length) addViolation(result, code, artifact, pointer, 'array values must be unique', 'unique items', value);
   return new Set(value.filter(isNonEmptyString));
+}
+
+function validateIssueSummary(value, artifact, result, code, pointer) {
+  if (!isObject(value)) {
+    addViolation(result, code, artifact, pointer, 'issueSummary must be object', 'object', value);
+    return;
+  }
+  ['findings', 'cannotVerify'].forEach((field) => {
+    if (!Number.isInteger(value[field]) || value[field] < 0) {
+      addViolation(result, code, artifact, `${pointer}/${field}`, 'issueSummary count must be non-negative integer', 'non-negative integer', value[field]);
+    }
+  });
+}
+
+function validateValidationResults(finalReview, artifact, result) {
+  if (!Array.isArray(finalReview.validationResults)) {
+    addViolation(result, 'FR011', artifact, '/validationResults', 'validationResults must be array', 'array', finalReview.validationResults);
+    return;
+  }
+  if (finalReview.validationResults.length === 0) {
+    addViolation(result, 'FR014', artifact, '/validationResults', 'validationResults must include validator run summary', 'non-empty validationResults[]', finalReview.validationResults);
+    return;
+  }
+  asArray(finalReview.validationResults).forEach((validation, index) => {
+    const pointer = `/validationResults/${index}`;
+    requireFields(validation, artifact, result, 'FR041', pointer, ['mode', 'ok', 'protocolGate', 'semanticVerdict', 'issueSummary', 'recommendation']);
+    if (!isNonEmptyString(validation && validation.mode)) addViolation(result, 'FR042', artifact, `${pointer}/mode`, 'validation mode must be non-empty string', 'string', validation && validation.mode);
+    if (typeof (validation && validation.ok) !== 'boolean') addViolation(result, 'FR043', artifact, `${pointer}/ok`, 'validation ok must be boolean', 'boolean', validation && validation.ok);
+    if (!PROTOCOL_GATES.includes(validation && validation.protocolGate)) addViolation(result, 'FR044', artifact, `${pointer}/protocolGate`, 'validation protocolGate must be valid', PROTOCOL_GATES, validation && validation.protocolGate);
+    if (!SEMANTIC_VERDICTS.includes(validation && validation.semanticVerdict)) addViolation(result, 'FR045', artifact, `${pointer}/semanticVerdict`, 'validation semanticVerdict must be valid', SEMANTIC_VERDICTS, validation && validation.semanticVerdict);
+    validateIssueSummary(validation && validation.issueSummary, artifact, result, 'FR046', `${pointer}/issueSummary`);
+    if (!RECOMMENDATIONS.includes(validation && validation.recommendation)) addViolation(result, 'FR047', artifact, `${pointer}/recommendation`, 'validation recommendation must be valid', RECOMMENDATIONS, validation && validation.recommendation);
+  });
+}
+
+function validateRunValidationSummary(finalReview, computed, artifact, result) {
+  const runSummary = asArray(finalReview.validationResults).find((validation) => validation && validation.mode === 'run');
+  if (!runSummary) {
+    addViolation(result, 'FR048', artifact, '/validationResults', 'validationResults must include mode=run summary', 'mode=run', finalReview.validationResults);
+    return;
+  }
+  const expected = {
+    ok: computed.protocolGate === 'passed',
+    protocolGate: computed.protocolGate,
+    semanticVerdict: computed.semanticVerdict,
+    issueSummary: computed.issueSummary,
+    recommendation: computed.recommendation,
+  };
+  if (runSummary.ok !== expected.ok) addViolation(result, 'FR049', artifact, '/validationResults', 'run validation ok must equal validator result', expected.ok, runSummary.ok);
+  if (runSummary.protocolGate !== expected.protocolGate) addViolation(result, 'FR050', artifact, '/validationResults', 'run validation protocolGate must equal validator result', expected.protocolGate, runSummary.protocolGate);
+  if (runSummary.semanticVerdict !== expected.semanticVerdict) addViolation(result, 'FR051', artifact, '/validationResults', 'run validation semanticVerdict must equal validator result', expected.semanticVerdict, runSummary.semanticVerdict);
+  if (!issueSummariesEqual(runSummary.issueSummary, expected.issueSummary)) addViolation(result, 'FR052', artifact, '/validationResults', 'run validation issueSummary must equal validator result', expected.issueSummary, runSummary.issueSummary);
+  if (runSummary.recommendation !== expected.recommendation) addViolation(result, 'FR053', artifact, '/validationResults', 'run validation recommendation must equal validator result', expected.recommendation, runSummary.recommendation);
+}
+
+function issueSummariesEqual(left, right) {
+  return isObject(left)
+    && isObject(right)
+    && left.findings === right.findings
+    && left.cannotVerify === right.cannotVerify;
+}
+
+function validateCannotVerifyItems(value, artifact, result) {
+  if (!Array.isArray(value)) {
+    addViolation(result, 'FR036', artifact, '/cannotVerifyItems', 'cannotVerifyItems must be array', 'array', value);
+    return;
+  }
+  value.forEach((item, index) => {
+    requireFields(item, artifact, result, 'FR037', `/cannotVerifyItems/${index}`, ['reviewItemId', 'ruleRef', 'targetId', 'reason']);
+    if (!REVIEW_ITEM_RE.test(item && item.reviewItemId)) addViolation(result, 'FR057', artifact, `/cannotVerifyItems/${index}/reviewItemId`, 'cannotVerify item reviewItemId must match RIxxx', 'RIxxx', item && item.reviewItemId);
+    if (!isNonEmptyString(item && item.ruleRef)) addViolation(result, 'FR038', artifact, `/cannotVerifyItems/${index}/ruleRef`, 'cannotVerify item ruleRef must be non-empty string', 'string', item && item.ruleRef);
+    if (!isNonEmptyString(item && item.targetId)) addViolation(result, 'FR039', artifact, `/cannotVerifyItems/${index}/targetId`, 'cannotVerify item targetId must be non-empty string', 'string', item && item.targetId);
+    if (!isNonEmptyString(item && item.reason)) addViolation(result, 'FR040', artifact, `/cannotVerifyItems/${index}/reason`, 'cannotVerify item reason must be non-empty string', 'string', item && item.reason);
+  });
+}
+
+function validateCannotVerifyItemsAgainstComputed(finalReview, expectedItems, artifact, result) {
+  const actualItems = asArray(finalReview.cannotVerifyItems);
+  if (expectedItems.length === 0) {
+    if (actualItems.length > 0) addViolation(result, 'FR054', artifact, '/cannotVerifyItems', 'cannotVerifyItems must be empty when no cannot_verify results exist', [], actualItems);
+    return;
+  }
+  if (actualItems.length === 0) {
+    addViolation(result, 'FR055', artifact, '/cannotVerifyItems', 'cannotVerifyItems must include every cannot_verify result', expectedItems, actualItems);
+    return;
+  }
+  if (!cannotVerifyItemsEqual(actualItems, expectedItems)) {
+    addViolation(result, 'FR056', artifact, '/cannotVerifyItems', 'cannotVerifyItems must equal validator result', expectedItems, actualItems);
+  }
+}
+
+function cannotVerifyItemsEqual(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  return left.every((item, index) => ['reviewItemId', 'ruleRef', 'targetId', 'reason'].every((field) => item && right[index] && item[field] === right[index][field]));
 }
 
 function requireSubset(left, right, artifact, result, code, pointer, message) {
@@ -1206,6 +1410,66 @@ function label(value) {
   return LABELS[value] || String(value || '未知');
 }
 
+function protocolGateLabel(value) {
+  return PROTOCOL_GATE_LABELS[value] || label(value);
+}
+
+function formatAuditLines(finalReview, dispatch, runDir) {
+  const ruleSet = dispatch && dispatch.ruleSet ? dispatch.ruleSet : {};
+  const targets = dispatch && dispatch.targets ? dispatch.targets : {};
+  const validation = getRunValidationSummary(finalReview);
+  return [
+    `- runId：${finalReview.runId || '未知'}`,
+    `- ruleSetId：${ruleSet.ruleSetId || '未知'}`,
+    `- sourceIndexHash：${ruleSet.sourceIndexHash || '未知'}`,
+    `- candidateRuleRefs：${asArray(ruleSet.candidateRuleRefs).length}`,
+    `- requiredRuleRefs：${asArray(ruleSet.requiredRuleRefs).length}`,
+    `- excludedRuleRefs：${asArray(ruleSet.excludedRuleRefs).length}`,
+    `- globallyNotApplicableRuleRefs：${asArray(ruleSet.globallyNotApplicableRuleRefs).length}`,
+    `- changedUnits：${asArray(targets.changedUnits).length}`,
+    `- candidates：${asArray(targets.candidates).length}`,
+    `- contextExpansions：${asArray(targets.contextExpansions).length}`,
+    `- reviewItems：${asArray(dispatch && dispatch.reviewItems).length}`,
+    `- reviewBatches：${asArray(dispatch && dispatch.reviewBatches).length}`,
+    `- 验证命令：\`${formatRunCommand(runDir)}\``,
+    `- 验证摘要：protocolGate=${validation.protocolGate || '未知'}，semanticVerdict=${validation.semanticVerdict || '未知'}，findings=${formatMetric(validation.issueSummary && validation.issueSummary.findings)}，cannotVerify=${formatMetric(validation.issueSummary && validation.issueSummary.cannotVerify)}，recommendation=${validation.recommendation || '未知'}`,
+  ];
+}
+
+function getRunValidationSummary(finalReview) {
+  return asArray(finalReview && finalReview.validationResults).find((validation) => validation && validation.mode === 'run') || {};
+}
+
+function formatRunCommand(runDir) {
+  return [
+    'node',
+    formatCommandPath(path.relative(process.cwd(), __filename) || __filename),
+    '--mode',
+    'run',
+    '--dir',
+    formatCommandPath(path.relative(process.cwd(), path.resolve(runDir || '.')) || runDir || '.'),
+  ].join(' ');
+}
+
+function reviewTitle(protocolGate, issueSummary) {
+  if (protocolGate === 'incomplete') return 'rules-review：审查未完成，协议未闭合';
+  if (protocolGate === 'blocked') return 'rules-review：审查阻塞，协议输入或结果不可用';
+  if (issueSummary.findings > 0 && issueSummary.cannotVerify > 0) {
+    return `rules-review：协议通过，发现 ${issueSummary.findings} 项问题，${issueSummary.cannotVerify} 项无法验证`;
+  }
+  if (issueSummary.findings > 0) return `rules-review：协议通过，发现 ${issueSummary.findings} 项问题`;
+  if (issueSummary.cannotVerify > 0) return `rules-review：协议通过，未发现明确问题，但 ${issueSummary.cannotVerify} 项无法验证`;
+  return 'rules-review：协议通过，未发现问题';
+}
+
+function reviewConclusion(protocolGate, issueSummary) {
+  if (protocolGate === 'incomplete') return '审查未完成';
+  if (protocolGate === 'blocked') return '审查阻塞';
+  if (issueSummary.findings > 0) return '发现问题';
+  if (issueSummary.cannotVerify > 0) return '未发现明确问题';
+  return '未发现问题';
+}
+
 function formatExecutionMode(mode) {
   if (mode === 'single_batch') return 'single_batch';
   if (mode === 'multi_batch') return 'multi_batch';
@@ -1245,6 +1509,10 @@ function formatEvidence(evidence) {
     if (item && typeof item.summary === 'string') return item.summary;
     return JSON.stringify(item);
   }).join('；');
+}
+
+function escapeTableCell(value) {
+  return String(value || '').replace(/\|/g, '\\|').replace(/\n/g, '<br>');
 }
 
 main();

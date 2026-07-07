@@ -21,6 +21,23 @@
       ]
     }
   ],
-  "validationResults": [],
-  "summary": "run-fail-final-finding-mismatch fixture"
+  "validationResults": [
+    {
+      "mode": "run",
+      "ok": true,
+      "protocolGate": "passed",
+      "semanticVerdict": "issues",
+      "issueSummary": {
+        "findings": 1,
+        "cannotVerify": 0
+      },
+      "recommendation": "must_fix_before_merge"
+    }
+  ],
+  "summary": "run-fail-final-finding-mismatch fixture",
+  "issueSummary": {
+    "findings": 1,
+    "cannotVerify": 0
+  },
+  "recommendation": "must_fix_before_merge"
 }

@@ -8,6 +8,23 @@
   "semanticVerdict": "clean",
   "excludedRuleRefs": [],
   "findings": [],
-  "validationResults": [],
-  "summary": "run-fail-required-rule-no-item fixture"
+  "validationResults": [
+    {
+      "mode": "run",
+      "ok": true,
+      "protocolGate": "passed",
+      "semanticVerdict": "clean",
+      "issueSummary": {
+        "findings": 0,
+        "cannotVerify": 0
+      },
+      "recommendation": "ready_for_merge"
+    }
+  ],
+  "summary": "run-fail-required-rule-no-item fixture",
+  "issueSummary": {
+    "findings": 0,
+    "cannotVerify": 0
+  },
+  "recommendation": "ready_for_merge"
 }

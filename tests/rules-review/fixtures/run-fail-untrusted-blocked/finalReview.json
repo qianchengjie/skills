@@ -8,6 +8,23 @@
   "semanticVerdict": "unknown",
   "excludedRuleRefs": [],
   "findings": [],
-  "validationResults": [],
-  "summary": "run-fail-untrusted-blocked fixture"
+  "validationResults": [
+    {
+      "mode": "run",
+      "ok": false,
+      "protocolGate": "blocked",
+      "semanticVerdict": "unknown",
+      "issueSummary": {
+        "findings": 0,
+        "cannotVerify": 0
+      },
+      "recommendation": "review_blocked"
+    }
+  ],
+  "summary": "run-fail-untrusted-blocked fixture",
+  "issueSummary": {
+    "findings": 0,
+    "cannotVerify": 0
+  },
+  "recommendation": "review_blocked"
 }

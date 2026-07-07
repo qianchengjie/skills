@@ -3,7 +3,7 @@
   "$id": "https://agents.local/rules-review/final-review.schema.json",
   "title": "rules-review final review",
   "type": "object",
-  "required": ["kind", "schemaVersion", "runId", "protocolGate", "scopeMode", "coverageClaim", "semanticVerdict", "excludedRuleRefs", "findings", "validationResults"],
+  "required": ["kind", "schemaVersion", "runId", "protocolGate", "scopeMode", "coverageClaim", "semanticVerdict", "excludedRuleRefs", "findings", "issueSummary", "recommendation", "validationResults"],
   "properties": {
     "kind": { "const": "rules-review-final-review" },
     "schemaVersion": { "const": 2 },
@@ -14,10 +14,43 @@
     "semanticVerdict": { "enum": ["clean", "issues", "unknown"] },
     "excludedRuleRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
     "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
-    "validationResults": { "type": "array" },
+    "issueSummary": { "$ref": "#/$defs/issueSummary" },
+    "recommendation": { "enum": ["ready_for_merge", "must_fix_before_merge", "manual_verification_required", "review_incomplete", "review_blocked"] },
+    "cannotVerifyItems": { "type": "array", "items": { "$ref": "#/$defs/cannotVerifyItem" } },
+    "validationResults": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/validationResult" } },
     "summary": { "type": "string" }
   },
   "$defs": {
+    "issueSummary": {
+      "type": "object",
+      "required": ["findings", "cannotVerify"],
+      "properties": {
+        "findings": { "type": "integer", "minimum": 0 },
+        "cannotVerify": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "cannotVerifyItem": {
+      "type": "object",
+      "required": ["reviewItemId", "ruleRef", "targetId", "reason"],
+      "properties": {
+        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
+        "ruleRef": { "type": "string", "minLength": 1 },
+        "targetId": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "validationResult": {
+      "type": "object",
+      "required": ["mode", "ok", "protocolGate", "semanticVerdict", "issueSummary", "recommendation"],
+      "properties": {
+        "mode": { "type": "string", "minLength": 1 },
+        "ok": { "type": "boolean" },
+        "protocolGate": { "enum": ["passed", "incomplete", "blocked"] },
+        "semanticVerdict": { "enum": ["clean", "issues", "unknown"] },
+        "issueSummary": { "$ref": "#/$defs/issueSummary" },
+        "recommendation": { "enum": ["ready_for_merge", "must_fix_before_merge", "manual_verification_required", "review_incomplete", "review_blocked"] }
+      }
+    },
     "finding": {
       "type": "object",
       "required": ["findingId", "reviewItemId", "ruleRef", "targetId", "evidence"],

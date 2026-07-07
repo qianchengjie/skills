@@ -8,6 +8,31 @@
   "semanticVerdict": "clean",
   "excludedRuleRefs": [],
   "findings": [],
-  "validationResults": [],
-  "summary": "full clean fixture"
+  "validationResults": [
+    {
+      "mode": "run",
+      "ok": true,
+      "protocolGate": "passed",
+      "semanticVerdict": "clean",
+      "issueSummary": {
+        "findings": 0,
+        "cannotVerify": 1
+      },
+      "recommendation": "manual_verification_required"
+    }
+  ],
+  "summary": "full clean fixture",
+  "issueSummary": {
+    "findings": 0,
+    "cannotVerify": 1
+  },
+  "recommendation": "manual_verification_required",
+  "cannotVerifyItems": [
+    {
+      "reviewItemId": "RI001",
+      "ruleRef": "CORE-001",
+      "targetId": "T001",
+      "reason": "未记录原因"
+    }
+  ]
 }

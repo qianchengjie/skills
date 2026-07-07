@@ -10,6 +10,23 @@
     "TYPE-001"
   ],
   "findings": [],
-  "validationResults": [],
-  "summary": "scoped clean fixture"
+  "validationResults": [
+    {
+      "mode": "run",
+      "ok": true,
+      "protocolGate": "passed",
+      "semanticVerdict": "clean",
+      "issueSummary": {
+        "findings": 0,
+        "cannotVerify": 0
+      },
+      "recommendation": "ready_for_merge"
+    }
+  ],
+  "summary": "scoped clean fixture",
+  "issueSummary": {
+    "findings": 0,
+    "cannotVerify": 0
+  },
+  "recommendation": "ready_for_merge"
 }
