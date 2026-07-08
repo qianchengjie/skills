@@ -57,7 +57,7 @@ Task brief：<dev-plans/.../task-briefs/<S-id>.md>
 - task brief 存在且切片号一致。
 - task brief 内没有阻塞本片的 open D。
 - 必读上下文足够支持实现。
-- 已按 task brief 的 `项目规范` 判断本片规则；若缺失或不够判断则 blocked。
+- 已按 task brief 的 `项目规则审查` 中 selectedRuleIds 和 `规则获取` 命令理解本片规则；若命令失败、规则冲突或无法满足则 blocked。不要运行 `rules-review`，也不要判断最终规则审查是否 passed。
 - 已理解 task brief 中的 Claims；每条 claim 都能映射到实现、验证、blocked 或风险说明。
 - 预计改动不会越过 task brief 的允许修改范围，也不会命中禁止修改。
 - 没有发现新分叉、风险升级或验证方式变化。

@@ -82,8 +82,12 @@ async function writeValidExecutingPlan(planDir) {
 
 - 需理解：待执行前补充。
 - 必读上下文：待执行前补充。
-- 项目规范:
-  - AGENTS.md：默认中文回复和不新增依赖。
+- 项目规则审查:
+  - 状态：not-applicable
+  - rules-review：not-checked
+  - 规则获取：不适用
+  - 规则校验：skipped（已检查规则仓，本片无适用 rule ID）
+  - 适用规则：无
 - 允许修改：
   - src/example.ts
   - test/example.test.ts
@@ -169,8 +173,12 @@ function createConsumerSliceBlock() {
 
 - 需理解：待执行前补充。
 - 必读上下文：待执行前补充。
-- 项目规范:
-  - 无
+- 项目规则审查:
+  - 状态：not-applicable
+  - rules-review：not-checked
+  - 规则获取：不适用
+  - 规则校验：skipped（已检查规则仓，本片无适用 rule ID）
+  - 适用规则：无
 - 允许修改：
   - src/consumer.ts
 - 禁止修改：
@@ -235,7 +243,6 @@ function getWholeFixturePackageRef() {
 function withPassedReviewVerdicts(plan, { sliceId = 'S1' } = {}) {
   if (plan.includes('#### AI Review 结论')) return plan;
   const packageRef = getSliceFixturePackageRef(sliceId);
-  const projectRulesRef = getSliceFixturePackageRef(sliceId, '#项目规范');
   return plan.replace(
     '\n#### 门禁记录',
     `
@@ -245,7 +252,8 @@ function withPassedReviewVerdicts(plan, { sliceId = 'S1' } = {}) {
 | --- | --- | --- | --- | --- |
 | 需求符合性 | passed | not-applicable | ${packageRef} | 覆盖任务要求 |
 | 切片边界 / 交接一致性 | passed | not-applicable | ${packageRef} | 覆盖切片边界 |
-| 代码质量 / AI 污染检查 | passed | not-applicable | ${projectRulesRef} | 符合项目规范 |
+| 代码质量 / AI 污染检查 | passed | not-applicable | ${packageRef} | 代码质量可接受 |
+| 项目规则审查 | not-applicable | not-applicable | 上下文预检 / 项目规则审查 | 本切片无适用项目规则 |
 
 #### 门禁记录`,
   );
@@ -294,6 +302,43 @@ function withFilledContextPreflight(plan) {
   return plan
     .replace('- 需理解：待执行前补充。', '- 需理解：示例旧行为与切片边界。')
     .replace('- 必读上下文：待执行前补充。', '- 必读上下文：src/example.ts 与 test/example.test.ts。');
+}
+
+function withRequiredProjectRuleReview(plan) {
+  return plan.replace(`- 项目规则审查:
+  - 状态：not-applicable
+  - rules-review：not-checked
+  - 规则获取：不适用
+  - 规则校验：skipped（已检查规则仓，本片无适用 rule ID）
+  - 适用规则：无`, `- 项目规则审查:
+  - 状态：required
+  - rules-review：available
+  - 规则获取：node .agents/skills/rule-steward/scripts/get-rules.mjs CORE-001
+  - 规则校验：passed
+  - 适用规则：
+    - CORE-001：适用原因：当前切片修改核心流程。`);
+}
+
+function withUnavailableProjectRuleReview(plan) {
+  return plan.replace(`- 项目规则审查:
+  - 状态：not-applicable
+  - rules-review：not-checked
+  - 规则获取：不适用
+  - 规则校验：skipped（已检查规则仓，本片无适用 rule ID）
+  - 适用规则：无`, `- 项目规则审查:
+  - 状态：not-applicable
+  - rules-review：unavailable
+  - 规则获取：node .agents/skills/rule-steward/scripts/get-rules.mjs CORE-001
+  - 规则校验：skipped（rules-review unavailable，未执行独立项目规则审查）
+  - 适用规则：
+    - CORE-001：适用原因：当前切片修改核心流程。`);
+}
+
+function withPassedRequiredProjectRuleReviewVerdict(plan) {
+  return plan.replace(
+    '| 项目规则审查 | not-applicable | not-applicable | 上下文预检 / 项目规则审查 | 本切片无适用项目规则 |',
+    '| 项目规则审查 | passed | not-applicable | A2 | rules-review 结论 clean |',
+  );
 }
 
 function withReviewPackageReadySlice(plan, planDir = 'dev-plans/2026-06-10-close-check', sliceId = 'S1') {
@@ -460,10 +505,6 @@ async function writeReviewPackageFixture(planDir, sliceId = 'S1') {
 
 # Task Report：${sliceId}
 
-## 项目规范
-
-- AGENTS.md：默认中文回复和不新增依赖。
-
 ## Claims
 
 | Claim | Type | Priority | Status | Text | Evidence Summary |
@@ -555,6 +596,36 @@ async function markWholeReviewPassed(planDir) {
   await fs.writeFile(
     planPath,
     withPassedWholeReview(await fs.readFile(planPath, 'utf8')),
+    'utf8',
+  );
+}
+
+async function appendProjectRuleReviewAudit(planDir, {
+  validation = 'node .agents/skills/rules-review/scripts/validate.js --mode run --dir .rules-review-tmp/S1 => passed',
+  verdict = 'passed',
+  severity = 'not-applicable',
+  summary = 'rules-review clean',
+} = {}) {
+  const auditsPath = path.join(planDir, 'audits.md');
+  const audits = await fs.readFile(auditsPath, 'utf8');
+  const lines = [
+    '- 状态：done',
+    '- 关联：S1',
+    '',
+    '- selectedRuleIds: CORE-001',
+  ];
+  if (validation !== null) lines.push(`- validation: ${validation}`);
+  if (verdict !== null) lines.push(`- verdict: ${verdict}`);
+  if (severity !== null) lines.push(`- severity: ${severity}`);
+  if (summary !== null) lines.push(`- summary: ${summary}`);
+  await fs.writeFile(
+    auditsPath,
+    `${audits.trimEnd()}
+
+### A2：项目规则审查 S1
+
+${lines.join('\n')}
+`,
     'utf8',
   );
 }
@@ -1595,7 +1666,8 @@ test('validate rejects legacy four-column AI Review verdict table', async () => 
       .replace('| --- | --- | --- | --- | --- |', '| --- | --- | --- | --- |')
       .replace(' | 覆盖任务要求 |', ' |')
       .replace(' | 覆盖切片边界 |', ' |')
-      .replace(' | 符合项目规范 |', ' |');
+      .replace(' | 代码质量可接受 |', ' |')
+      .replace(' | 本切片无适用项目规则 |', ' |');
     await fs.writeFile(planPath, plan, 'utf8');
 
     const errors = await validatePlan(planDir);
@@ -1913,7 +1985,7 @@ test('validate requires 需理解 in context preflight', async () => {
   });
 });
 
-test('validate requires 项目规范 in context preflight', async () => {
+test('validate requires 项目规则审查 in context preflight', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-project-rules');
     await writeValidExecutingPlan(planDir);
@@ -1921,12 +1993,64 @@ test('validate requires 项目规范 in context preflight', async () => {
     const plan = await fs.readFile(planPath, 'utf8');
     await fs.writeFile(
       planPath,
-      plan.replace('- 项目规范:\n  - AGENTS.md：默认中文回复和不新增依赖。\n', ''),
+      plan.replace(`- 项目规则审查:
+  - 状态：not-applicable
+  - rules-review：not-checked
+  - 规则获取：不适用
+  - 规则校验：skipped（已检查规则仓，本片无适用 rule ID）
+  - 适用规则：无
+`, ''),
       'utf8',
     );
 
     const errors = await validatePlan(planDir);
-    assert(errors.some((error) => error.includes('上下文预检 missing 项目规范')));
+    assert(errors.some((error) => error.includes('上下文预检 missing 项目规则审查')));
+  });
+});
+
+test('validate rejects invalid 项目规则审查 status', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-project-rule-review-status');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = await fs.readFile(planPath, 'utf8');
+    await fs.writeFile(planPath, plan.replace('- 状态：not-applicable', '- 状态：available'), 'utf8');
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('项目规则审查 invalid 状态 available')));
+  });
+});
+
+test('validate rejects required 项目规则审查 without available rules-review and passed rule validation', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-project-rule-review-required-fields');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8'))
+      .replace('- rules-review：available', '- rules-review：unavailable')
+      .replace('- 规则获取：node .agents/skills/rule-steward/scripts/get-rules.mjs CORE-001', '- 规则获取：不适用')
+      .replace('- 规则校验：passed', '- 规则校验：skipped');
+    await fs.writeFile(planPath, plan, 'utf8');
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('required requires rules-review available')));
+    assert(errors.some((error) => error.includes('required must keep resolved 规则获取')));
+    assert(errors.some((error) => error.includes('required requires passed 规则校验')));
+  });
+});
+
+test('validate rejects not-applicable 项目规则审查 with rule IDs unless rules-review is unavailable', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-project-rule-review-unavailable');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8'))
+      .replace('- 状态：required', '- 状态：not-applicable')
+      .replace('- rules-review：available', '- rules-review：not-checked');
+    await fs.writeFile(planPath, plan, 'utf8');
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('not-applicable with rule IDs requires rules-review unavailable')));
   });
 });
 
@@ -1959,38 +2083,13 @@ test('validate rejects AI Review passed with failed verdict before done', async 
   });
 });
 
-test('validate accepts AI Review passed with project rules evidence note', async () => {
-  const notes = [
-    'AGENTS.md',
-    '没有新增依赖',
-    '没有违反项目规范',
-  ];
-  for (const [index, note] of notes.entries()) {
-    await withTempRepo(async () => {
-      const planDir = path.join('dev-plans', `2026-06-10-review-project-rules-note-${index}`);
-      await writeValidExecutingPlan(planDir);
-      const planPath = path.join(planDir, 'plan.md');
-      const plan = withPassedReviewVerdicts(await fs.readFile(planPath, 'utf8'))
-        .replace('- AI Review：pending', '- AI Review：passed')
-        .replace('符合项目规范', note);
-      await fs.writeFile(planPath, plan, 'utf8');
-
-      assert.deepEqual(await validatePlan(planDir), []);
-    });
-  }
-});
-
-test('validate accepts AI Review not-applicable with explicit N/A project rules evidence', async () => {
+test('validate accepts AI Review passed with fourth 项目规则审查 verdict', async () => {
   await withTempRepo(async () => {
-    const planDir = path.join('dev-plans', '2026-06-10-review-project-rules-not-applicable-token');
+    const planDir = path.join('dev-plans', '2026-06-10-review-project-rule-verdict');
     await writeValidExecutingPlan(planDir);
     const planPath = path.join(planDir, 'plan.md');
-      const plan = withPassedReviewVerdicts(await fs.readFile(planPath, 'utf8'))
-        .replace('- AI Review：pending', '- AI Review：passed')
-        .replace(
-          `| 代码质量 / AI 污染检查 | passed | not-applicable | ${getSliceFixturePackageRef('S1', '#项目规范')} | 符合项目规范 |`,
-          '| 代码质量 / AI 污染检查 | not-applicable | not-applicable | N/A | 本切片无适用项目规范 |',
-        );
+    const plan = withPassedReviewVerdicts(await fs.readFile(planPath, 'utf8'))
+      .replace('- AI Review：pending', '- AI Review：passed');
     await fs.writeFile(planPath, plan, 'utf8');
 
     assert.deepEqual(await validatePlan(planDir), []);
@@ -2011,7 +2110,7 @@ test('validate accepts non-passed code quality verdict evidence', async () => {
       const plan = withPassedReviewVerdicts(await fs.readFile(planPath, 'utf8'))
         .replace('- AI Review：pending', `- ${aiReview}`)
         .replace(
-          `| 代码质量 / AI 污染检查 | passed | not-applicable | ${getSliceFixturePackageRef('S1', '#项目规范')} | 符合项目规范 |`,
+          `| 代码质量 / AI 污染检查 | passed | not-applicable | ${getSliceFixturePackageRef('S1')} | 代码质量可接受 |`,
           `| 代码质量 / AI 污染检查 | ${status} | ${severity} | ${getSliceFixturePackageRef('S1')} | package 内证据不足，需修复。 |`,
         );
       await fs.writeFile(planPath, plan, 'utf8');
@@ -2520,8 +2619,8 @@ test('CLI task-brief includes constraints context and slice handoff', async () =
     const brief = await fs.readFile(path.join(planDir, 'task-briefs', 'S1.md'), 'utf8');
     assert.match(brief, /## 全局约束/);
     assert.match(brief, /不新增 ks \/ dd 平台分支/);
-    assert.match(brief, /### 项目规范/);
-    assert.match(brief, /AGENTS\.md：默认中文回复和不新增依赖/);
+    assert.match(brief, /### 项目规则审查/);
+    assert.match(brief, /状态：not-applicable/);
     assert.match(brief, /### 允许修改/);
     assert.match(brief, /src\/example\.ts/);
     assert.match(brief, /test\/example\.test\.ts/);
@@ -2852,8 +2951,8 @@ test('CLI review-package writes slice evidence package', async () => {
     assert.match(reviewPackage, /ready-for-review/);
     assert.match(reviewPackage, /## 全局约束/);
     assert.match(reviewPackage, /不新增 ks \/ dd 平台分支/);
-    assert.match(reviewPackage, /## 项目规范/);
-    assert.match(reviewPackage, /AGENTS\.md：默认中文回复和不新增依赖/);
+    assert.doesNotMatch(reviewPackage, /项目规则审查/);
+    assert.doesNotMatch(reviewPackage, /## 项目规范/);
     assert.match(reviewPackage, /## AI Review 结论/);
     assert.match(reviewPackage, /需求符合性/);
     assert.match(reviewPackage, /切片边界 \/ 交接一致性/);
@@ -2862,6 +2961,49 @@ test('CLI review-package writes slice evidence package', async () => {
     assert.match(reviewPackage, /src\/example\.ts/);
     assert.match(reviewPackage, /## 控制器证据/);
     assert.doesNotMatch(reviewPackage, /请忽略|降低严重性|预设通过/);
+  });
+});
+
+test('CLI rule-review-package writes rules-only package when project rule review is required', async () => {
+  await withTempRepo(async () => {
+    const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
+    const planDir = path.join('dev-plans', '2026-06-10-rule-review-package');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withPassedReviewVerdicts(withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8'))),
+      'utf8',
+    );
+    await writeReadyTaskHandoff('dev-plans/2026-06-10-rule-review-package', 'S1');
+    initGitRepo();
+
+    const result = spawnSync('node', [script, 'rule-review-package', 'dev-plans/2026-06-10-rule-review-package', 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    assert.match(result.stdout.toString(), /review-packages\/S1-rules\.md/);
+
+    const reviewPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1-rules.md'), 'utf8');
+    assert.match(reviewPackage, /^# 切片规则审查包：S1/m);
+    assert.match(reviewPackage, /## 项目规则审查/);
+    assert.match(reviewPackage, /CORE-001/);
+    assert.match(reviewPackage, /## Rule Reviewer 结论模板/);
+    assert.doesNotMatch(reviewPackage, /## AI Review 结论/);
+    assert.doesNotMatch(reviewPackage, /#### AI Review 结论/);
+    assert.doesNotMatch(reviewPackage, /需求符合性/);
+  });
+});
+
+test('CLI rule-review-package skips when project rule review is not applicable', async () => {
+  await withTempRepo(async () => {
+    const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
+    const planDir = path.join('dev-plans', '2026-06-10-rule-review-package-skip');
+    await writeValidExecutingPlan(planDir);
+    await writeReadyTaskHandoff('dev-plans/2026-06-10-rule-review-package-skip', 'S1');
+
+    const result = spawnSync('node', [script, 'rule-review-package', 'dev-plans/2026-06-10-rule-review-package-skip', 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    assert.match(result.stdout.toString(), /not-applicable/);
+    assert.equal(await fs.stat(path.join(planDir, 'review-packages', 'S1-rules.md')).then(() => true, () => false), false);
   });
 });
 
@@ -3438,10 +3580,6 @@ test('workflow eval close-check requires Claims section in review package', asyn
 
 # Task Report：S1
 
-## 项目规范
-
-- AGENTS.md：默认中文回复和不新增依赖。
-
 ## Git Diff
 
 \`\`\`diff
@@ -3489,51 +3627,75 @@ test('workflow eval close-check requires top-level review package sections', asy
   });
 });
 
-test('workflow eval close-check requires real project rules section in review package', async () => {
+test('CLI close-check requires project rule review A* evidence when required', async () => {
   await withTempRepo(async () => {
     const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
-    const planDir = path.join('dev-plans', '2026-06-10-close-check-project-rules-section');
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-rule-review-required');
     await writeValidExecutingPlan(planDir);
-    await writeCloseCheckHandoffFixtures('dev-plans/2026-06-10-close-check-project-rules-section');
-    await fs.writeFile(
-      path.join(planDir, 'review-packages', 'S1.md'),
-      `# 切片审查包：S1
-
-## Reviewer Instructions
-
-项目规范是拒收依据，但这里不是项目规范章节。
-
-## Task Brief
-
-# Task Brief：S1
-
-### 项目规范
-
-- AGENTS.md：默认中文回复和不新增依赖。
-
-## Task Report
-
-# Task Report：S1
-
-## Git Diff
-
-\`\`\`diff
-无当前 git dirty diff。
-\`\`\`
-`,
-      'utf8',
+    let plan = withRequiredProjectRuleReview(await fs.readFile(path.join(planDir, 'plan.md'), 'utf8'));
+    await fs.writeFile(path.join(planDir, 'plan.md'), plan, 'utf8');
+    await writeCloseCheckHandoffFixtures('dev-plans/2026-06-10-close-check-rule-review-required');
+    plan = withPassedRequiredProjectRuleReviewVerdict(
+      withClosedDoneSlice(await fs.readFile(path.join(planDir, 'plan.md'), 'utf8'), planDir),
     );
-    const planPath = path.join(planDir, 'plan.md');
-    await fs.writeFile(
-      planPath,
-      withPassedWholeReview(withClosedDoneSlice(await fs.readFile(planPath, 'utf8'), planDir)),
-      'utf8',
-    );
+    await fs.writeFile(path.join(planDir, 'plan.md'), plan, 'utf8');
     initGitRepo();
 
-    const result = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-project-rules-section']);
+    const missingAudit = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-required']);
+    assert.equal(missingAudit.status, 1, missingAudit.stderr.toString());
+    assert.match(missingAudit.stderr.toString(), /项目规则审查 evidence references missing audit A2/);
+
+    await appendProjectRuleReviewAudit(planDir);
+    const passed = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-required']);
+    assert.equal(passed.status, 0, passed.stderr.toString());
+  });
+});
+
+test('CLI close-check rejects thin project rule review A* projection', async () => {
+  await withTempRepo(async () => {
+    const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-rule-review-thin-audit');
+    await writeValidExecutingPlan(planDir);
+    let plan = withRequiredProjectRuleReview(await fs.readFile(path.join(planDir, 'plan.md'), 'utf8'));
+    await fs.writeFile(path.join(planDir, 'plan.md'), plan, 'utf8');
+    await writeCloseCheckHandoffFixtures('dev-plans/2026-06-10-close-check-rule-review-thin-audit');
+    plan = withPassedRequiredProjectRuleReviewVerdict(
+      withClosedDoneSlice(await fs.readFile(path.join(planDir, 'plan.md'), 'utf8'), planDir),
+    );
+    await fs.writeFile(path.join(planDir, 'plan.md'), plan, 'utf8');
+    await appendProjectRuleReviewAudit(planDir, { validation: null, severity: null });
+    initGitRepo();
+
+    const result = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-thin-audit']);
     assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /review package missing 项目规范/);
+    assert.match(result.stderr.toString(), /项目规则审查 audit A2 validation must be passed/);
+    assert.match(result.stderr.toString(), /项目规则审查 audit A2 must include valid severity/);
+  });
+});
+
+test('CLI close-check requires explicit unavailable note for skipped project rule review', async () => {
+  await withTempRepo(async () => {
+    const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-rule-review-unavailable');
+    await writeValidExecutingPlan(planDir);
+    let plan = withUnavailableProjectRuleReview(await fs.readFile(path.join(planDir, 'plan.md'), 'utf8'));
+    await fs.writeFile(path.join(planDir, 'plan.md'), plan, 'utf8');
+    await writeCloseCheckHandoffFixtures('dev-plans/2026-06-10-close-check-rule-review-unavailable');
+    plan = withClosedDoneSlice(await fs.readFile(path.join(planDir, 'plan.md'), 'utf8'), planDir);
+    await fs.writeFile(path.join(planDir, 'plan.md'), plan, 'utf8');
+    initGitRepo();
+
+    const missingNote = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-unavailable']);
+    assert.equal(missingNote.status, 1, missingNote.stderr.toString());
+    assert.match(missingNote.stderr.toString(), /unavailable verdict note must include 未执行独立项目规则审查/);
+
+    await fs.writeFile(
+      path.join(planDir, 'plan.md'),
+      plan.replace('本切片无适用项目规则', '未执行独立项目规则审查；implementer 仍按 selectedRuleIds 与 get-rules 实现'),
+      'utf8',
+    );
+    const passed = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-unavailable']);
+    assert.equal(passed.status, 0, passed.stderr.toString());
   });
 });
 
