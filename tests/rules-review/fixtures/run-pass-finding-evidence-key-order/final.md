@@ -10,9 +10,13 @@
 - 无法验证：0
 - 观察项：0
 
+## 问题
+### 必须修复
+- F001 | RI001 | CORE-001 | MUST | 本次引入 | T001：CORE-001 finding evidence
+
 ## 范围
 - 范围模式：完整范围
-- 覆盖声明：协议覆盖完整
+- 覆盖声明：本轮范围协议覆盖完整
 - 排除规则：无
 
 ## 审计
@@ -20,6 +24,7 @@
 - ruleSetId：RS001
 - sourceIndexHash：sha256-index
 - candidateRuleRefs：3
+- selectedRuleRefs：3
 - requiredRuleRefs：2
 - excludedRuleRefs：0
 - globallyNotApplicableRuleRefs：1
@@ -39,10 +44,6 @@
 - metrics：changedUnits=1，candidates=1，targets=2，requiredRuleRefs=2，reviewItems=3
 - userRequestedConcurrency：false
 - reason：reviewItems/targets/rules are within single-batch default range.
-
-## 问题
-### 必须修复
-- F001 | RI001 | CORE-001 | MUST | 本次引入 | T001：CORE-001 finding evidence
 
 ## 验证
 - protocolGate：协议通过

@@ -260,7 +260,12 @@ assert.doesNotMatch(responseOutput.response, /## 验证/);
 const cleanFinal = fs.readFileSync(path.join(fixtures, "run-pass-full-clean", "final.md"), "utf8");
 assert.match(cleanFinal, /rules-review：协议通过，未发现问题/);
 assert.match(cleanFinal, /修复建议：可以合并/);
+assert.match(cleanFinal, /覆盖声明：本轮范围协议覆盖完整/);
+assert.match(cleanFinal, /selectedRuleRefs：3/);
 assertNoStandalonePassedLabel(cleanFinal);
+
+const scopedFinal = fs.readFileSync(path.join(fixtures, "run-pass-scoped-clean", "final.md"), "utf8");
+assert.match(scopedFinal, /覆盖声明：本轮限定范围协议覆盖完整/);
 
 const findingFinal = fs.readFileSync(path.join(fixtures, "run-pass-finding-evidence-key-order", "final.md"), "utf8");
 assert.match(findingFinal, /rules-review：协议通过，发现 1 项问题/);

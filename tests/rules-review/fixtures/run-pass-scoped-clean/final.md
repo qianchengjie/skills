@@ -10,9 +10,12 @@
 - 无法验证：0
 - 观察项：0
 
+## 问题
+- 无
+
 ## 范围
 - 范围模式：限定范围
-- 覆盖声明：限定协议覆盖完整
+- 覆盖声明：本轮限定范围协议覆盖完整
 - 排除规则：TYPE-001
 
 ## 审计
@@ -20,6 +23,7 @@
 - ruleSetId：RS001
 - sourceIndexHash：sha256-index
 - candidateRuleRefs：2
+- selectedRuleRefs：2
 - requiredRuleRefs：1
 - excludedRuleRefs：1
 - globallyNotApplicableRuleRefs：0
@@ -39,9 +43,6 @@
 - metrics：changedUnits=1，candidates=0，targets=1，requiredRuleRefs=1，reviewItems=1
 - userRequestedConcurrency：false
 - reason：reviewItems/targets/rules are within single-batch default range.
-
-## 问题
-- 无
 
 ## 验证
 - protocolGate：协议通过

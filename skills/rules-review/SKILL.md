@@ -54,11 +54,13 @@ ruleSet -> targets -> applicabilityMatrix -> reviewItems -> executionPlan -> rev
 1. 读取 `CORE` 指向的 active 文件。
 2. 按 `trigger / applies-to` 读取其它匹配的 active namespace 文件。
 3. 形成 `ruleSet.candidateRuleRefs`。
-4. 从候选规则中形成本轮一等输入 `ruleSet.selectedRuleRefs`。
-5. 从已选规则中拆出 `requiredRuleRefs`、`excludedRuleRefs` 和 `globallyNotApplicableRuleRefs`。
+4. 形成本轮一等输入 `ruleSet.selectedRuleRefs`，作为用户 / 上游 / 主 agent 声明的本轮审查范围真源。
+5. 从本轮审查范围中拆出 `requiredRuleRefs`、`excludedRuleRefs` 和 `globallyNotApplicableRuleRefs`。
 6. 为每个规则来源记录 `namespace`、`ruleRef`、`sourceFile`、`sourceHash`、`trigger`、`appliesTo`，以及 `summary` 或 `ruleText`。
 
-不要把 namespace 或 ruleRef 本身当完成门禁。完成门禁只看结构协议是否闭合：每个 required rule 对每个 target 都有适用性判断；`applicable` 行都有对应 required `reviewItem`；`required: true` 的 `reviewItems` 都有且只有一个合法 `result`。
+`candidateRuleRefs` 是可见候选池，不是覆盖声明真源；`selectedRuleRefs` 是本轮审查范围真源。用户明确只要求审查 A、B 时，C 可以留在 candidate 中但不进入 selected；最终覆盖声明只对 selected 范围负责，不表示 candidate 全量都已处理。
+
+不要把 namespace 或 ruleRef 本身当完成门禁。完成门禁只看本轮 selected 范围内的结构协议是否闭合：每个 required rule 对每个 target 都有适用性判断；`applicable` 行都有对应 required `reviewItem`；`required: true` 的 `reviewItems` 都有且只有一个合法 `result`。
 
 最小审查原子是：
 
@@ -141,7 +143,7 @@ ruleRef x targetId = reviewItem
 规则集合关系必须闭合：
 
 - `selectedRuleRefs` 必须是 `candidateRuleRefs` 的子集。
-- `selectedRuleRefs` 必须全部被分类为 `requiredRuleRefs`、`excludedRuleRefs` 或 `globallyNotApplicableRuleRefs`。
+- `selectedRuleRefs` 必须全部被分类为 `requiredRuleRefs`、`excludedRuleRefs` 或 `globallyNotApplicableRuleRefs`，该闭合只声明本轮审查范围闭合。
 - `requiredRuleRefs`、`excludedRuleRefs`、`globallyNotApplicableRuleRefs` 都必须是 `selectedRuleRefs` 的子集。
 - 三组集合两两不得相交。
 - `globallyNotApplicableRuleRefs` 不得生成 `required: true` 的 `reviewItem`。
@@ -332,7 +334,7 @@ SHOULD / ADVISORY => should_fix
 
 `findings[]` 必须按 `priority` 稳定排序：`must_fix` 在前，`should_fix` 在后；同一 `priority` 内按 `findingId` 升序。
 
-`coverageClaim` 只表示协议覆盖：required reviewItems 是否都有合法 result，以及 scoped/full 范围声明是否闭合。它不表示所有结果都可实质验证；实质验证缺口必须通过 `issueSummary.cannotVerify` 和 `cannotVerifyItems[]` 展示。
+`coverageClaim` 只表示本轮 selected 范围内的协议覆盖：required reviewItems 是否都有合法 result，以及 scoped/full 范围声明是否闭合。它不表示 candidateRuleRefs 全量都已审查，也不表示所有结果都可实质验证；实质验证缺口必须通过 `issueSummary.cannotVerify` 和 `cannotVerifyItems[]` 展示。
 
 `issueSummary` 至少包含：
 
@@ -496,7 +498,7 @@ stdout 一律输出 strict JSON。
 - 最终回复必须运行 `validate.js --mode render-response --dir .rules-review-tmp/<run-id>`，并直接复用生成的 `response.md` 内容；不得由 agent 自行改写、重排、摘要或新增另一套章节。
 - `render-response` 必须先执行并通过同一 run gate；run gate FAIL 时不得生成最终聊天回复。
 - 协议门禁中文映射：`passed => 协议通过`，`incomplete => 协议未完成`，`blocked => 协议阻塞`。
-- 其它 enum 中文映射示例：`full_complete => 协议覆盖完整`，`scoped_complete => 限定协议覆盖完整`，`issues => 发现问题`。
+- 其它 enum 中文映射示例：`full_complete => 本轮范围协议覆盖完整`，`scoped_complete => 本轮限定范围协议覆盖完整`，`issues => 发现问题`。
 - `final.md` 第一屏必须使用包含协议状态的组合标题，例如：
   - `rules-review：协议通过，发现 X 项问题，Y 项无法验证`
   - `rules-review：协议通过，发现 X 项问题`
