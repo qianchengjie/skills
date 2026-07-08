@@ -1698,17 +1698,6 @@ function renderFinalMarkdown(finalReview, dispatch, runDir) {
     `- 无法验证：${issueSummary.cannotVerify}`,
     `- 观察项：${issueSummary.observations}`,
     '',
-    '## 范围',
-    `- 范围模式：${label(finalReview.scopeMode)}`,
-    `- 覆盖声明：${label(finalReview.coverageClaim)}`,
-    `- 排除规则：${formatList(finalReview.excludedRuleRefs)}`,
-    '',
-    '## 审计',
-    ...formatAuditLines(finalReview, dispatch, runDir),
-    '',
-    '## 执行计划',
-    ...formatExecutionPlanLines(executionPlan),
-    '',
     '## 问题',
     findings.length === 0 ? '- 无' : null,
   ].filter((line) => line !== null);
@@ -1730,6 +1719,19 @@ function renderFinalMarkdown(finalReview, dispatch, runDir) {
       });
     }
   }
+  lines.push(
+    '',
+    '## 范围',
+    `- 范围模式：${label(finalReview.scopeMode)}`,
+    `- 覆盖声明：${label(finalReview.coverageClaim)}`,
+    `- 排除规则：${formatList(finalReview.excludedRuleRefs)}`,
+    '',
+    '## 审计',
+    ...formatAuditLines(finalReview, dispatch, runDir),
+    '',
+    '## 执行计划',
+    ...formatExecutionPlanLines(executionPlan),
+  );
   lines.push('', '## 验证', `- protocolGate：${protocolGateLabel(finalReview.protocolGate)}`);
   asArray(finalReview.validationResults).forEach((validation) => {
     lines.push(`- ${validation.mode || 'validation'}：${validation.ok === false ? '失败' : '成功'}`);
@@ -1741,12 +1743,13 @@ function renderResponseMarkdown(runDir, finalReview, executionPlan, gate) {
   const finalMdPath = path.resolve(runDir, 'final.md');
   const finalReviewPath = path.resolve(runDir, 'finalReview.json');
   const dispatchPath = path.resolve(runDir, 'dispatch.json');
+  const findings = asArray(finalReview.findings);
   const issueSummary = gate && gate.issueSummary ? gate.issueSummary : issueSummaryFromFinalReview(finalReview);
   const protocolGate = gate && gate.protocolGate ? gate.protocolGate : finalReview.protocolGate;
   const recommendation = gate && gate.recommendation ? gate.recommendation : finalReview.recommendation || deriveRecommendation(protocolGate, issueSummary);
   const runCommand = formatRunCommand(runDir);
 
-  return [
+  const lines = [
     `# ${reviewTitle(protocolGate, issueSummary)}`,
     '',
     '## 结论',
@@ -1759,6 +1762,12 @@ function renderResponseMarkdown(runDir, finalReview, executionPlan, gate) {
     `- 无法验证：${issueSummary.cannotVerify}`,
     `- 观察项：${issueSummary.observations}`,
     '',
+    '## 问题',
+    findings.length === 0 ? '- 无' : null,
+  ].filter((line) => line !== null);
+  appendFindingLines(lines, findings);
+  lines.push(
+    '',
     '## 报告',
     `- 完整报告：${formatMarkdownFileLink('final.md', finalMdPath)}`,
     `- 事实源：${formatMarkdownFileLink('finalReview.json', finalReviewPath)}`,
@@ -1770,7 +1779,8 @@ function renderResponseMarkdown(runDir, finalReview, executionPlan, gate) {
     '## 验证',
     `- \`${runCommand}\`：协议校验成功`,
     '',
-  ].join('\n');
+  );
+  return lines.join('\n');
 }
 
 function appendFindingLines(lines, findings) {

@@ -68,6 +68,14 @@ function assertNoStandalonePassedLabel(markdown) {
   assert.doesNotMatch(markdown, /`通过`/);
 }
 
+function assertNextSection(markdown, current, next) {
+  const start = markdown.indexOf(current);
+  assert.notEqual(start, -1);
+  const nextStart = markdown.indexOf("\n## ", start + current.length);
+  assert.notEqual(nextStart, -1);
+  assert.equal(markdown.slice(nextStart + 1, nextStart + 1 + next.length), next);
+}
+
 async function renderFinalReview(finalReview) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-final-"));
   const input = path.join(dir, "finalReview.json");
@@ -207,6 +215,7 @@ assert.equal(responseOutput.ok, true);
 assert.match(responseOutput.response, /rules-review：协议通过，未发现问题/);
 assert.match(responseOutput.response, /协议门禁：协议通过/);
 assertNoStandalonePassedLabel(responseOutput.response);
+assertNextSection(responseOutput.response, "## 结论", "## 问题");
 
 const cleanFinal = fs.readFileSync(path.join(fixtures, "run-pass-full-clean", "final.md"), "utf8");
 assert.match(cleanFinal, /rules-review：协议通过，未发现问题/);
@@ -217,6 +226,9 @@ const findingFinal = fs.readFileSync(path.join(fixtures, "run-pass-finding-evide
 assert.match(findingFinal, /rules-review：协议通过，发现 1 项问题/);
 assert.match(findingFinal, /修复建议：合并前必须修复/);
 assertNoStandalonePassedLabel(findingFinal);
+const renderedFindingFinal = await renderFinalReview(readJson(path.join(fixtures, "run-pass-finding-evidence-key-order", "finalReview.json")));
+assertNextSection(renderedFindingFinal, "## 结论", "## 问题");
+assertNextSection(renderedFindingFinal, "## 问题", "## 范围");
 
 const cannotVerifyDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-cannot-verify-"));
 fs.cpSync(path.join(fixtures, "run-pass-full-clean"), cannotVerifyDir, { recursive: true });
