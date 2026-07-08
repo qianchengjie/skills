@@ -202,20 +202,26 @@ const expectedAggregatedFinal = readJson(path.join(fixtures, "run-pass-finding-e
 delete expectedAggregatedFinal.summary;
 assert.deepEqual(readJson(aggregatedFinalPath), expectedAggregatedFinal);
 
+const responsePath = "/tmp/rules-review-response-test.md";
 const response = await runValidate([
   "--mode",
   "render-response",
   "--dir",
   path.join(fixtures, "run-pass-scoped-clean"),
   "--output",
-  "/tmp/rules-review-response-test.md",
+  responsePath,
 ]);
 const responseOutput = JSON.parse(response.stdout);
 assert.equal(responseOutput.ok, true);
-assert.match(responseOutput.response, /rules-review：协议通过，未发现问题/);
+assert.equal(fs.readFileSync(responsePath, "utf8"), responseOutput.response);
+assert.match(responseOutput.response, /rules-review：未发现问题/);
+assert.doesNotMatch(responseOutput.response.split("\n")[0], /协议通过/);
 assert.match(responseOutput.response, /协议门禁：协议通过/);
 assertNoStandalonePassedLabel(responseOutput.response);
 assertNextSection(responseOutput.response, "## 结论", "## 问题");
+assertNextSection(responseOutput.response, "## 问题", "## 报告");
+assert.doesNotMatch(responseOutput.response, /## 执行计划/);
+assert.doesNotMatch(responseOutput.response, /## 验证/);
 
 const cleanFinal = fs.readFileSync(path.join(fixtures, "run-pass-full-clean", "final.md"), "utf8");
 assert.match(cleanFinal, /rules-review：协议通过，未发现问题/);
@@ -257,8 +263,10 @@ assert.deepEqual(cannotVerifyOutput.gate.issueSummary, issueSummary({ cannotVeri
 assert.equal(cannotVerifyOutput.gate.recommendation, "manual_verification_required");
 const cannotVerifyResponse = await runValidate(["--mode", "render-response", "--dir", cannotVerifyDir]);
 const cannotVerifyResponseOutput = JSON.parse(cannotVerifyResponse.stdout);
+assert.match(cannotVerifyResponseOutput.response, /rules-review：未发现明确问题，但 1 项无法验证/);
 assert.match(cannotVerifyResponseOutput.response, /1 项无法验证/);
 assert.match(cannotVerifyResponseOutput.response, /修复建议：需要人工验证/);
+assert.doesNotMatch(cannotVerifyResponseOutput.response.split("\n")[0], /协议通过/);
 assertNoStandalonePassedLabel(cannotVerifyResponseOutput.response);
 
 const mixedDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-mixed-"));
@@ -287,8 +295,10 @@ assert.deepEqual(mixedOutput.gate.issueSummary, issueSummary({ findings: 1, must
 assert.equal(mixedOutput.gate.recommendation, "must_fix_before_merge");
 const mixedResponse = await runValidate(["--mode", "render-response", "--dir", mixedDir]);
 const mixedResponseOutput = JSON.parse(mixedResponse.stdout);
+assert.match(mixedResponseOutput.response, /rules-review：发现 1 项问题，1 项无法验证/);
 assert.match(mixedResponseOutput.response, /发现 1 项问题，1 项无法验证/);
 assert.match(mixedResponseOutput.response, /修复建议：合并前必须修复/);
+assert.doesNotMatch(mixedResponseOutput.response.split("\n")[0], /协议通过/);
 assertNoStandalonePassedLabel(mixedResponseOutput.response);
 
 const incompleteFinal = await renderFinalReview({

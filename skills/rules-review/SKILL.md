@@ -487,16 +487,23 @@ stdout 一律输出 strict JSON。
 
 - 先运行 `validate.js --mode aggregate-final --dir .rules-review-tmp/<run-id> --output finalReview.json` 生成聚合产物。
 - 优先运行 `validate.js --mode render-final --input finalReview.json --dispatch dispatch.json --output final.md`。
-- 最终回复必须运行 `validate.js --mode render-response --dir .rules-review-tmp/<run-id>`。
+- 最终回复必须运行 `validate.js --mode render-response --dir .rules-review-tmp/<run-id>`，并直接复用生成的 `response.md` 内容；不得由 agent 自行改写、重排、摘要或新增另一套章节。
 - `render-response` 必须先执行并通过同一 run gate；run gate FAIL 时不得生成最终聊天回复。
 - 协议门禁中文映射：`passed => 协议通过`，`incomplete => 协议未完成`，`blocked => 协议阻塞`。
 - 其它 enum 中文映射示例：`full_complete => 协议覆盖完整`，`scoped_complete => 限定协议覆盖完整`，`issues => 发现问题`。
-- `final.md` 和 `render-response` 第一屏必须使用组合标题，例如：
+- `final.md` 第一屏必须使用包含协议状态的组合标题，例如：
   - `rules-review：协议通过，发现 X 项问题，Y 项无法验证`
   - `rules-review：协议通过，发现 X 项问题`
   - `rules-review：协议通过，未发现明确问题，但 Y 项无法验证`
   - `rules-review：协议通过，未发现问题`
   - `rules-review：审查未完成，协议未闭合`
   - `rules-review：审查阻塞，协议输入或结果不可用`
+- `response.md` 是最终用户界面摘要，只保留标题、结论、问题和报告四块；当协议通过时标题不得写“协议通过”，例如：
+  - `rules-review：发现 X 项问题，Y 项无法验证`
+  - `rules-review：发现 X 项问题`
+  - `rules-review：未发现明确问题，但 Y 项无法验证`
+  - `rules-review：未发现问题`
+  - `rules-review：审查未完成`
+  - `rules-review：审查阻塞`
 - `final.md` 顶部必须包含固定结论区：协议门禁、审查结论、修复建议、问题数、必须修复、建议修复、无法验证、观察项。
 - `final.md` 必须包含审计区，展示 `runId`、`ruleSetId`、`sourceIndexHash`、规则/目标/reviewItem/reviewBatch 计数、context expansion 数量、验证命令和 validator run 摘要。

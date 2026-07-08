@@ -1630,7 +1630,7 @@ function renderResponseMode(args, result) {
   if (!dispatch || result.violations.length > 0) return;
 
   const outputPath = !args.output || args.output === true ? path.join(runDir, 'response.md') : args.output;
-  const markdown = renderResponseMarkdown(runDir, finalReview, dispatch.executionPlan, result.gate);
+  const markdown = renderResponseMarkdown(runDir, finalReview, result.gate);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, markdown);
   result.rendered = outputPath;
@@ -1739,7 +1739,7 @@ function renderFinalMarkdown(finalReview, dispatch, runDir) {
   return `${lines.join('\n')}\n`;
 }
 
-function renderResponseMarkdown(runDir, finalReview, executionPlan, gate) {
+function renderResponseMarkdown(runDir, finalReview, gate) {
   const finalMdPath = path.resolve(runDir, 'final.md');
   const finalReviewPath = path.resolve(runDir, 'finalReview.json');
   const dispatchPath = path.resolve(runDir, 'dispatch.json');
@@ -1747,10 +1747,9 @@ function renderResponseMarkdown(runDir, finalReview, executionPlan, gate) {
   const issueSummary = gate && gate.issueSummary ? gate.issueSummary : issueSummaryFromFinalReview(finalReview);
   const protocolGate = gate && gate.protocolGate ? gate.protocolGate : finalReview.protocolGate;
   const recommendation = gate && gate.recommendation ? gate.recommendation : finalReview.recommendation || deriveRecommendation(protocolGate, issueSummary);
-  const runCommand = formatRunCommand(runDir);
 
   const lines = [
-    `# ${reviewTitle(protocolGate, issueSummary)}`,
+    `# ${responseTitle(protocolGate, issueSummary)}`,
     '',
     '## 结论',
     `- 协议门禁：${protocolGateLabel(protocolGate)}`,
@@ -1772,12 +1771,6 @@ function renderResponseMarkdown(runDir, finalReview, executionPlan, gate) {
     `- 完整报告：${formatMarkdownFileLink('final.md', finalMdPath)}`,
     `- 事实源：${formatMarkdownFileLink('finalReview.json', finalReviewPath)}`,
     `- 分派源：${formatMarkdownFileLink('dispatch.json', dispatchPath)}`,
-    '',
-    '## 执行计划',
-    ...formatExecutionPlanLines(executionPlan),
-    '',
-    '## 验证',
-    `- \`${runCommand}\`：协议校验成功`,
     '',
   );
   return lines.join('\n');
@@ -2205,6 +2198,17 @@ function reviewTitle(protocolGate, issueSummary) {
   if (issueSummary.findings > 0) return `rules-review：协议通过，发现 ${issueSummary.findings} 项问题`;
   if (issueSummary.cannotVerify > 0) return `rules-review：协议通过，未发现明确问题，但 ${issueSummary.cannotVerify} 项无法验证`;
   return 'rules-review：协议通过，未发现问题';
+}
+
+function responseTitle(protocolGate, issueSummary) {
+  if (protocolGate === 'incomplete') return 'rules-review：审查未完成';
+  if (protocolGate === 'blocked') return 'rules-review：审查阻塞';
+  if (issueSummary.findings > 0 && issueSummary.cannotVerify > 0) {
+    return `rules-review：发现 ${issueSummary.findings} 项问题，${issueSummary.cannotVerify} 项无法验证`;
+  }
+  if (issueSummary.findings > 0) return `rules-review：发现 ${issueSummary.findings} 项问题`;
+  if (issueSummary.cannotVerify > 0) return `rules-review：未发现明确问题，但 ${issueSummary.cannotVerify} 项无法验证`;
+  return 'rules-review：未发现问题';
 }
 
 function reviewConclusion(protocolGate, issueSummary) {
