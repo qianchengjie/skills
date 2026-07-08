@@ -273,6 +273,7 @@ function validateRuleSet(ruleSet, artifact, result) {
   const empty = {
     ruleSetId: null,
     candidateRuleRefs: new Set(),
+    selectedRuleRefs: new Set(),
     requiredRuleRefs: new Set(),
     excludedRuleRefs: new Set(),
     globallyNotApplicableRuleRefs: new Set(),
@@ -287,6 +288,7 @@ function validateRuleSet(ruleSet, artifact, result) {
     'ruleSetId',
     'sourceIndexHash',
     'candidateRuleRefs',
+    'selectedRuleRefs',
     'requiredRuleRefs',
     'excludedRuleRefs',
     'globallyNotApplicableRuleRefs',
@@ -296,21 +298,23 @@ function validateRuleSet(ruleSet, artifact, result) {
   if (!isNonEmptyString(ruleSet.sourceIndexHash)) addViolation(result, 'D013', artifact, '/ruleSet/sourceIndexHash', 'sourceIndexHash is required', 'non-empty hash', ruleSet.sourceIndexHash);
 
   const candidateRuleRefs = validateStringSet(ruleSet.candidateRuleRefs, artifact, result, 'D014', '/ruleSet/candidateRuleRefs');
+  const selectedRuleRefs = validateStringSet(ruleSet.selectedRuleRefs, artifact, result, 'D037', '/ruleSet/selectedRuleRefs');
   const requiredRuleRefs = validateStringSet(ruleSet.requiredRuleRefs, artifact, result, 'D015', '/ruleSet/requiredRuleRefs');
   const excludedRuleRefs = validateStringSet(ruleSet.excludedRuleRefs, artifact, result, 'D016', '/ruleSet/excludedRuleRefs');
   const globallyNotApplicableRuleRefs = validateStringSet(ruleSet.globallyNotApplicableRuleRefs, artifact, result, 'D017', '/ruleSet/globallyNotApplicableRuleRefs');
 
-  requireSubset(requiredRuleRefs, candidateRuleRefs, artifact, result, 'D018', '/ruleSet/requiredRuleRefs', 'requiredRuleRefs must be subset of candidateRuleRefs');
-  requireSubset(excludedRuleRefs, candidateRuleRefs, artifact, result, 'D019', '/ruleSet/excludedRuleRefs', 'excludedRuleRefs must be subset of candidateRuleRefs');
-  requireSubset(globallyNotApplicableRuleRefs, candidateRuleRefs, artifact, result, 'D020', '/ruleSet/globallyNotApplicableRuleRefs', 'globallyNotApplicableRuleRefs must be subset of candidateRuleRefs');
+  requireSubset(selectedRuleRefs, candidateRuleRefs, artifact, result, 'D038', '/ruleSet/selectedRuleRefs', 'selectedRuleRefs must be subset of candidateRuleRefs');
+  requireSubset(requiredRuleRefs, selectedRuleRefs, artifact, result, 'D018', '/ruleSet/requiredRuleRefs', 'requiredRuleRefs must be subset of selectedRuleRefs');
+  requireSubset(excludedRuleRefs, selectedRuleRefs, artifact, result, 'D019', '/ruleSet/excludedRuleRefs', 'excludedRuleRefs must be subset of selectedRuleRefs');
+  requireSubset(globallyNotApplicableRuleRefs, selectedRuleRefs, artifact, result, 'D020', '/ruleSet/globallyNotApplicableRuleRefs', 'globallyNotApplicableRuleRefs must be subset of selectedRuleRefs');
   requireDisjoint(requiredRuleRefs, excludedRuleRefs, artifact, result, 'D021', '/ruleSet', 'requiredRuleRefs and excludedRuleRefs must not overlap');
   requireDisjoint(requiredRuleRefs, globallyNotApplicableRuleRefs, artifact, result, 'D022', '/ruleSet', 'requiredRuleRefs and globallyNotApplicableRuleRefs must not overlap');
   requireDisjoint(excludedRuleRefs, globallyNotApplicableRuleRefs, artifact, result, 'D023', '/ruleSet', 'excludedRuleRefs and globallyNotApplicableRuleRefs must not overlap');
 
   const classifiedRuleRefs = new Set([...requiredRuleRefs, ...excludedRuleRefs, ...globallyNotApplicableRuleRefs]);
-  candidateRuleRefs.forEach((ruleRef) => {
+  selectedRuleRefs.forEach((ruleRef) => {
     if (!classifiedRuleRefs.has(ruleRef)) {
-      addViolation(result, 'D033', artifact, '/ruleSet/candidateRuleRefs', 'candidateRuleRef must be classified as required, excluded, or globallyNotApplicable', 'requiredRuleRefs | excludedRuleRefs | globallyNotApplicableRuleRefs', ruleRef);
+      addViolation(result, 'D033', artifact, '/ruleSet/selectedRuleRefs', 'selectedRuleRef must be classified as required, excluded, or globallyNotApplicable', 'requiredRuleRefs | excludedRuleRefs | globallyNotApplicableRuleRefs', ruleRef);
     }
   });
 
@@ -343,6 +347,7 @@ function validateRuleSet(ruleSet, artifact, result) {
   return {
     ruleSetId: ruleSet.ruleSetId,
     candidateRuleRefs,
+    selectedRuleRefs,
     requiredRuleRefs,
     excludedRuleRefs,
     globallyNotApplicableRuleRefs,

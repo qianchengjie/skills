@@ -54,8 +54,9 @@ ruleSet -> targets -> applicabilityMatrix -> reviewItems -> executionPlan -> rev
 1. 读取 `CORE` 指向的 active 文件。
 2. 按 `trigger / applies-to` 读取其它匹配的 active namespace 文件。
 3. 形成 `ruleSet.candidateRuleRefs`。
-4. 从候选规则中拆出 `requiredRuleRefs`、`excludedRuleRefs` 和 `globallyNotApplicableRuleRefs`。
-5. 为每个规则来源记录 `namespace`、`ruleRef`、`sourceFile`、`sourceHash`、`trigger`、`appliesTo`，以及 `summary` 或 `ruleText`。
+4. 从候选规则中形成本轮一等输入 `ruleSet.selectedRuleRefs`。
+5. 从已选规则中拆出 `requiredRuleRefs`、`excludedRuleRefs` 和 `globallyNotApplicableRuleRefs`。
+6. 为每个规则来源记录 `namespace`、`ruleRef`、`sourceFile`、`sourceHash`、`trigger`、`appliesTo`，以及 `summary` 或 `ruleText`。
 
 不要把 namespace 或 ruleRef 本身当完成门禁。完成门禁只看结构协议是否闭合：每个 required rule 对每个 target 都有适用性判断；`applicable` 行都有对应 required `reviewItem`；`required: true` 的 `reviewItems` 都有且只有一个合法 `result`。
 
@@ -122,6 +123,7 @@ ruleRef x targetId = reviewItem
 - `ruleSetId`
 - `sourceIndexHash`
 - `candidateRuleRefs[]`
+- `selectedRuleRefs[]`
 - `requiredRuleRefs[]`
 - `excludedRuleRefs[]`
 - `globallyNotApplicableRuleRefs[]`
@@ -138,8 +140,9 @@ ruleRef x targetId = reviewItem
 
 规则集合关系必须闭合：
 
-- `candidateRuleRefs` 必须全部被分类为 `requiredRuleRefs`、`excludedRuleRefs` 或 `globallyNotApplicableRuleRefs`。
-- `requiredRuleRefs`、`excludedRuleRefs`、`globallyNotApplicableRuleRefs` 都必须是 `candidateRuleRefs` 的子集。
+- `selectedRuleRefs` 必须是 `candidateRuleRefs` 的子集。
+- `selectedRuleRefs` 必须全部被分类为 `requiredRuleRefs`、`excludedRuleRefs` 或 `globallyNotApplicableRuleRefs`。
+- `requiredRuleRefs`、`excludedRuleRefs`、`globallyNotApplicableRuleRefs` 都必须是 `selectedRuleRefs` 的子集。
 - 三组集合两两不得相交。
 - `globallyNotApplicableRuleRefs` 不得生成 `required: true` 的 `reviewItem`。
 - 每个 `requiredRuleRefs[]` 中的规则必须至少生成一个 `required: true` 的 `reviewItem`。
@@ -416,8 +419,9 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 硬门禁：
 
 - 每个 `required: true` 的 `reviewItem` 必须有且只有一个 result。
-- 每个 `candidateRuleRefs[]` 中的规则必须分类到 `requiredRuleRefs[]`、`excludedRuleRefs[]` 或 `globallyNotApplicableRuleRefs[]`。
-- `candidateRuleRefs = requiredRuleRefs ∪ excludedRuleRefs ∪ globallyNotApplicableRuleRefs`，三组分类不闭合时不得进入可信执行计划。
+- `selectedRuleRefs[]` 必须是 `candidateRuleRefs[]` 的子集。
+- 每个 `selectedRuleRefs[]` 中的规则必须分类到 `requiredRuleRefs[]`、`excludedRuleRefs[]` 或 `globallyNotApplicableRuleRefs[]`。
+- `selectedRuleRefs = requiredRuleRefs ∪ excludedRuleRefs ∪ globallyNotApplicableRuleRefs`，三组分类不闭合时不得进入可信执行计划。
 - 每个 `requiredRuleRefs[]` 中的规则必须至少生成一个 `required: true` 的 `reviewItem`。
 - `applicabilityMatrix[]` 必须覆盖每个 `requiredRuleRefs[] x (changedUnits[] + candidates[])` 组合。
 - `applicability = applicable` 的矩阵行必须绑定匹配的 required `reviewItemId`；`not_applicable` 行必须有 `reason` 且不得绑定 `reviewItemId`。

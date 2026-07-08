@@ -10,11 +10,12 @@
     "runId": { "type": "string", "minLength": 1 },
     "ruleSet": {
       "type": "object",
-      "required": ["ruleSetId", "sourceIndexHash", "candidateRuleRefs", "requiredRuleRefs", "excludedRuleRefs", "globallyNotApplicableRuleRefs", "ruleSources"],
+      "required": ["ruleSetId", "sourceIndexHash", "candidateRuleRefs", "selectedRuleRefs", "requiredRuleRefs", "excludedRuleRefs", "globallyNotApplicableRuleRefs", "ruleSources"],
       "properties": {
         "ruleSetId": { "type": "string", "minLength": 1 },
         "sourceIndexHash": { "type": "string", "minLength": 1 },
         "candidateRuleRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "selectedRuleRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
         "requiredRuleRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
         "excludedRuleRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
         "globallyNotApplicableRuleRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },

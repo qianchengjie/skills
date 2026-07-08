@@ -435,6 +435,14 @@ delete missingTaskRuleLevelTask.rules[0].ruleLevel;
 writeJson(missingTaskRuleLevelTaskPath, missingTaskRuleLevelTask);
 await assertRunDirFails(missingTaskRuleLevelDir, /task ruleLevel must be valid|required field is missing/);
 
+const requiredOutsideSelectedDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-required-outside-selected-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), requiredOutsideSelectedDir, { recursive: true });
+const requiredOutsideSelectedDispatchPath = path.join(requiredOutsideSelectedDir, "dispatch.json");
+const requiredOutsideSelectedDispatch = readJson(requiredOutsideSelectedDispatchPath);
+requiredOutsideSelectedDispatch.ruleSet.selectedRuleRefs = ["CORE-001", "UI-001"];
+writeJson(requiredOutsideSelectedDispatchPath, requiredOutsideSelectedDispatch);
+await assertRunDirFails(requiredOutsideSelectedDir, /requiredRuleRefs must be subset of selectedRuleRefs/);
+
 const missingApplicabilityDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-missing-applicability-"));
 fs.cpSync(path.join(fixtures, "run-pass-full-clean"), missingApplicabilityDir, { recursive: true });
 const missingApplicabilityDispatchPath = path.join(missingApplicabilityDir, "dispatch.json");
@@ -826,7 +834,7 @@ await assertRunFails("run-fail-passed-no-evidence", /passed result requires evid
 await assertRunFails("run-fail-not-applicable-no-reason", /not_applicable result requires reason/);
 await assertRunFails("run-fail-cannot-verify-no-proof", /cannot_verify result requires reason or evidence/);
 await assertRunFails("run-fail-missing-source-hash", /sourceHash is required/);
-await assertRunFails("run-fail-unclassified-candidate", /candidateRuleRef must be classified as required, excluded, or globallyNotApplicable/);
+await assertRunFails("run-fail-unclassified-candidate", /selectedRuleRef must be classified as required, excluded, or globallyNotApplicable/);
 await assertRunFails("run-fail-large-single-no-override", /hard execution policy requires multi_batch/);
 await assertRunFails("run-fail-concurrency-single-no-override", /hard execution policy requires multi_batch/);
 await assertRunFails("run-fail-single-with-multiple-batches", /single_batch executionPlan requires exactly one reviewBatch/);

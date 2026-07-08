@@ -8,6 +8,9 @@
     "candidateRuleRefs": [
       "CORE-001"
     ],
+    "selectedRuleRefs": [
+      "CORE-001"
+    ],
     "requiredRuleRefs": [
       "CORE-001"
     ],

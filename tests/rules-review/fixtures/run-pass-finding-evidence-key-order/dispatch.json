@@ -10,6 +10,11 @@
       "TYPE-001",
       "UI-001"
     ],
+    "selectedRuleRefs": [
+      "CORE-001",
+      "TYPE-001",
+      "UI-001"
+    ],
     "requiredRuleRefs": [
       "CORE-001",
       "TYPE-001"
