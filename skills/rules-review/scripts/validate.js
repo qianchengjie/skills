@@ -1764,7 +1764,7 @@ function renderResponseMarkdown(runDir, finalReview, gate) {
     '## 问题',
     findings.length === 0 ? '- 无' : null,
   ].filter((line) => line !== null);
-  appendFindingLines(lines, findings);
+  appendResponseFindingLines(lines, findings);
   lines.push(
     '',
     '## 报告',
@@ -1788,6 +1788,23 @@ function appendFindingLines(lines, findings) {
     items.forEach((finding) => {
       const reason = finding.priorityReason ? `；原因：${finding.priorityReason}` : '';
       lines.push(`- ${finding.findingId} | ${finding.reviewItemId} | ${finding.ruleRef} | ${finding.ruleLevel} | ${label(finding.origin)} | ${finding.targetId}：${formatEvidence(finding.evidence)}${reason}`);
+    });
+  });
+}
+
+function appendResponseFindingLines(lines, findings) {
+  const groups = [
+    ['must_fix', '必须修复'],
+    ['should_fix', '建议修复'],
+  ];
+  groups.forEach(([priority, title]) => {
+    const items = findings.filter((finding) => finding && finding.priority === priority);
+    if (items.length === 0) return;
+    lines.push(`### ${title}`);
+    items.forEach((finding) => {
+      const reason = finding.priorityReason ? `；原因：${finding.priorityReason}` : '';
+      lines.push(`- ${finding.findingId}：${formatEvidence(finding.evidence)}${reason}`);
+      lines.push(`  规则：${finding.ruleRef || '未知'}；目标：${finding.targetId || '未知'}；来源：${label(finding.origin)}`);
     });
   });
 }

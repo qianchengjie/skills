@@ -232,6 +232,18 @@ const findingFinal = fs.readFileSync(path.join(fixtures, "run-pass-finding-evide
 assert.match(findingFinal, /rules-review：协议通过，发现 1 项问题/);
 assert.match(findingFinal, /修复建议：合并前必须修复/);
 assertNoStandalonePassedLabel(findingFinal);
+const findingResponse = await runValidate([
+  "--mode",
+  "render-response",
+  "--dir",
+  path.join(fixtures, "run-pass-finding-evidence-key-order"),
+  "--output",
+  "/tmp/rules-review-finding-response-test.md",
+]);
+const findingResponseOutput = JSON.parse(findingResponse.stdout);
+assert.match(findingResponseOutput.response, /- F001：CORE-001 finding evidence/);
+assert.match(findingResponseOutput.response, /  规则：CORE-001；目标：T001；来源：本次引入/);
+assert.doesNotMatch(findingResponseOutput.response, /RI001/);
 const renderedFindingFinal = await renderFinalReview(readJson(path.join(fixtures, "run-pass-finding-evidence-key-order", "finalReview.json")));
 assertNextSection(renderedFindingFinal, "## 结论", "## 问题");
 assertNextSection(renderedFindingFinal, "## 问题", "## 范围");

@@ -505,5 +505,6 @@ stdout 一律输出 strict JSON。
   - `rules-review：未发现问题`
   - `rules-review：审查未完成`
   - `rules-review：审查阻塞`
+- `response.md` 的问题列表使用两行版：第一行展示 `findingId` 和问题证据摘要，第二行展示规则、目标和来源；不要把内部 `reviewItemId` 放进用户摘要。
 - `final.md` 顶部必须包含固定结论区：协议门禁、审查结论、修复建议、问题数、必须修复、建议修复、无法验证、观察项。
 - `final.md` 必须包含审计区，展示 `runId`、`ruleSetId`、`sourceIndexHash`、规则/目标/reviewItem/reviewBatch 计数、context expansion 数量、验证命令和 validator run 摘要。
