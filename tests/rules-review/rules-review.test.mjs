@@ -202,6 +202,40 @@ const expectedAggregatedFinal = readJson(path.join(fixtures, "run-pass-finding-e
 delete expectedAggregatedFinal.summary;
 assert.deepEqual(readJson(aggregatedFinalPath), expectedAggregatedFinal);
 
+const unsortedFindingsDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-unsorted-findings-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), unsortedFindingsDir, { recursive: true });
+const unsortedFindingsShardPath = path.join(unsortedFindingsDir, "shards/B001.json");
+const unsortedFindingsShard = readJson(unsortedFindingsShardPath);
+unsortedFindingsShard.results[0] = {
+  reviewItemId: "RI002",
+  status: "finding",
+  findingId: "F002",
+  origin: "introduced_by_change",
+  priority: "must_fix",
+  priorityReason: "同组排序测试",
+  evidence: [{ loc: "src/example.ts:12", summary: "TYPE-001 finding evidence" }],
+};
+unsortedFindingsShard.results[1] = {
+  reviewItemId: "RI001",
+  status: "finding",
+  findingId: "F001",
+  origin: "introduced_by_change",
+  evidence: [{ loc: "src/example.ts:10", summary: "CORE-001 finding evidence" }],
+};
+writeJson(unsortedFindingsShardPath, unsortedFindingsShard);
+const sortedFindingsFinalPath = path.join(os.tmpdir(), `rules-review-sorted-findings-${Date.now()}.json`);
+const sortedFindingsFinal = await runValidate([
+  "--mode",
+  "aggregate-final",
+  "--dir",
+  unsortedFindingsDir,
+  "--output",
+  sortedFindingsFinalPath,
+]);
+const sortedFindingsOutput = JSON.parse(sortedFindingsFinal.stdout);
+assert.equal(sortedFindingsOutput.ok, true);
+assert.deepEqual(readJson(sortedFindingsFinalPath).findings.map((finding) => finding.findingId), ["F001", "F002"]);
+
 const responsePath = "/tmp/rules-review-response-test.md";
 const response = await runValidate([
   "--mode",

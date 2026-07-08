@@ -1344,7 +1344,16 @@ function deriveFindingItems(results, dispatch) {
       };
       copyOptionalFields(reviewResult, finding, ['priorityReason', 'upgradeReason', 'originReason', 'acceptedRisk']);
       return finding;
-    });
+    })
+    .sort(compareFindingItems);
+}
+
+function compareFindingItems(left, right) {
+  return (FINDING_PRIORITIES.indexOf(left.priority) - FINDING_PRIORITIES.indexOf(right.priority))
+    || String(left.findingId).localeCompare(String(right.findingId))
+    || String(left.reviewItemId).localeCompare(String(right.reviewItemId))
+    || String(left.ruleRef).localeCompare(String(right.ruleRef))
+    || String(left.targetId).localeCompare(String(right.targetId));
 }
 
 function deriveObservationItems(results, dispatch) {

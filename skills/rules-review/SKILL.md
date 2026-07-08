@@ -327,6 +327,8 @@ SHOULD / ADVISORY => should_fix
 - `recommendation`
 - `validationResults[]`
 
+`findings[]` 必须按 `priority` 稳定排序：`must_fix` 在前，`should_fix` 在后；同一 `priority` 内按 `findingId` 升序。
+
 `coverageClaim` 只表示协议覆盖：required reviewItems 是否都有合法 result，以及 scoped/full 范围声明是否闭合。它不表示所有结果都可实质验证；实质验证缺口必须通过 `issueSummary.cannotVerify` 和 `cannotVerifyItems[]` 展示。
 
 `issueSummary` 至少包含：
