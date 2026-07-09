@@ -1197,6 +1197,44 @@ test('validate rejects waiting current slice after slices exist', async () => {
   });
 });
 
+test('validate rejects multiple executable grilling slices', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-multiple-grilling');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = await fs.readFile(planPath, 'utf8');
+    const secondSlice = createConsumerSliceBlock().replace('- 门禁：grilled', '- 门禁：grilling');
+    await fs.writeFile(
+      planPath,
+      plan
+        .replace('- 门禁：grilled', '- 门禁：grilling')
+        .replace('#### 验收\n\n验证示例。\n', `#### 验收\n\n验证示例。\n${secondSlice}`),
+      'utf8',
+    );
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('only one executable slice may be 门禁：grilling')));
+  });
+});
+
+test('validate rejects grilling slice that is not current slice', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-grilling-current-slice');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = await fs.readFile(planPath, 'utf8');
+    const secondSlice = createConsumerSliceBlock().replace('- 门禁：grilled', '- 门禁：grilling');
+    await fs.writeFile(
+      planPath,
+      plan.replace('#### 验收\n\n验证示例。\n', `#### 验收\n\n验证示例。\n${secondSlice}`),
+      'utf8',
+    );
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('当前切片 must point to grilling slice S2')));
+  });
+});
+
 test('validate rejects paused slicing lifecycle', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-paused-slicing');

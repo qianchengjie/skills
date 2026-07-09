@@ -3382,6 +3382,8 @@ function validatePlanMarkdown(plan, decisions, audits, errors) {
     }
   }
 
+  validateActiveGrillingSlice(slices, currentSlice, errors);
+
   const referencedDecisions = new Set();
   for (const [id, block] of slices) {
     validateSliceBlock(id, block.body, slices, decisions, audits, referencedDecisions, errors);
@@ -3428,6 +3430,26 @@ function validatePlanConsistencyPreflight(value, { decisions, planStatus, phase,
     if (decisionStatus !== 'open') {
       errors.push(`plan.md: 计划一致性预检 blocked references non-open ${decisionId}`);
     }
+  }
+}
+
+function validateActiveGrillingSlice(slices, currentSlice, errors) {
+  const activeGrilling = [];
+  for (const [id, block] of slices) {
+    const header = getSliceHeaderBlock(block.body);
+    const status = getField(header, '状态');
+    const gate = getField(header, '门禁');
+    if (gate === 'grilling' && !TERMINAL_SLICE_STATUSES.has(status)) {
+      activeGrilling.push(id);
+    }
+  }
+
+  if (activeGrilling.length > 1) {
+    errors.push(`plan.md: only one executable slice may be 门禁：grilling, got ${activeGrilling.join(', ')}`);
+  }
+
+  if (activeGrilling.length === 1 && currentSlice !== activeGrilling[0]) {
+    errors.push(`plan.md: 当前切片 must point to grilling slice ${activeGrilling[0]}`);
   }
 }
 
