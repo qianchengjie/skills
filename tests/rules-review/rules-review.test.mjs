@@ -464,6 +464,26 @@ taskApplicabilityMismatchTask.applicabilityMatrix = [];
 writeJson(taskApplicabilityMismatchTaskPath, taskApplicabilityMismatchTask);
 await assertRunDirFails(taskApplicabilityMismatchDir, /task applicabilityMatrix must include each dispatch applicable row/);
 
+const requiredNotApplicableDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-required-not-applicable-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), requiredNotApplicableDir, { recursive: true });
+const requiredNotApplicableShardPath = path.join(requiredNotApplicableDir, "shards/B001.json");
+const requiredNotApplicableShard = readJson(requiredNotApplicableShardPath);
+requiredNotApplicableShard.results[0] = {
+  reviewItemId: "RI001",
+  status: "not_applicable",
+  reason: "Reviewer disputes the dispatch applicability decision.",
+};
+writeJson(requiredNotApplicableShardPath, requiredNotApplicableShard);
+await assertRunDirFails(requiredNotApplicableDir, /required reviewItem cannot return not_applicable/);
+
+const missingContextReasonDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-missing-context-reason-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), missingContextReasonDir, { recursive: true });
+const missingContextReasonDispatchPath = path.join(missingContextReasonDir, "dispatch.json");
+const missingContextReasonDispatch = readJson(missingContextReasonDispatchPath);
+delete missingContextReasonDispatch.targets.contextExpansions[0].reason;
+writeJson(missingContextReasonDispatchPath, missingContextReasonDispatch);
+await assertRunDirFails(missingContextReasonDir, /contextExpansion reason must be non-empty string/);
+
 const passedNoFailureChecksDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-passed-no-failure-checks-"));
 fs.cpSync(path.join(fixtures, "run-pass-full-clean"), passedNoFailureChecksDir, { recursive: true });
 const passedNoFailureChecksShardPath = path.join(passedNoFailureChecksDir, "shards/B001.json");
@@ -497,6 +517,45 @@ emptyRequiredContextExpansionDispatch.targets.contextExpansions.push({
 });
 writeJson(emptyRequiredContextExpansionDispatchPath, emptyRequiredContextExpansionDispatch);
 await assertRunDirFails(emptyRequiredContextExpansionDir, /contextExpansions with requiredContextRefs must add candidate targets/);
+
+const retryValidationDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-retry-validation-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), retryValidationDir, { recursive: true });
+const retryValidationPath = path.join(retryValidationDir, "retries/B001-retry-1.json");
+fs.mkdirSync(path.dirname(retryValidationPath), { recursive: true });
+const retryTask = {
+  kind: "rules-review-retry-task",
+  schemaVersion: 2,
+  runId: "run-pass-full-clean",
+  retryAttempt: 1,
+  reason: "Repair invalid JSON.",
+  originalTaskRef: "tasks/B001.json",
+  violations: [],
+  outputContract: { format: "strict_json", schemaRef: "schemas/shard.schema.json" },
+};
+writeJson(retryValidationPath, retryTask);
+const validRetryPass = await runValidate(["--mode", "run", "--dir", retryValidationDir]);
+assert.equal(JSON.parse(validRetryPass.stdout).ok, true);
+retryTask.expandScope = ["RI999"];
+writeJson(retryValidationPath, retryTask);
+await assertRunDirFails(retryValidationDir, /retryTask contains unsupported field/);
+
+const unboundRetryDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-unbound-retry-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), unboundRetryDir, { recursive: true });
+const unboundRetryPath = path.join(unboundRetryDir, "retries/B001-retry-1.json");
+fs.mkdirSync(path.dirname(unboundRetryPath), { recursive: true });
+writeJson(unboundRetryPath, {
+  kind: "rules-review-retry-task",
+  schemaVersion: 2,
+  runId: "wrong-run",
+  retryAttempt: 1,
+  reason: "Repair invalid JSON.",
+  originalTaskRef: "tasks/unknown.json",
+  violations: [],
+  outputContract: { format: "markdown", schemaRef: "other.json" },
+});
+await assertRunDirFails(unboundRetryDir, /retry output format must be strict_json/);
+await assertRunDirFails(unboundRetryDir, /retry runId must match dispatch runId/);
+await assertRunDirFails(unboundRetryDir, /retry originalTaskRef must reference a dispatch task/);
 
 const forbiddenPriorReviewDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-forbidden-prior-"));
 fs.cpSync(path.join(fixtures, "run-pass-full-clean"), forbiddenPriorReviewDir, { recursive: true });
@@ -656,6 +715,10 @@ exposedObservationShard.results[1] = {
   reason: "Existing TYPE-001 concern exposed by this change.",
 };
 writeJson(exposedObservationShardPath, exposedObservationShard);
+await assertRunDirFails(exposedObservationDir, /non-ADVISORY observation with exposed_by_change or pre_existing requires evidence/);
+const exposedObservationEvidence = [{ loc: "src/example.ts:12", summary: "TYPE-001 concern existed before this change" }];
+exposedObservationShard.results[1].evidence = exposedObservationEvidence;
+writeJson(exposedObservationShardPath, exposedObservationShard);
 const exposedObservationFinalReviewPath = path.join(exposedObservationDir, "finalReview.json");
 const exposedObservationFinalReview = readJson(exposedObservationFinalReviewPath);
 exposedObservationFinalReview.observations = [
@@ -666,6 +729,7 @@ exposedObservationFinalReview.observations = [
     ruleLevel: "SHOULD",
     origin: "exposed_by_change",
     reason: "Existing TYPE-001 concern exposed by this change.",
+    evidence: exposedObservationEvidence,
   },
 ];
 exposedObservationFinalReview.issueSummary = issueSummary({ observations: 1 });
@@ -676,6 +740,14 @@ const exposedObservationPass = await runValidate(["--mode", "run", "--dir", expo
 const exposedObservationOutput = JSON.parse(exposedObservationPass.stdout);
 assert.deepEqual(exposedObservationOutput.gate.issueSummary, issueSummary({ observations: 1 }));
 assert.equal(exposedObservationOutput.gate.recommendation, "ready_for_merge");
+
+const finalObservationNoEvidenceDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-final-observation-no-evidence-"));
+fs.cpSync(exposedObservationDir, finalObservationNoEvidenceDir, { recursive: true });
+const finalObservationNoEvidencePath = path.join(finalObservationNoEvidenceDir, "finalReview.json");
+const finalObservationNoEvidence = readJson(finalObservationNoEvidencePath);
+delete finalObservationNoEvidence.observations[0].evidence;
+writeJson(finalObservationNoEvidencePath, finalObservationNoEvidence);
+await assertRunDirFails(finalObservationNoEvidenceDir, /non-ADVISORY observation with exposed_by_change or pre_existing requires evidence/);
 
 const preExistingUpgradeDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-pre-existing-upgrade-"));
 fs.cpSync(exposedObservationDir, preExistingUpgradeDir, { recursive: true });
@@ -734,44 +806,16 @@ mustDowngradeShard.results[0] = {
   evidence: mustDowngradeEvidence,
 };
 writeJson(mustDowngradeShardPath, mustDowngradeShard);
-const mustDowngradeFinalReviewPath = path.join(mustDowngradeDir, "finalReview.json");
-const mustDowngradeFinalReview = readJson(mustDowngradeFinalReviewPath);
-mustDowngradeFinalReview.semanticVerdict = "issues";
-mustDowngradeFinalReview.findings = [
-  {
-    findingId: "F001",
-    reviewItemId: "RI001",
-    ruleRef: "CORE-001",
-    targetId: "T001",
-    ruleLevel: "MUST",
-    origin: "introduced_by_change",
-    priority: "should_fix",
-    acceptedRisk,
-    evidence: mustDowngradeEvidence,
-  },
-];
-mustDowngradeFinalReview.issueSummary = issueSummary({ findings: 1, shouldFix: 1 });
-mustDowngradeFinalReview.recommendation = "should_review_before_merge";
-mustDowngradeFinalReview.validationResults = [runValidationResult(mustDowngradeFinalReview)];
-writeJson(mustDowngradeFinalReviewPath, mustDowngradeFinalReview);
-await renderFinalInDir(mustDowngradeDir);
-const mustDowngradePass = await runValidate(["--mode", "run", "--dir", mustDowngradeDir]);
-const mustDowngradeOutput = JSON.parse(mustDowngradePass.stdout);
-assert.deepEqual(mustDowngradeOutput.gate.issueSummary, issueSummary({ findings: 1, shouldFix: 1 }));
-assert.equal(mustDowngradeOutput.gate.recommendation, "should_review_before_merge");
+await assertRunDirFails(mustDowngradeDir, /MUST finding priority must be must_fix/);
+await assertRunDirFails(mustDowngradeDir, /acceptedRisk is not supported in rules-review results/);
 
-const mustDowngradeNoRiskDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-must-downgrade-no-risk-"));
-fs.cpSync(mustDowngradeDir, mustDowngradeNoRiskDir, { recursive: true });
-const mustDowngradeNoRiskShardPath = path.join(mustDowngradeNoRiskDir, "shards/B001.json");
-const mustDowngradeNoRiskShard = readJson(mustDowngradeNoRiskShardPath);
-delete mustDowngradeNoRiskShard.results[0].acceptedRisk;
-writeJson(mustDowngradeNoRiskShardPath, mustDowngradeNoRiskShard);
-const mustDowngradeNoRiskFinalReviewPath = path.join(mustDowngradeNoRiskDir, "finalReview.json");
-const mustDowngradeNoRiskFinalReview = readJson(mustDowngradeNoRiskFinalReviewPath);
-delete mustDowngradeNoRiskFinalReview.findings[0].acceptedRisk;
-mustDowngradeNoRiskFinalReview.validationResults = [runValidationResult(mustDowngradeNoRiskFinalReview)];
-writeJson(mustDowngradeNoRiskFinalReviewPath, mustDowngradeNoRiskFinalReview);
-await assertRunDirFails(mustDowngradeNoRiskDir, /acceptedRisk must be object for MUST downgrade/);
+const finalAcceptedRiskDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-final-accepted-risk-"));
+fs.cpSync(path.join(fixtures, "run-pass-finding-evidence-key-order"), finalAcceptedRiskDir, { recursive: true });
+const finalAcceptedRiskPath = path.join(finalAcceptedRiskDir, "finalReview.json");
+const finalAcceptedRisk = readJson(finalAcceptedRiskPath);
+finalAcceptedRisk.findings[0].acceptedRisk = acceptedRisk;
+writeJson(finalAcceptedRiskPath, finalAcceptedRisk);
+await assertRunDirFails(finalAcceptedRiskDir, /finalReview finding must not contain acceptedRisk/);
 
 const shouldAndCannotVerifyDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-should-and-cannot-"));
 fs.cpSync(shouldFixDir, shouldAndCannotVerifyDir, { recursive: true });

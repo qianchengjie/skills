@@ -69,8 +69,8 @@
         "priorityReason": { "type": "string", "minLength": 1 },
         "upgradeReason": { "type": "string", "minLength": 1 },
         "originReason": { "type": "string", "minLength": 1 },
-        "acceptedRisk": { "$ref": "#/$defs/acceptedRisk" },
-        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } }
+        "acceptedRisk": false,
+        "evidence": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evidence" } }
       }
     },
     "observation": {
@@ -89,23 +89,19 @@
         "reason": { "type": "string", "minLength": 1 },
         "upgradeReason": { "type": "string", "minLength": 1 },
         "originReason": { "type": "string", "minLength": 1 },
-        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } }
-      }
-    },
-    "acceptedRisk": {
-      "type": "object",
-      "required": ["status", "acceptedBy", "scope", "reason"],
-      "properties": {
-        "status": { "const": "accepted" },
-        "acceptedBy": { "enum": ["human", "user", "project_owner"] },
-        "scope": { "type": "string", "minLength": 1 },
-        "reason": { "type": "string", "minLength": 1 },
-        "expiresAt": { "type": "string", "minLength": 1 },
-        "followUp": { "type": "string", "minLength": 1 }
+        "evidence": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evidence" } }
       },
-      "anyOf": [
-        { "required": ["expiresAt"] },
-        { "required": ["followUp"] }
+      "allOf": [
+        {
+          "if": {
+            "required": ["ruleLevel", "origin"],
+            "properties": {
+              "ruleLevel": { "enum": ["MUST", "SHOULD"] },
+              "origin": { "enum": ["exposed_by_change", "pre_existing"] }
+            }
+          },
+          "then": { "required": ["evidence"] }
+        }
       ]
     },
     "evidence": {

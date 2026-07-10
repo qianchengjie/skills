@@ -29,8 +29,6 @@ const RECOMMENDATIONS = ['ready_for_merge', 'must_fix_before_merge', 'should_rev
 const RULE_LEVELS = ['MUST', 'SHOULD', 'ADVISORY'];
 const FINDING_ORIGINS = ['introduced_by_change', 'worsened_by_change', 'exposed_by_change', 'pre_existing'];
 const FINDING_PRIORITIES = ['must_fix', 'should_fix'];
-const ACCEPTED_RISK_STATUSES = ['accepted'];
-const ACCEPTED_RISK_ACCEPTED_BY = ['human', 'user', 'project_owner'];
 const ISSUE_SUMMARY_FIELDS = ['findings', 'mustFix', 'shouldFix', 'cannotVerify', 'observations'];
 const EXECUTION_POLICY_VERSION = 'review-execution-policy/v1';
 const EXECUTION_MODES = ['single_batch', 'multi_batch'];
@@ -379,7 +377,10 @@ function validateTargets(targets, artifact, result) {
 
   asArray(targets.contextExpansions).forEach((expansion, index) => {
     const pointer = `/targets/contextExpansions/${index}`;
-    requireFields(expansion, artifact, result, 'D050', pointer, ['addedTargetIds']);
+    requireFields(expansion, artifact, result, 'D050', pointer, ['reason', 'addedTargetIds']);
+    if (!isNonEmptyString(expansion && expansion.reason)) {
+      addViolation(result, 'D054', artifact, `${pointer}/reason`, 'contextExpansion reason must be non-empty string', 'non-empty reason', expansion && expansion.reason);
+    }
     if (!Array.isArray(expansion && expansion.addedTargetIds)) {
       addViolation(result, 'D051', artifact, `${pointer}/addedTargetIds`, 'addedTargetIds must be array', 'array', expansion && expansion.addedTargetIds);
       return;
@@ -825,8 +826,35 @@ function validateRetryTask(retryTask, artifact, result) {
   expectKind(retryTask, artifact, result, 'RT002', 'rules-review-retry-task');
   validateSchemaVersion(retryTask, artifact, result, 'RT003');
   requireFields(retryTask, artifact, result, 'RT004', '', ['kind', 'schemaVersion', 'runId', 'retryAttempt', 'reason', 'originalTaskRef', 'violations', 'outputContract']);
+  if (!isObject(retryTask)) return;
+  const allowedFields = new Set(['kind', 'schemaVersion', 'runId', 'retryAttempt', 'reason', 'originalTaskRef', 'violations', 'outputContract']);
+  Object.keys(retryTask).forEach((field) => {
+    if (!allowedFields.has(field)) addViolation(result, 'RT007', artifact, `/${field}`, 'retryTask contains unsupported field', Array.from(allowedFields), field);
+  });
+  if (!isNonEmptyString(retryTask.runId)) addViolation(result, 'RT008', artifact, '/runId', 'retry runId must be non-empty string', 'non-empty runId', retryTask.runId);
+  if (!isNonEmptyString(retryTask.reason)) addViolation(result, 'RT009', artifact, '/reason', 'retry reason must be non-empty string', 'non-empty reason', retryTask.reason);
+  if (!isNonEmptyString(retryTask.originalTaskRef)) addViolation(result, 'RT010', artifact, '/originalTaskRef', 'retry originalTaskRef must be non-empty string', 'non-empty task reference', retryTask.originalTaskRef);
   if (!Number.isInteger(retryTask.retryAttempt) || retryTask.retryAttempt < 1) addViolation(result, 'RT005', artifact, '/retryAttempt', 'retryAttempt must be positive integer', 'integer >= 1', retryTask.retryAttempt);
-  if (!Array.isArray(retryTask.violations)) addViolation(result, 'RT006', artifact, '/violations', 'violations must be array', 'array', retryTask.violations);
+  if (!Array.isArray(retryTask.violations)) {
+    addViolation(result, 'RT006', artifact, '/violations', 'violations must be array', 'array', retryTask.violations);
+  } else {
+    retryTask.violations.forEach((violation, index) => {
+      const pointer = `/violations/${index}`;
+      requireFields(violation, artifact, result, 'RT011', pointer, ['code', 'severity', 'artifact', 'jsonPointer', 'message', 'expected', 'actual']);
+      if (!isNonEmptyString(violation && violation.code)) addViolation(result, 'RT012', artifact, `${pointer}/code`, 'retry violation code must be non-empty string', 'non-empty code', violation && violation.code);
+      if (!['error', 'warning', 'skipped'].includes(violation && violation.severity)) addViolation(result, 'RT013', artifact, `${pointer}/severity`, 'retry violation severity must be valid', ['error', 'warning', 'skipped'], violation && violation.severity);
+      if (!isNonEmptyString(violation && violation.message)) addViolation(result, 'RT014', artifact, `${pointer}/message`, 'retry violation message must be non-empty string', 'non-empty message', violation && violation.message);
+    });
+  }
+  if (!isObject(retryTask.outputContract)) {
+    addViolation(result, 'RT015', artifact, '/outputContract', 'retry outputContract must be object', 'object', retryTask.outputContract);
+  } else {
+    Object.keys(retryTask.outputContract).forEach((field) => {
+      if (!['format', 'schemaRef'].includes(field)) addViolation(result, 'RT018', artifact, `/outputContract/${field}`, 'retry outputContract contains unsupported field', ['format', 'schemaRef'], field);
+    });
+    if (retryTask.outputContract.format !== 'strict_json') addViolation(result, 'RT016', artifact, '/outputContract/format', 'retry output format must be strict_json', 'strict_json', retryTask.outputContract.format);
+    if (retryTask.outputContract.schemaRef !== 'schemas/shard.schema.json') addViolation(result, 'RT017', artifact, '/outputContract/schemaRef', 'retry schemaRef must point to shard schema', 'schemas/shard.schema.json', retryTask.outputContract.schemaRef);
+  }
 }
 
 function validateShard(shard, task, artifact, result) {
@@ -873,6 +901,9 @@ function validateReviewResult(reviewResult, artifact, result, pointer, prefix, t
   requireFields(reviewResult, artifact, result, `${prefix}010`, pointer, ['reviewItemId', 'status']);
   if (!REVIEW_ITEM_RE.test(reviewResult && reviewResult.reviewItemId)) addViolation(result, `${prefix}011`, artifact, `${pointer}/reviewItemId`, 'reviewItemId must match RIxxx', 'RIxxx', reviewResult && reviewResult.reviewItemId);
   if (!RESULT_STATUSES.includes(reviewResult && reviewResult.status)) addViolation(result, `${prefix}012`, artifact, `${pointer}/status`, 'result status must be valid', RESULT_STATUSES, reviewResult && reviewResult.status);
+  if (reviewResult && Object.prototype.hasOwnProperty.call(reviewResult, 'acceptedRisk')) {
+    addViolation(result, `${prefix}038`, artifact, `${pointer}/acceptedRisk`, 'acceptedRisk is not supported in rules-review results', 'field absent', reviewResult.acceptedRisk);
+  }
 
   if (reviewResult && reviewResult.status === 'finding') {
     if (!FINDING_RE.test(reviewResult.findingId)) addViolation(result, `${prefix}013`, artifact, `${pointer}/findingId`, 'finding result requires findingId and evidence', 'Fxxx', reviewResult.findingId);
@@ -890,8 +921,14 @@ function validateReviewResult(reviewResult, artifact, result, pointer, prefix, t
     validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}015`, `${pointer}/evidence`, 'passed result requires evidence');
     validateFailureChecks(reviewResult, taskContext, artifact, result, pointer, prefix);
   }
-  if (reviewResult && reviewResult.status === 'not_applicable' && !isNonEmptyString(reviewResult.reason)) {
-    addViolation(result, `${prefix}016`, artifact, `${pointer}/reason`, 'not_applicable result requires reason', 'non-empty reason', reviewResult.reason);
+  if (reviewResult && reviewResult.status === 'not_applicable') {
+    const item = taskContext && taskContext.reviewItems ? taskContext.reviewItems.get(reviewResult.reviewItemId) : null;
+    if (item && item.required === true) {
+      addViolation(result, `${prefix}037`, artifact, `${pointer}/status`, 'required reviewItem cannot return not_applicable', 'passed/finding/observation/cannot_verify', reviewResult.status);
+    }
+    if (!isNonEmptyString(reviewResult.reason)) {
+      addViolation(result, `${prefix}016`, artifact, `${pointer}/reason`, 'not_applicable result requires reason', 'non-empty reason', reviewResult.reason);
+    }
   }
   if (reviewResult && reviewResult.status === 'cannot_verify' && !isNonEmptyString(reviewResult.reason) && !hasValidEvidenceArray(reviewResult.evidence)) {
     addViolation(result, `${prefix}017`, artifact, pointer, 'cannot_verify result requires reason or evidence', 'reason or evidence[]', reviewResult);
@@ -950,6 +987,9 @@ function validateReviewResultDisposition(reviewResult, taskContext, artifact, re
   if (!FINDING_ORIGINS.includes(origin)) return;
 
   const expectedStatus = defaultResultStatus(ruleLevel, origin);
+  if (reviewResult.status === 'observation' && ruleLevel !== 'ADVISORY' && ['exposed_by_change', 'pre_existing'].includes(origin)) {
+    validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}039`, `${pointer}/evidence`, 'non-ADVISORY observation with exposed_by_change or pre_existing requires evidence');
+  }
   if (reviewResult.status !== expectedStatus) {
     if (reviewResult.status === 'finding' && expectedStatus === 'observation') {
       if (!isNonEmptyString(reviewResult.upgradeReason)) addViolation(result, `${prefix}025`, artifact, `${pointer}/upgradeReason`, 'upgraded finding requires upgradeReason', 'non-empty upgradeReason', reviewResult.upgradeReason);
@@ -964,7 +1004,7 @@ function validateReviewResultDisposition(reviewResult, taskContext, artifact, re
     const actualPriority = reviewResult.priority || expectedPriority;
     if (!FINDING_PRIORITIES.includes(actualPriority)) return;
     if (ruleLevel === 'MUST' && actualPriority !== 'must_fix') {
-      validateAcceptedRisk(reviewResult.acceptedRisk, artifact, result, `${prefix}028`, `${pointer}/acceptedRisk`);
+      addViolation(result, `${prefix}040`, artifact, `${pointer}/priority`, 'MUST finding priority must be must_fix', 'must_fix', actualPriority);
     }
     if (actualPriority !== expectedPriority && ruleLevel !== 'MUST' && !isNonEmptyString(reviewResult.priorityReason)) {
       addViolation(result, `${prefix}029`, artifact, `${pointer}/priorityReason`, 'priority override requires priorityReason', 'non-empty priorityReason', reviewResult.priorityReason);
@@ -986,40 +1026,6 @@ function defaultResultStatus(ruleLevel, origin) {
 
 function defaultFindingPriority(ruleLevel) {
   return ruleLevel === 'MUST' ? 'must_fix' : 'should_fix';
-}
-
-function validateAcceptedRisk(value, artifact, result, code, pointer) {
-  if (!isObject(value)) {
-    addViolation(result, code, artifact, pointer, 'acceptedRisk must be object for MUST downgrade', 'acceptedRisk object', value);
-    return false;
-  }
-  let ok = true;
-  const required = ['status', 'acceptedBy', 'scope', 'reason'];
-  required.forEach((field) => {
-    if (!(field in value)) {
-      addViolation(result, code, artifact, `${pointer}/${field}`, 'acceptedRisk required field is missing', field, null);
-      ok = false;
-    }
-  });
-  if (!ACCEPTED_RISK_STATUSES.includes(value.status)) {
-    addViolation(result, code, artifact, `${pointer}/status`, 'acceptedRisk.status must be accepted', ACCEPTED_RISK_STATUSES, value.status);
-    ok = false;
-  }
-  if (!ACCEPTED_RISK_ACCEPTED_BY.includes(value.acceptedBy)) {
-    addViolation(result, code, artifact, `${pointer}/acceptedBy`, 'acceptedRisk.acceptedBy must be valid', ACCEPTED_RISK_ACCEPTED_BY, value.acceptedBy);
-    ok = false;
-  }
-  ['scope', 'reason'].forEach((field) => {
-    if (!isNonEmptyString(value[field])) {
-      addViolation(result, code, artifact, `${pointer}/${field}`, 'acceptedRisk field must be non-empty string', 'string', value[field]);
-      ok = false;
-    }
-  });
-  if (!isNonEmptyString(value.expiresAt) && !isNonEmptyString(value.followUp)) {
-    addViolation(result, code, artifact, pointer, 'acceptedRisk requires expiresAt or followUp', 'expiresAt or followUp', value);
-    ok = false;
-  }
-  return ok;
 }
 
 function validateRun(runDir, result) {
@@ -1083,6 +1089,8 @@ function validateRunArtifacts(runDir, dispatch, result) {
   const results = [];
   const resultOwners = new Map();
 
+  validateRetryArtifacts(runDir, dispatch, result);
+
   asArray(dispatch.reviewBatches).forEach((batch, batchIndex) => {
     const batchPointer = `/reviewBatches/${batchIndex}`;
     const taskPath = path.join(runDir, batch.taskRef || '');
@@ -1134,6 +1142,23 @@ function validateRunArtifacts(runDir, dispatch, result) {
   });
 
   return { results, resultOwners };
+}
+
+function validateRetryArtifacts(runDir, dispatch, result) {
+  const retryDir = path.join(runDir, 'retries');
+  if (!fs.existsSync(retryDir)) return;
+  const taskRefs = new Set(asArray(dispatch.reviewBatches).map((batch) => batch && batch.taskRef).filter(Boolean));
+  fs.readdirSync(retryDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+    .forEach((entry) => {
+      const retryPath = path.join(retryDir, entry.name);
+      const artifact = rel(runDir, retryPath);
+      const retryTask = readJson(retryPath, artifact, result, 'RT001');
+      if (!retryTask) return;
+      validateRetryTask(retryTask, artifact, result);
+      if (retryTask.runId !== dispatch.runId) addViolation(result, 'RUN050', artifact, '/runId', 'retry runId must match dispatch runId', dispatch.runId, retryTask.runId);
+      if (!taskRefs.has(retryTask.originalTaskRef)) addViolation(result, 'RUN051', artifact, '/originalTaskRef', 'retry originalTaskRef must reference a dispatch task', Array.from(taskRefs), retryTask.originalTaskRef);
+    });
 }
 
 function validateTaskAgainstDispatch(task, dispatch, batch, reviewItems, artifact, result) {
@@ -1347,7 +1372,7 @@ function deriveFindingItems(results, dispatch) {
         priority: deriveFindingPriority(reviewResult, dispatch),
         evidence: reviewResult.evidence,
       };
-      copyOptionalFields(reviewResult, finding, ['priorityReason', 'upgradeReason', 'originReason', 'acceptedRisk']);
+      copyOptionalFields(reviewResult, finding, ['priorityReason', 'upgradeReason', 'originReason']);
       return finding;
     })
     .sort(compareFindingItems);
@@ -1553,7 +1578,9 @@ function validateFinalReviewShape(finalReview, artifact, result) {
     if (!RULE_LEVELS.includes(finding && finding.ruleLevel)) addViolation(result, 'FR059', artifact, `/findings/${index}/ruleLevel`, 'final finding ruleLevel must be valid', RULE_LEVELS, finding && finding.ruleLevel);
     if (!FINDING_ORIGINS.includes(finding && finding.origin)) addViolation(result, 'FR060', artifact, `/findings/${index}/origin`, 'final finding origin must be valid', FINDING_ORIGINS, finding && finding.origin);
     if (!FINDING_PRIORITIES.includes(finding && finding.priority)) addViolation(result, 'FR061', artifact, `/findings/${index}/priority`, 'final finding priority must be valid', FINDING_PRIORITIES, finding && finding.priority);
-    if (finding && finding.acceptedRisk !== undefined) validateAcceptedRisk(finding.acceptedRisk, artifact, result, 'FR062', `/findings/${index}/acceptedRisk`);
+    if (finding && Object.prototype.hasOwnProperty.call(finding, 'acceptedRisk')) {
+      addViolation(result, 'FR062', artifact, `/findings/${index}/acceptedRisk`, 'finalReview finding must not contain acceptedRisk', 'field absent', finding.acceptedRisk);
+    }
     validateEvidenceArray(finding && finding.evidence, artifact, result, 'FR013', `/findings/${index}/evidence`, 'final finding requires evidence');
   });
   asArray(finalReview.observations).forEach((observation, index) => {
@@ -1563,6 +1590,9 @@ function validateFinalReviewShape(finalReview, artifact, result) {
     if (!isNonEmptyString(observation && observation.targetId)) addViolation(result, 'FR066', artifact, `/observations/${index}/targetId`, 'observation targetId must be non-empty string', 'string', observation && observation.targetId);
     if (!RULE_LEVELS.includes(observation && observation.ruleLevel)) addViolation(result, 'FR067', artifact, `/observations/${index}/ruleLevel`, 'observation ruleLevel must be valid', RULE_LEVELS, observation && observation.ruleLevel);
     if (!FINDING_ORIGINS.includes(observation && observation.origin)) addViolation(result, 'FR068', artifact, `/observations/${index}/origin`, 'observation origin must be valid', FINDING_ORIGINS, observation && observation.origin);
+    if (observation && observation.ruleLevel !== 'ADVISORY' && ['exposed_by_change', 'pre_existing'].includes(observation.origin)) {
+      validateEvidenceArray(observation.evidence, artifact, result, 'FR073', `/observations/${index}/evidence`, 'non-ADVISORY observation with exposed_by_change or pre_existing requires evidence');
+    }
     if (!hasValidEvidenceArray(observation && observation.evidence) && !isNonEmptyString(observation && observation.reason)) addViolation(result, 'FR069', artifact, `/observations/${index}`, 'observation requires reason or evidence', 'reason or evidence[]', observation);
     if (observation && observation.evidence !== undefined) validateEvidenceArray(observation.evidence, artifact, result, 'FR070', `/observations/${index}/evidence`, 'observation evidence must be reviewable when present');
   });
@@ -1990,8 +2020,7 @@ function unorderedItemsEqual(left, right, equal) {
 function findingItemEqual(left, right) {
   const fields = ['findingId', 'reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin', 'priority', 'priorityReason', 'upgradeReason', 'originReason'];
   return fields.every((field) => optionalField(left, field) === optionalField(right, field))
-    && evidenceArraysEqual(left && left.evidence, right && right.evidence)
-    && acceptedRiskEqual(left && left.acceptedRisk, right && right.acceptedRisk);
+    && evidenceArraysEqual(left && left.evidence, right && right.evidence);
 }
 
 function observationItemEqual(left, right) {
@@ -2007,12 +2036,6 @@ function optionalField(value, field) {
 function optionalEvidenceArraysEqual(left, right) {
   if (left === undefined && right === undefined) return true;
   return evidenceArraysEqual(left, right);
-}
-
-function acceptedRiskEqual(left, right) {
-  if (left === undefined && right === undefined) return true;
-  if (!isObject(left) || !isObject(right)) return false;
-  return ['status', 'acceptedBy', 'scope', 'reason', 'expiresAt', 'followUp'].every((field) => optionalField(left, field) === optionalField(right, field));
 }
 
 function cannotVerifyItemsEqual(left, right) {

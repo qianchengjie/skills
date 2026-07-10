@@ -24,7 +24,7 @@
         "priorityReason": { "type": "string", "minLength": 1 },
         "upgradeReason": { "type": "string", "minLength": 1 },
         "originReason": { "type": "string", "minLength": 1 },
-        "acceptedRisk": { "$ref": "#/$defs/acceptedRisk" },
+        "acceptedRisk": false,
         "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
         "failureChecks": { "type": "array", "items": { "$ref": "#/$defs/failureCheck" } },
         "reason": { "type": "string" }
@@ -39,22 +39,6 @@
         "outcome": { "enum": ["checked_no_violation", "not_triggered"] },
         "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } }
       }
-    },
-    "acceptedRisk": {
-      "type": "object",
-      "required": ["status", "acceptedBy", "scope", "reason"],
-      "properties": {
-        "status": { "const": "accepted" },
-        "acceptedBy": { "enum": ["human", "user", "project_owner"] },
-        "scope": { "type": "string", "minLength": 1 },
-        "reason": { "type": "string", "minLength": 1 },
-        "expiresAt": { "type": "string", "minLength": 1 },
-        "followUp": { "type": "string", "minLength": 1 }
-      },
-      "anyOf": [
-        { "required": ["expiresAt"] },
-        { "required": ["followUp"] }
-      ]
     },
     "evidence": {
       "type": "object",

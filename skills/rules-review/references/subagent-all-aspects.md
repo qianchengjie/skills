@@ -87,10 +87,11 @@ passed / finding / observation / not_applicable / cannot_verify
 字段规则：
 
 - `finding` 必须有 `findingId`、`origin` 和非空 `evidence[]`。
-- `observation` 必须有 `origin`，并包含 `reason` 或非空 `evidence[]`。
+- `observation` 必须有 `origin`，并包含 `reason` 或非空 `evidence[]`；MUST / SHOULD 规则以 `exposed_by_change` 或 `pre_existing` 返回 observation 时必须有非空 `evidence[]`。
 - `passed` 必须有非空 `evidence[]` 和非空 `failureChecks[]`；如果规则快照声明 `failureConditions[]`，必须覆盖对应 `conditionId`。
-- `not_applicable` 必须有 `reason`，可选 `evidence[]`。
+- `not_applicable` 仅允许用于 `required = false` 的 reviewItem，必须有 `reason`，可选 `evidence[]`。若 required reviewItem 的适用性判断有误，返回 `cannot_verify`，由主 agent 修正 dispatch 后重新分派。
 - `cannot_verify` 必须有 `reason` 或非空 `evidence[]`。
+- `MUST` finding 的 priority 固定为 `must_fix`，不得包含 `acceptedRisk`；风险接受不在 shard 中表达。
 - `evidence[]` 的每项至少包含非空 `summary`，并包含 `loc` 或 `source` 之一。
 - 同一 `reviewItemId` 在同一 shard 内不得出现多条 result。
 - result 只能引用当前 `reviewBatchId` 的 `reviewItemIds[]`。
@@ -124,6 +125,8 @@ node <skill>/scripts/validate.js --mode shard --task tasks/<reviewBatchId>.json 
 - `originalTaskRef`
 - `violations`
 - `outputContract`
+
+run gate 会校验上述固定字段、`outputContract`，并要求 `runId` 匹配当前 dispatch、`originalTaskRef` 引用当前 dispatch 中的 task；额外字段会阻塞本轮审查。
 
 重试目标只允许是修正 JSON 契约，不要求 subagent 基于前一次输出局部修补或扩展审查范围。
 

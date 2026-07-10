@@ -271,9 +271,9 @@ passed / finding / observation / not_applicable / cannot_verify
 字段门禁：
 
 - `finding` 必须有 `findingId`、`origin` 和非空 `evidence[]`。
-- `observation` 必须有 `origin`，并包含 `reason` 或非空 `evidence[]`；不再增加第二套 observation status/result。
+- `observation` 必须有 `origin`，并包含 `reason` 或非空 `evidence[]`；MUST / SHOULD 规则以 `exposed_by_change` 或 `pre_existing` 返回 observation 时必须有非空 `evidence[]`。不再增加第二套 observation status/result。
 - `passed` 必须有非空 `evidence[]` 和非空 `failureChecks[]`。
-- `not_applicable` 必须有 `reason`，可选 `evidence[]`。
+- `not_applicable` 仅允许用于 `required = false` 的 reviewItem，必须有 `reason`，可选 `evidence[]`。若 reviewer 认为 required reviewItem 的适用性判断有误，必须返回 `cannot_verify`，由主 agent 修正 dispatch 并重新生成 task。
 - `cannot_verify` 必须有 `reason` 或非空 `evidence[]`。
 
 `evidence[]` 不是任意非空数组。每个 evidence item 至少包含非空 `summary`，并包含 `loc` 或 `source` 之一，保证后续可定位复核；validator 不判断证据内容是否充分。
@@ -301,7 +301,7 @@ MUST 或 SHOULD + exposed_by_change / pre_existing => observation
 ADVISORY + 任意 origin => observation
 ```
 
-从默认 `observation` 升级为 `finding` 时，必须提供 `upgradeReason`；`origin = pre_existing` 的升级还必须提供 `originReason`。从默认 `finding` 降级为 `observation` 不允许。
+从默认 `observation` 升级为 `finding` 时，必须提供 `upgradeReason`；`origin = pre_existing` 的升级还必须提供 `originReason`。从默认 `finding` 降级为 `observation` 不允许。MUST / SHOULD 规则使用 `exposed_by_change` 或 `pre_existing` 维持 observation 时，必须用 `evidence[]` 支撑来源判断。
 
 finding priority 由 `ruleLevel` 派生：
 
@@ -310,7 +310,7 @@ MUST => must_fix
 SHOULD / ADVISORY => should_fix
 ```
 
-`MUST` 不允许直接降级为 `should_fix`。唯一例外是显式 waiver：`acceptedRisk.status = accepted`，`acceptedBy = human / user / project_owner`，并包含 `scope`、`reason`、以及 `expiresAt` 或 `followUp`。validator 只检查 waiver 结构，不判断理由是否合理。
+`MUST` finding 的 priority 固定为 `must_fix`，rules-review 内不接受 `acceptedRisk` 或其它 waiver。风险接受由用户在本轮 review 之外单独决定，不改写本轮 finding priority。
 
 非 `MUST` finding 覆盖默认 priority 时必须提供 `priorityReason`；validator 只检查字段存在，不判断理由是否充分。
 
@@ -428,6 +428,7 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 - `applicabilityMatrix[]` 必须覆盖每个 `requiredRuleRefs[] x (changedUnits[] + candidates[])` 组合。
 - `applicability = applicable` 的矩阵行必须绑定匹配的 required `reviewItemId`；`not_applicable` 行必须有 `reason` 且不得绑定 `reviewItemId`。
 - `task.applicabilityMatrix[]` 必须等于本 batch `reviewItems[]` 对应的 dispatch 矩阵行。
+- `contextExpansions[].reason` 必须是非空字符串。
 - 规则快照声明 `requiredContext[]` 时，`contextExpansions[].requiredContextRefs[]` 必须承接对应 `contextId`。
 - 带 `requiredContextRefs[]` 的 `contextExpansions[]` 必须包含非空 `addedTargetIds[]`。
 - `dispatch.json` 不得包含 `priorReviewCheck`，也不得引用既有 `.rules-review-tmp/` review 产物；出现即 `blocked`。
@@ -442,10 +443,10 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 - `ruleSet.ruleSources[].ruleLevel` 和 `task.rules[].ruleLevel` 必须存在，且 task 中的值必须匹配 dispatch 快照。
 - `finding` 必须有 `findingId`、`origin` 和 `evidence[]`。
 - `observation` 必须有 `origin`，并包含 `reason` 或 `evidence[]`。
-- `finding / observation` 的 `status` 必须符合 `ruleLevel + origin` 默认映射；默认 `observation` 升级为 `finding` 必须有 `upgradeReason`，`pre_existing` 升级还必须有 `originReason`。
-- `MUST` finding 默认是 `must_fix`；降为 `should_fix` 必须有结构化 `acceptedRisk`。`SHOULD / ADVISORY` finding 默认是 `should_fix`；覆盖 priority 必须有 `priorityReason`。
+- `finding / observation` 的 `status` 必须符合 `ruleLevel + origin` 默认映射；默认 `observation` 升级为 `finding` 必须有 `upgradeReason`，`pre_existing` 升级还必须有 `originReason`；MUST / SHOULD 的 `exposed_by_change` / `pre_existing` observation 必须有 `evidence[]`。
+- `MUST` finding 必须是 `must_fix`，且不得包含 `acceptedRisk`；`SHOULD / ADVISORY` finding 默认是 `should_fix`，覆盖 priority 必须有 `priorityReason`。
 - `passed` 必须有 `evidence[]` 和 `failureChecks[]`；规则快照声明 `failureConditions[]` 时，`failureChecks[].conditionId` 必须覆盖对应 ID。
-- `not_applicable` 必须有 `reason`。
+- `not_applicable` 仅允许用于 `required = false` 的 reviewItem，且必须有 `reason`；required reviewItem 的适用性争议必须返回 `cannot_verify` 并重新分派。
 - `cannot_verify` 必须有 `reason` 或 `evidence[]`。
 - `ruleSet.sourceIndexHash`、`ruleSet.ruleSources[].sourceHash`、`task.rules[].sourceHash` 缺失 => `blocked`。
 - `ruleSet.ruleSources[]` 与 `task.rules[]` 缺少 `summary` / `ruleText` => `blocked`。
@@ -463,6 +464,7 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 - `finalReview.validationResults[mode=run]` 必须匹配本次 validator 复算结果。
 - scoped 模式必须有 `excludedRuleRefs`，且不得声明 `coverageClaim = "full_complete"`。
 - `.rules-review-tmp/<run-id>/` 只能包含协议工件：`dispatch.json`、`finalReview.json`、`final.md`、`response.md`，以及 `tasks/`、`retries/`、`shards/`、`validations/` 下的一层 JSON 文件；出现临时脚本或其它非协议文件 => `blocked`。
+- `retries/*.json` 必须只包含 retry schema 的固定字段，通过 `retry-task` 校验，并且 `runId`、`originalTaskRef` 分别匹配当前 dispatch 和其中一个 task。
 
 `semanticVerdict` 派生规则：
 

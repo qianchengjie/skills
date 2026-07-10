@@ -3,20 +3,22 @@
   "$id": "https://agents.local/rules-review/retry-task.schema.json",
   "title": "rules-review retry task packet",
   "type": "object",
+  "additionalProperties": false,
   "required": ["kind", "schemaVersion", "runId", "retryAttempt", "reason", "originalTaskRef", "violations", "outputContract"],
   "properties": {
     "kind": { "const": "rules-review-retry-task" },
     "schemaVersion": { "const": 2 },
-    "runId": { "type": "string" },
+    "runId": { "type": "string", "minLength": 1 },
     "retryAttempt": { "type": "integer", "minimum": 1 },
-    "reason": { "type": "string" },
-    "originalTaskRef": { "type": "string" },
+    "reason": { "type": "string", "minLength": 1 },
+    "originalTaskRef": { "type": "string", "minLength": 1 },
     "violations": {
       "type": "array",
       "items": { "$ref": "validation.schema.json#/$defs/violation" }
     },
     "outputContract": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["format", "schemaRef"],
       "properties": {
         "format": { "const": "strict_json" },
