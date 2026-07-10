@@ -374,7 +374,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - `硬门禁` 只允许 `pending` / `passed` / `failed` / `blocked` / `skipped` 开头。
 - `AI Review` 只允许 `pending` / `passed` / `issues` / `blocked` / `skipped` 开头。
 - 写入 `用户验收` 时只允许 `pending` / `passed` / `issues` / `skipped` 开头；`skipped` 必须写明用户明确跳过原因。
-- `修复次数` 必须是 `当前次数/最大次数`，最大次数大于 0，当前次数不超过最大次数。
+- `修复次数` 必须是 `当前次数/最大次数`，最大次数只允许 `2` / `4`，当前次数不能超过最大次数；`/4` 只允许出现在 `AI Review：issues` 或后续 `passed` 状态。
 - `上下文预检` 必须包含 `需理解`、`必读上下文`、`项目规则审查`、`允许修改`、`禁止修改`、`非目标`、`停止条件`；`项目规则审查` 的 `状态` 只允许 `required` / `not-applicable` / `blocked`。
 - `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不能是 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规则审查` 必须写明确状态，`禁止修改` 可显式写 `无`。
 - 若切片存在 `#### 切片交接`，必须包含 `输入`、`输出`，且每项必须显式写 `无` 或至少一条非占位内容；`无` 不得和真实条目混写。

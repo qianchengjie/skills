@@ -2186,7 +2186,7 @@ test('diff-check flags forbidden terms only in added content', async () => {
   });
 });
 
-test('validate rejects malformed repair attempts', async () => {
+test('validate bounds reviewer repair extension', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-repair-attempts');
     await writeValidExecutingPlan(planDir);
@@ -2194,8 +2194,27 @@ test('validate rejects malformed repair attempts', async () => {
     const plan = await fs.readFile(planPath, 'utf8');
     await fs.writeFile(planPath, plan.replace('- 修复次数：0/2', '- 修复次数：3/2'), 'utf8');
 
-    const errors = await validatePlan(planDir);
+    let errors = await validatePlan(planDir);
     assert(errors.some((error) => error.includes('S1: invalid 修复次数 3/2')));
+
+    await fs.writeFile(planPath, plan.replace('- 修复次数：0/2', '- 修复次数：0/4'), 'utf8');
+    errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('修复次数上限 4 requires AI Review issues or passed')));
+
+    const reviewerRepairPlan = plan
+      .replace('- AI Review：pending', '- AI Review：issues（reviewer finding）')
+      .replace('- 修复次数：0/2', '- 修复次数：0/4');
+    await fs.writeFile(planPath, reviewerRepairPlan, 'utf8');
+    assert.deepEqual(await validatePlan(planDir), []);
+
+    const passedReviewPlan = withClosedDoneSlice(plan, planDir)
+      .replace('- 修复次数：0/2', '- 修复次数：2/4');
+    await fs.writeFile(planPath, passedReviewPlan, 'utf8');
+    assert.deepEqual(await validatePlan(planDir), []);
+
+    await fs.writeFile(planPath, reviewerRepairPlan.replace('- 修复次数：0/4', '- 修复次数：0/3'), 'utf8');
+    errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('S1: invalid 修复次数 0/3')));
   });
 });
 

@@ -25,7 +25,7 @@
 }
 ```
 
-`task_name` 使用小写字母、数字和下划线，并包含切片号与本轮尝试号；general reviewer 例如 `review_s1_a1`，rule-reviewer 例如 `rule_review_s1_a1`。不要添加当前 `spawn_agent` schema 未定义的字段。
+`task_name` 使用小写字母、数字和下划线，并包含切片号与本轮尝试号；general reviewer 例如 `review_s1_a1`，rule-reviewer 例如 `rule_review_s1_a1`。`attempt` 只区分 reviewer 派发轮次，不等于切片 `修复次数`；是否计次由控制器按有限修复规则判断。不要添加当前 `spawn_agent` schema 未定义的字段。
 
 ## General Reviewer 任务包模板
 

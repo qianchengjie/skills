@@ -684,7 +684,7 @@ function validateRepairAttempts(value) {
   if (!match) return { valid: false, current: undefined, max: undefined };
   const current = Number(match[1]);
   const max = Number(match[2]);
-  return { valid: max > 0 && current >= 0 && current <= max, current, max };
+  return { valid: [2, 4].includes(max) && current >= 0 && current <= max, current, max };
 }
 
 function normalizeListItem(item) {
@@ -3610,6 +3610,9 @@ function validateSliceBlock(id, body, slices, decisions, audits, referencedDecis
   }
   const repair = validateRepairAttempts(repairAttempts);
   if (!repair.valid) errors.push(`plan.md:${id}: invalid 修复次数 ${repairAttempts ?? '<missing>'}`);
+  if (repair.valid && repair.max === 4 && !['issues', 'passed'].includes(getStatusPrefix(aiReview))) {
+    errors.push(`plan.md:${id}: 修复次数上限 4 requires AI Review issues or passed`);
+  }
   if (risk === 'C' && execution === '自动') {
     errors.push(`plan.md:${id}: C risk slice cannot use 执行：自动`);
   }
