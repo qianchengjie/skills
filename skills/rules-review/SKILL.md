@@ -273,7 +273,7 @@ passed / finding / observation / not_applicable / cannot_verify
 - `finding` 必须有 `findingId`、`origin` 和非空 `evidence[]`。
 - `observation` 必须有 `origin`，并包含 `reason` 或非空 `evidence[]`；MUST / SHOULD 规则以 `exposed_by_change` 或 `pre_existing` 返回 observation 时必须有非空 `evidence[]`。不再增加第二套 observation status/result。
 - `passed` 必须有非空 `evidence[]` 和非空 `failureChecks[]`。
-- `not_applicable` 仅允许用于 `required = false` 的 reviewItem，必须有 `reason`，可选 `evidence[]`。若 reviewer 认为 required reviewItem 的适用性判断有误，必须返回 `cannot_verify`，由主 agent 修正 dispatch 并重新生成 task。
+- `not_applicable` 仅允许用于 `required = false` 的 reviewItem，必须有 `reason`，可选 `evidence[]`。若 reviewer 认为 required reviewItem 的适用性判断有误，必须返回 `cannot_verify` 并说明依据。主 agent 能据此形成更可靠 dispatch 时，修正后重新生成 task；无法消除争议时，保留 `cannot_verify` 作为终态并按现有 `recommendation` 派生规则收口，不得改写为 `passed` 或 `not_applicable`。
 - `cannot_verify` 必须有 `reason` 或非空 `evidence[]`。
 
 `evidence[]` 不是任意非空数组。每个 evidence item 至少包含非空 `summary`，并包含 `loc` 或 `source` 之一，保证后续可定位复核；validator 不判断证据内容是否充分。
@@ -446,7 +446,7 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 - `finding / observation` 的 `status` 必须符合 `ruleLevel + origin` 默认映射；默认 `observation` 升级为 `finding` 必须有 `upgradeReason`，`pre_existing` 升级还必须有 `originReason`；MUST / SHOULD 的 `exposed_by_change` / `pre_existing` observation 必须有 `evidence[]`。
 - `MUST` finding 必须是 `must_fix`，且不得包含 `acceptedRisk`；`SHOULD / ADVISORY` finding 默认是 `should_fix`，覆盖 priority 必须有 `priorityReason`。
 - `passed` 必须有 `evidence[]` 和 `failureChecks[]`；规则快照声明 `failureConditions[]` 时，`failureChecks[].conditionId` 必须覆盖对应 ID。
-- `not_applicable` 仅允许用于 `required = false` 的 reviewItem，且必须有 `reason`；required reviewItem 的适用性争议必须返回 `cannot_verify` 并重新分派。
+- `not_applicable` 仅允许用于 `required = false` 的 reviewItem，且必须有 `reason`；required reviewItem 的适用性争议必须返回 `cannot_verify` 并说明依据。主 agent 能形成更可靠 dispatch 时重新分派，无法消除争议时保留 `cannot_verify` 作为终态。
 - `cannot_verify` 必须有 `reason` 或 `evidence[]`。
 - `ruleSet.sourceIndexHash`、`ruleSet.ruleSources[].sourceHash`、`task.rules[].sourceHash` 缺失 => `blocked`。
 - `ruleSet.ruleSources[]` 与 `task.rules[]` 缺少 `summary` / `ruleText` => `blocked`。

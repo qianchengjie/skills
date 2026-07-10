@@ -89,7 +89,7 @@ passed / finding / observation / not_applicable / cannot_verify
 - `finding` 必须有 `findingId`、`origin` 和非空 `evidence[]`。
 - `observation` 必须有 `origin`，并包含 `reason` 或非空 `evidence[]`；MUST / SHOULD 规则以 `exposed_by_change` 或 `pre_existing` 返回 observation 时必须有非空 `evidence[]`。
 - `passed` 必须有非空 `evidence[]` 和非空 `failureChecks[]`；如果规则快照声明 `failureConditions[]`，必须覆盖对应 `conditionId`。
-- `not_applicable` 仅允许用于 `required = false` 的 reviewItem，必须有 `reason`，可选 `evidence[]`。若 required reviewItem 的适用性判断有误，返回 `cannot_verify`，由主 agent 修正 dispatch 后重新分派。
+- `not_applicable` 仅允许用于 `required = false` 的 reviewItem，必须有 `reason`，可选 `evidence[]`。若 required reviewItem 的适用性判断有误，返回 `cannot_verify` 并说明依据。主 agent 能据此形成更可靠 dispatch 时，修正后重新分派；无法消除争议时，保留 `cannot_verify` 作为终态，不得改写为 `passed` 或 `not_applicable`。
 - `cannot_verify` 必须有 `reason` 或非空 `evidence[]`。
 - `MUST` finding 的 priority 固定为 `must_fix`，不得包含 `acceptedRisk`；风险接受不在 shard 中表达。
 - `evidence[]` 的每项至少包含非空 `summary`，并包含 `loc` 或 `source` 之一。
