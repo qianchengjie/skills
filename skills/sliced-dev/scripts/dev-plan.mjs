@@ -20,6 +20,8 @@ const GATES = new Set([
   'no-grill',
   'not-applicable',
 ]);
+const CLOSED_PLAN_GATES = new Set(['grilled', 'no-grill']);
+const CLOSED_SLICE_GATES = new Set([...CLOSED_PLAN_GATES, 'not-applicable']);
 const SLICE_STATUSES = new Set(['not-started', 'blocked', 'in-progress', 'done', 'split', 'skipped']);
 const SLICE_CANDIDATES = new Set(['候选自动', '候选需确认']);
 const RISK_LEVELS = new Set(['待判定', 'A', 'B', 'C']);
@@ -3325,6 +3327,9 @@ function validatePlanMarkdown(plan, decisions, audits, errors) {
   if (!GATES.has(splitGate)) {
     errors.push(`plan.md: invalid 拆分拷问 ${splitGate ?? '<missing>'}`);
   }
+  if (planStatus === 'done' && !CLOSED_PLAN_GATES.has(splitGate)) {
+    errors.push(`plan.md: done plan must close 拆分拷问, got ${splitGate ?? '<missing>'}`);
+  }
 
   const current = getSection(plan, '当前状态');
   const phase = getField(current, '阶段');
@@ -3473,11 +3478,16 @@ function validateSliceBlock(id, body, slices, decisions, audits, referencedDecis
   const userAcceptance = getField(header, '用户验收');
   const repairAttempts = getField(header, '修复次数');
   const depends = getField(header, '依赖');
+  const replacementSlices = getField(header, '替代切片');
+  const skipBasis = getField(header, '跳过依据');
   const commit = getField(header, 'Commit');
   const validation = getField(header, '验证');
 
   if (!SLICE_STATUSES.has(status)) errors.push(`plan.md:${id}: invalid 状态 ${status ?? '<missing>'}`);
   if (!GATES.has(gate)) errors.push(`plan.md:${id}: invalid 门禁 ${gate ?? '<missing>'}`);
+  if (TERMINAL_SLICE_STATUSES.has(status) && !CLOSED_SLICE_GATES.has(gate)) {
+    errors.push(`plan.md:${id}: terminal slice must close 门禁, got ${gate ?? '<missing>'}`);
+  }
   if (!SLICE_CANDIDATES.has(candidate)) {
     errors.push(`plan.md:${id}: invalid 候选 ${candidate ?? '<missing>'}`);
   }
@@ -3506,7 +3516,11 @@ function validateSliceBlock(id, body, slices, decisions, audits, referencedDecis
     errors.push(`plan.md:${id}: C risk slice cannot use 执行：自动`);
   }
   if (!depends) errors.push(`plan.md:${id}: missing 依赖`);
-  if (!commit) {
+  if (status === 'split' || status === 'skipped') {
+    if (commit !== undefined) {
+      errors.push(`plan.md:${id}: ${status} slice must omit Commit`);
+    }
+  } else if (!commit) {
     errors.push(`plan.md:${id}: missing Commit`);
   } else if (!COMMIT_STATUSES.has(commit)) {
     errors.push(`plan.md:${id}: invalid Commit ${commit}; use 待提交 or 已提交`);
@@ -3628,8 +3642,61 @@ function validateSliceBlock(id, body, slices, decisions, audits, referencedDecis
   if (status === 'split' && !validation?.startsWith('skipped')) {
     errors.push(`plan.md:${id}: split slice must use skipped 验证`);
   }
-  if (status === 'split' && commit !== '已提交') {
-    errors.push(`plan.md:${id}: split slice Commit must be 已提交`);
+  if (status === 'split') {
+    if (!replacementSlices) {
+      errors.push(`plan.md:${id}: split slice requires 替代切片`);
+    } else {
+      const replacementIds = replacementSlices.split(/\s*\/\s*/);
+      const uniqueReplacementIds = new Set();
+      for (const replacementId of replacementIds) {
+        if (!SLICE_ID_RE.test(replacementId)) {
+          errors.push(`plan.md:${id}: invalid 替代切片 ${replacementSlices}; use S-id / S-id`);
+          break;
+        }
+        if (uniqueReplacementIds.has(replacementId)) {
+          errors.push(`plan.md:${id}: duplicate 替代切片 ${replacementId}`);
+          continue;
+        }
+        uniqueReplacementIds.add(replacementId);
+        if (!replacementId.startsWith(`${id}.`)) {
+          errors.push(`plan.md:${id}: 替代切片 ${replacementId} must be a descendant of ${id}`);
+        }
+        if (!slices.has(replacementId)) {
+          errors.push(`plan.md:${id}: 替代切片 ${replacementId} does not exist`);
+        }
+      }
+    }
+  }
+  if (status === 'skipped') {
+    if (!skipBasis) {
+      errors.push(`plan.md:${id}: skipped slice requires 跳过依据`);
+    } else if (!DECISION_ID_RE.test(skipBasis)) {
+      errors.push(`plan.md:${id}: skipped slice 跳过依据 must be one D-id, got ${skipBasis}`);
+    } else {
+      const decision = decisions.get(skipBasis);
+      if (!decision) {
+        errors.push(`plan.md:${id}: 跳过依据 ${skipBasis} does not exist`);
+      } else {
+        if (getField(decision.body, '状态') !== 'decided') {
+          errors.push(`plan.md:${id}: 跳过依据 ${skipBasis} must be decided`);
+        }
+        if (!extractIds(getField(decision.body, '关联'), SLICE_REF_RE).includes(id)) {
+          errors.push(`plan.md:${id}: 跳过依据 ${skipBasis} must associate ${id}`);
+        }
+        if (isPlaceholderText(getField(decision.body, '结论'))) {
+          errors.push(`plan.md:${id}: 跳过依据 ${skipBasis} requires non-placeholder 结论`);
+        }
+        if (isPlaceholderText(getField(decision.body, '证据'))) {
+          errors.push(`plan.md:${id}: 跳过依据 ${skipBasis} requires non-placeholder 证据`);
+        }
+      }
+      if (!items.some((item) => item.id === skipBasis && item.status === 'decided')) {
+        errors.push(`plan.md:${id}: 跳过依据 ${skipBasis} must appear as decided in 关联项`);
+      }
+    }
+    if (!validation?.startsWith('skipped')) {
+      errors.push(`plan.md:${id}: skipped slice must use skipped 验证`);
+    }
   }
   if (validationNeedsNote && !getSubsection(body, '验证备注').trim()) {
     errors.push(`plan.md:${id}: ${validation?.split(/[（(，,：:\s]/)[0]} 验证 requires 验证备注`);

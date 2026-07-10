@@ -1382,7 +1382,7 @@ test('validate rejects done plans with unfinished slices', async () => {
   });
 });
 
-test('validate accepts split parent slices in done plans when verification is skipped', async () => {
+test('validate rejects split parent slices without structured replacement slices', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-done-split-parent');
     await writeValidExecutingPlan(planDir);
@@ -1395,12 +1395,130 @@ test('validate accepts split parent slices in done plans when verification is sk
         .replace('- 阶段：executing', '- 阶段：done')
         .replace('- 当前切片：S1', '- 当前切片：无')
         .replace('- 状态：not-started', '- 状态：split')
-        .replace('- Commit：待提交', '- Commit：已提交')
+        .replace('- Commit：待提交\n', '')
         .replace('- 验证：pending', '- 验证：skipped（父项拆分，无代码变更）\n\n#### 验证备注\n\n- 父项已拆分为 S1.1，不单独执行。'),
       'utf8',
     );
 
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('split slice requires 替代切片')));
+  });
+});
+
+test('validate accepts split parent slices only when replacement slices exist', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-done-split-parent-with-child');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = await fs.readFile(planPath, 'utf8');
+    const splitParent = plan
+      .replace('> 状态：executing', '> 状态：done')
+      .replace('- 阶段：executing', '- 阶段：done')
+      .replace('- 当前切片：S1', '- 当前切片：无')
+      .replace('- 状态：not-started', '- 状态：split\n- 替代切片：S1.1')
+      .replace('- Commit：待提交\n', '')
+      .replace('- 验证：pending', '- 验证：skipped（父项拆分，无代码变更）\n\n#### 验证备注\n\n- 父项已拆分为 S1.1，不单独执行。');
+    await fs.writeFile(planPath, splitParent, 'utf8');
+
+    let errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('替代切片 S1.1 does not exist')));
+
+    await fs.writeFile(
+      planPath,
+      `${splitParent.replace('- 替代切片：S1.1', '- 替代切片：S2')}${createClosedConsumerSliceBlock()}`,
+      'utf8',
+    );
+    errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('替代切片 S2 must be a descendant of S1')));
+
+    await fs.writeFile(
+      planPath,
+      `${splitParent}${createClosedConsumerSliceBlock().replaceAll('S2', 'S1.1')}`,
+      'utf8',
+    );
+
+    errors = await validatePlan(planDir);
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('validate requires skipped slices to reference a decided basis', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-done-skipped-slice');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = await fs.readFile(planPath, 'utf8');
+    const skipped = plan
+      .replace('> 状态：executing', '> 状态：done')
+      .replace('- 阶段：executing', '- 阶段：done')
+      .replace('- 当前切片：S1', '- 当前切片：无')
+      .replace('- 状态：not-started', '- 状态：skipped')
+      .replace('- Commit：待提交\n', '')
+      .replace('- 验证：pending', '- 验证：skipped（按决策不再执行）\n\n#### 验证备注\n\n- 本片按跳过依据关闭。');
+    await fs.writeFile(planPath, skipped, 'utf8');
+
+    let errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('skipped slice requires 跳过依据')));
+
+    const missingDecision = skipped.replace('- 状态：skipped', '- 状态：skipped\n- 跳过依据：D2');
+    await fs.writeFile(planPath, missingDecision, 'utf8');
+    errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('跳过依据 D2 does not exist')));
+
+    const withCommit = skipped.replace(
+      '- 状态：skipped',
+      '- 状态：skipped\n- 跳过依据：D1\n- Commit：已提交',
+    );
+    await fs.writeFile(planPath, withCommit, 'utf8');
+    errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('skipped slice must omit Commit')));
+
+    const closedSkipped = skipped.replace('- 状态：skipped', '- 状态：skipped\n- 跳过依据：D1');
+    await fs.writeFile(planPath, closedSkipped, 'utf8');
     assert.deepEqual(await validatePlan(planDir), []);
+
+    const decisionsPath = path.join(planDir, 'decisions.md');
+    const decisions = await fs.readFile(decisionsPath, 'utf8');
+    for (const [from, to, expected] of [
+      ['- 状态：decided', '- 状态：open', '跳过依据 D1 must be decided'],
+      ['- 关联：S1', '- 关联：S2', '跳过依据 D1 must associate S1'],
+      ['- 结论：按示例执行。', '- 结论：待补充', '跳过依据 D1 requires non-placeholder 结论'],
+      ['- 证据：A1', '- 证据：待补充', '跳过依据 D1 requires non-placeholder 证据'],
+    ]) {
+      await fs.writeFile(decisionsPath, decisions.replace(from, to), 'utf8');
+      errors = await validatePlan(planDir);
+      assert(errors.some((error) => error.includes(expected)));
+    }
+    await fs.writeFile(decisionsPath, decisions, 'utf8');
+    await fs.writeFile(planPath, closedSkipped.replace('| D1 | decided |\n', ''), 'utf8');
+    errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('跳过依据 D1 must appear as decided in 关联项')));
+  });
+});
+
+test('validate rejects done plans whose grill gates are not closed', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-done-pending-grill');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = await fs.readFile(planPath, 'utf8');
+    await fs.writeFile(
+      planPath,
+      plan
+        .replace('> 状态：executing', '> 状态：done')
+        .replace('> 拆分拷问：grilled', '> 拆分拷问：pending-grill')
+        .replace('- 阶段：executing', '- 阶段：done')
+        .replace('- 当前切片：S1', '- 当前切片：无')
+        .replace('- 状态：not-started', '- 状态：skipped\n- 跳过依据：D1')
+        .replace('- 门禁：grilled', '- 门禁：pending-grill')
+        .replace('- Commit：待提交\n', '')
+        .replace('- 验证：pending', '- 验证：skipped（按 D1 不再执行）\n\n#### 验证备注\n\n- 本片按跳过依据关闭。'),
+      'utf8',
+    );
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('done plan must close 拆分拷问')));
+    assert(errors.some((error) => error.includes('terminal slice must close 门禁')));
   });
 });
 
@@ -2003,7 +2121,7 @@ test('validate rejects commit hash and no-change marker in plan commit field', a
   });
 });
 
-test('validate rejects split slice with pending commit', async () => {
+test('validate rejects Commit field on split slices', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-split-pending-commit');
     await writeValidExecutingPlan(planDir);
@@ -2021,7 +2139,7 @@ test('validate rejects split slice with pending commit', async () => {
     );
 
     const errors = await validatePlan(planDir);
-    assert(errors.some((error) => error.includes('split slice Commit must be 已提交')));
+    assert(errors.some((error) => error.includes('split slice must omit Commit')));
   });
 });
 
@@ -3774,6 +3892,37 @@ test('CLI close-check rejects unfinished plans and accepts closed plans with pas
     const closed = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check']);
     assert.equal(closed.status, 0, closed.stderr.toString());
     assert.match(closed.stdout.toString(), /OK: dev plan is ready to close/);
+  });
+});
+
+test('CLI close-check rejects split and skipped slices without closure evidence', async () => {
+  await withTempRepo(async () => {
+    const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
+
+    for (const status of ['split', 'skipped']) {
+      const planDir = path.join('dev-plans', `2026-06-10-close-check-${status}-bypass`);
+      await writeValidExecutingPlan(planDir);
+      const planPath = path.join(planDir, 'plan.md');
+      const plan = await fs.readFile(planPath, 'utf8');
+      await fs.writeFile(
+        planPath,
+        plan
+          .replace('> 状态：executing', '> 状态：done')
+          .replace('- 阶段：executing', '- 阶段：done')
+          .replace('- 当前切片：S1', '- 当前切片：无')
+          .replace('- 状态：not-started', `- 状态：${status}`)
+          .replace('- Commit：待提交\n', '')
+          .replace('- 验证：pending', '- 验证：skipped（尝试绕过关闭门禁）\n\n#### 验证备注\n\n- 未记录结构化关闭依据。'),
+        'utf8',
+      );
+
+      const result = spawnSync('node', [script, 'close-check', planDir]);
+      assert.equal(result.status, 1, result.stderr.toString());
+      assert.match(
+        result.stderr.toString(),
+        status === 'split' ? /split slice requires 替代切片/ : /skipped slice requires 跳过依据/,
+      );
+    }
   });
 });
 

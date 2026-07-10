@@ -289,8 +289,10 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/YYYY-MM-D
 
 - 先运行 `validate`。
 - 不允许存在 `open` D。
-- 所有切片必须是 `done` / `skipped` / `split` 终态。
+- 所有切片必须是 `done` / `skipped` / `split` 终态，顶部 `拆分拷问` 与每个终态切片的 `门禁` 必须已收口。
+- `split` 必须用 `替代切片` 引用一个或多个存在且为父片后代的切片；`skipped` 必须用 `跳过依据` 引用结构闭合的 decided D。二者必须省略 `Commit`，不要求 done slice 的 claims、diff-check、task handoff 或 review-package。
 - `done` 切片必须写 `Commit：已提交`。
+- 脚本只检查 `替代切片` ID 非重复、真实存在且为父片后代，不判断这些切片是否完整覆盖父片任务与验收；覆盖关系由拆分拷问 / 计划审查判断。
 - `validate` 已检查 `AI Review 结论` 中的 `failed`、`cannot-verify-from-package` 和 `critical` 阻塞 `AI Review：passed` / done。
 - 每个 `done` slice 必须在 `#### 门禁记录` 中有 `diff-check` 结构化记录，`Status` 必须为 `passed`，`Command` 和 `Evidence` 必须非空、非占位。
 - 每个 `done` slice 必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确；最终 claim 状态必须是 `verified` 或 `waived`，不会从 task report 推断完成。
@@ -346,6 +348,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - `plan.md` 的 `档位` 固定为 `完整`。
 - `plan.md` 的 `状态`、`阶段`、`计划一致性预检`、可选 `整任务审查`、`拆分拷问` 使用固定枚举；`整任务审查` 只允许缺席或 `package-generated` / `passed` / `blocked`。
 - `计划一致性预检` 允许 `pending` / `passed` / `blocked` 开头；`pending` 只能停在 `状态：draft`、`阶段：slicing`、`拆分拷问：pending-grill`；`blocked` 必须引用至少一个存在且仍为 `open` 的 D，且不能进入拆分拷问或执行。
+- `状态：done` 的计划只接受已收口的顶部 `拆分拷问：grilled/no-grill`；`done` / `split` / `skipped` 切片只接受已收口的 `门禁：grilled/no-grill/not-applicable`。
 - `整任务审查：passed` 时，必须有完整 `## 整任务审查结论` 五 verdict 表，且不得出现 `failed` / `cannot-verify-from-package` / `blocked` / `critical`；Evidence 必须非空。
 - `整任务审查：blocked` 时，必须有完整 `## 整任务审查结论` 五 verdict 表；Evidence 仍按机器 token 填写，阻塞说明写在正文说明中。
 - `plan.md` 只允许固定二级标题（含 `## 全局约束`、可选 `## 整任务审查结论`）和 `### S*` 切片标题。
@@ -359,7 +362,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - 切片产出后，`当前切片：待定` 非法；完成态必须写 `当前切片：无`；当前切片不能指向 `done` / `skipped` / `split`。
 - 同一计划最多一个非终态切片可处于 `门禁：grilling`；若存在，该切片必须是 `当前切片`。
 - `paused` 不能停在 `slicing` 阶段；`done` 必须搭配 `阶段：done`。
-- 每个 `S*` 切片必须有状态、门禁、候选、风险、执行、上下文预检、硬门禁、AI Review、修复次数、依赖、Commit、验证、关联项、上下文预检小节、门禁记录、任务内容、验收；`用户验收` 是条件字段；`#### 切片交接` 可选，旧 `#### 接口契约` 非法。
+- 每个 `S*` 切片必须有状态、门禁、候选、风险、执行、上下文预检、硬门禁、AI Review、修复次数、依赖、验证、关联项、上下文预检小节、门禁记录、任务内容、验收；执行型切片必须有 `Commit`，`split` / `skipped` 必须省略；`用户验收` 是条件字段；`#### 切片交接` 可选，旧 `#### 接口契约` 非法。
 - 执行控制字段只从切片头部（首个 `####` 子节前）读取；门禁记录等小节中的同名行不能顶替。
 - 切片 ID 必须匹配 `S<digits>(.<digits>)*`。
 - `风险` 只允许 `待判定` / `A` / `B` / `C`；`风险：C` 不允许 `执行：自动`。
@@ -386,7 +389,8 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - 关联项中的 `A*` 必须存在于 `audits.md`；`A*` 只使用 `A1`、`A2` 这类顺序编号，不使用 `A-S*` 或 `A-D*`。
 - 所有切片都检查 blocked/open decision 一致性；`状态：blocked` 必须有 open decision、`验证：blocked`、`上下文预检：blocked` 或未收口拷问门禁之一。
 - 已产出切片后，所有 `open` D 必须被至少一个切片 `关联项` 引用。
-- `split` 父项是合法终态，但不能作为当前切片；`done` plan 允许 `split` 父项，且 `split` 必须使用 `skipped` 验证，`Commit` 必须为 `已提交`。
+- `split` 父项是合法终态，但不能作为当前切片；它必须使用 `skipped` 验证、省略 `Commit`，并用 `/` 分隔的 `替代切片` 精确引用存在且为父片后代的切片。
+- `skipped` 切片必须使用 `skipped` 验证、省略 `Commit`，并用单个 `跳过依据：D*` 引用 decided D；该 D 必须有当前切片关联、非占位结论和证据，并在切片 `关联项` 中写为 `decided`。脚本不判断跳过结论是否正确或证据是否充分。
 - `failed` / `blocked` / `skipped` 验证必须有 `#### 验证备注`。
 - `decisions.md` 的 D 标题、状态、关联和 open/decided 必需字段。
 - D 的 `证据` 字段若引用 `A*`，对应 A 必须存在。
