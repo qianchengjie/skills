@@ -297,7 +297,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/YYYY-MM-D
 - 每个 `done` slice 必须在 `#### 门禁记录` 中有 `diff-check` 结构化记录，`Status` 必须为 `passed`，`Command` 和 `Evidence` 必须非空、非占位。
 - 每个 `done` slice 必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确；最终 claim 状态必须是 `verified` 或 `waived`，不会从 task report 推断完成。
 - 每个 `done` 且 `AI Review：passed` 的 slice 必须存在非空 task brief、结论为 `ready-for-review` 的非空 task report、非空 review-package；JSON report 必须 schema valid；review-package 必须包含 Task Brief、Task Report、Claims、Git Diff 统计、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID；Git Diff 统计必须使用 `text` fence，Git Diff 必须使用 `diff` fence，允许无当前 dirty diff。
-- `AI Review：passed` 必须有四个固定 verdict；`项目规则审查：required` 时，第四 verdict 不能是 `not-applicable`，Evidence 必须引用存在的 A*，且 A* 至少包含 `selectedRuleIds`、`validation: <rules-review validate command> => passed`、`verdict`、`severity` 和 `summary`；`项目规则审查：not-applicable` 时，第四 verdict 必须为 `not-applicable`，且上下文预检不得列出适用规则 ID；`项目规则审查：blocked` 时阻塞 `上下文预检：ready`、`AI Review：passed` 和 `状态：done`。
+- `AI Review：passed` 必须有四个固定 verdict；前三项不得为 `not-applicable`，各项必须满足 Status / Severity 固定组合；`项目规则审查：required` 时，第四 verdict 不能是 `not-applicable`，Evidence 必须引用存在的 A*，且 A* 至少包含 `selectedRuleIds`、`validation: <rules-review validate command> => passed`、`verdict`、`severity` 和 `summary`；`项目规则审查：not-applicable` 时，第四 verdict 必须为 `not-applicable`，且上下文预检不得列出适用规则 ID；`项目规则审查：blocked` 时阻塞 `上下文预检：ready`、`AI Review：passed` 和 `状态：done`。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。
 - `整任务审查：passed` 或 `整任务审查：blocked` 时，`review-packages/whole-task.md` 必须存在、非空，且包含 `whole-review-package` 生成器承诺的顶层章节，包括 Reviewer Instructions、计划头、全局约束、切片概览、切片交接、Claims 概览、D/A 摘要与全文、切片 AI Review、Task Reports、变更文件、Git Diff 和整任务审查结论模板；`整任务审查：package-generated` 和 `整任务审查：blocked` 都阻塞 `close-check`。
 ## show
@@ -349,7 +349,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - `plan.md` 的 `状态`、`阶段`、`计划一致性预检`、可选 `整任务审查`、`拆分拷问` 使用固定枚举；`整任务审查` 只允许缺席或 `package-generated` / `passed` / `blocked`。
 - `计划一致性预检` 允许 `pending` / `passed` / `blocked` 开头；`pending` 只能停在 `状态：draft`、`阶段：slicing`、`拆分拷问：pending-grill`；`blocked` 必须引用至少一个存在且仍为 `open` 的 D，且不能进入拆分拷问或执行。
 - `状态：done` 的计划只接受已收口的顶部 `拆分拷问：grilled/no-grill`；`done` / `split` / `skipped` 切片只接受已收口的 `门禁：grilled/no-grill/not-applicable`。
-- `整任务审查：passed` 时，必须有完整 `## 整任务审查结论` 五 verdict 表，且不得出现 `failed` / `cannot-verify-from-package` / `blocked` / `critical`；Evidence 必须非空。
+- `整任务审查：passed` 时，必须有完整 `## 整任务审查结论` 五 verdict 表；五项不得为 `not-applicable`，必须满足 Status / Severity 固定组合，且不得出现 `failed` / `cannot-verify-from-package` / `blocked` / `critical`；Evidence 必须非空。
 - `整任务审查：blocked` 时，必须有完整 `## 整任务审查结论` 五 verdict 表；Evidence 仍按机器 token 填写，阻塞说明写在正文说明中。
 - `plan.md` 只允许固定二级标题（含 `## 全局约束`、可选 `## 整任务审查结论`）和 `### S*` 切片标题。
 - `plan.md` 的顶层元信息只从 H1 后、首个 `##` 前读取；正文 blockquote 不能顶替。
@@ -379,9 +379,9 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - 只要切片头部写 `AI Review：passed`，就必须有 `#### AI Review 结论`，且包含四个固定 verdict：`需求符合性`、`切片边界 / 交接一致性`、`代码质量 / AI 污染检查`、`项目规则审查`。
 - `#### AI Review 结论` 必须使用 `Verdict | Status | Severity | Evidence | Note` 五列格式；旧四列格式会被判为无效表格。
 - `AI Review：issues` / `AI Review：blocked` 必须有非占位头部原因，或在 `#### AI Review 结论` 中有 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位。
-- verdict `Status` 只允许 `passed` / `failed` / `cannot-verify-from-package` / `not-applicable`；`Severity` 只允许 `critical` / `major` / `minor` / `not-applicable`。
+- 前三个 verdict 的 `Status` 只允许 `passed` / `failed` / `cannot-verify-from-package`；第四项 `项目规则审查` 在预检不适用时额外允许 `not-applicable`；整任务五项额外允许 `blocked`，但不允许 `not-applicable`。`Severity` 只允许 `critical` / `major` / `minor` / `not-applicable`；`passed` / `not-applicable` 只能搭配 `Severity=not-applicable`，其余 Status 只能搭配 `critical` / `major` / `minor`。
 - `项目规则审查：not-applicable` 不得列出适用规则 ID；有适用规则但 `rules-review` 不可用时必须写 `blocked`，并把切片头部 `上下文预检` 同步写为 `blocked`。
-- `AI Review：passed` 或 `状态：done` 的切片中，任一 verdict 为 `failed`、`cannot-verify-from-package` 或 `Severity=critical` 都非法。
+- `AI Review：passed` 或 `状态：done` 的切片中，前三项为 `not-applicable`、任一项违反 Status / Severity 固定组合，或任一 verdict 为 `failed`、`cannot-verify-from-package`、`Severity=critical` 都非法。
 - `状态：done` 的切片必须满足 [PLAN-FILE.md](PLAN-FILE.md) 的完成态约束；`风险：B/C` 不允许三项机器门禁为 `skipped`；`执行：需确认` / `风险：C` 必须有 `用户验收：passed/skipped`。
 - 依赖字段中出现的 `S*` 必须存在。
 - 关联项只能包含 `D*` 和 `A*`，ID 不能重复。

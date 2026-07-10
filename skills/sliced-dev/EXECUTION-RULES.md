@@ -320,9 +320,9 @@ general reviewer 三项 verdict 固定为：
 - `切片边界 / 交接一致性`：是否遵守全局约束、上下文预检、非目标、禁止修改和切片交接。
 - `代码质量 / AI 污染检查`：是否覆盖 maintainability、test quality、unnecessary complexity、project style consistency、performance footguns、error handling consistency，以及无领域语义 helper、无证据 null / fallback、新同义词、主流程切碎、过早抽象或吞非法状态。
 
-AI Review 结论表必须使用 `Verdict | Status | Severity | Evidence | Note` 五列格式。最终写回四个 verdict：general reviewer 的三项，加 controller 根据 `项目规则审查` 预检和 rule-reviewer fixed summary 写入的 `项目规则审查`。Evidence 填写 review-package 章节名、文件路径、A* 或固定不适用标记（`N/A` / `NA` / `not applicable` / `不适用`）；自然语言判断说明写 Note。脚本只校验固定 verdict、枚举和 Evidence 非空；`close-check` 只校验 `项目规则审查` 第四 verdict 的结构闭合。
+AI Review 结论表必须使用 `Verdict | Status | Severity | Evidence | Note` 五列格式。最终写回四个 verdict：general reviewer 的三项，加 controller 根据 `项目规则审查` 预检和 rule-reviewer fixed summary 写入的 `项目规则审查`。Evidence 填写 review-package 章节名、文件路径、A* 或固定不适用标记（`N/A` / `NA` / `not applicable` / `不适用`）；自然语言判断说明写 Note。脚本校验固定 verdict、各 verdict 允许的 Status、Status / Severity 固定组合和 Evidence 非空；`close-check` 只校验 `项目规则审查` 第四 verdict 的结构闭合。
 
-`Status` 只允许 `passed` / `failed` / `cannot-verify-from-package` / `not-applicable`。`Severity` 只允许 `critical` / `major` / `minor` / `not-applicable`。
+general reviewer 三项 `Status` 只允许 `passed` / `failed` / `cannot-verify-from-package`；第四项 `项目规则审查` 仅在上下文预检为 `not-applicable` 时额外允许 `not-applicable`。`Severity` 只允许 `critical` / `major` / `minor` / `not-applicable`。`passed` / `not-applicable` 只能搭配 `Severity=not-applicable`；`failed` / `cannot-verify-from-package` 只能搭配 `critical` / `major` / `minor`。
 
 `cannot-verify-from-package` 必须由 controller 补证：补测试结果、代码证据、调用链、D/A 引用或重新生成 package；不能靠口头解释改成 passed。补证后仍无法判断时，写 `AI Review：blocked（原因）` 或转 `D* open`。
 
@@ -330,7 +330,7 @@ AI Review 结论表必须使用 `Verdict | Status | Severity | Evidence | Note` 
 
 AI Review 结果写回：
 
-- 无问题：`AI Review：passed`，并写 `#### AI Review 结论` 四项均为 `passed` / `not-applicable`。
+- 无问题：`AI Review：passed`，并写 `#### AI Review 结论`；前三项为 `passed + Severity=not-applicable`，第四项按项目规则审查预检写为 `passed + Severity=not-applicable` 或 `not-applicable + Severity=not-applicable`。
 - 有问题且可修：`AI Review：issues（<摘要>）`，进入有限修复循环。
 - 无法判断 / 需要人判：`AI Review：blocked（<原因>）`。
 - A 类低风险且用户允许跳过：`AI Review：skipped（<原因>）`。
@@ -402,7 +402,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs whole-review-package dev-plans/
 | 残余风险 / 发布就绪度 | passed | not-applicable | ... |
 ```
 
-`整任务审查：passed` 不允许出现 `failed`、`cannot-verify-from-package`、`blocked` 或 `critical`；Evidence 填写 review-package 章节名、文件路径或固定不适用标记，阻塞说明写在正文说明中。
+整任务五项 verdict 的 `Status` 只允许 `passed` / `failed` / `cannot-verify-from-package` / `blocked`，不得为 `not-applicable`；`passed` 只能搭配 `Severity=not-applicable`，其余 Status 只能搭配 `critical` / `major` / `minor`。`整任务审查：passed` 不允许出现 `failed`、`cannot-verify-from-package`、`blocked` 或 `critical`；Evidence 填写 review-package 章节名、文件路径或固定不适用标记，阻塞说明写在正文说明中。
 
 ## 完成报告
 

@@ -72,10 +72,12 @@ Review package：<dev-plans/.../review-packages/<S-id>.md>
 - 代码质量 / AI 污染检查
 
 每项必须包含：
-- Status：passed / failed / cannot-verify-from-package / not-applicable
+- Status：passed / failed / cannot-verify-from-package
 - Severity：critical / major / minor / not-applicable
 - Evidence：review package 章节名、文件路径或固定不适用标记；必须非空
 - Note：自然语言说明、缺失证据说明或残余风险
+
+Status / Severity 只能是 passed + not-applicable，或 failed / cannot-verify-from-package + critical / major / minor。
 
 `没有新增依赖` 等判断说明写入 Note，不得写入 Evidence。
 
@@ -117,6 +119,7 @@ final summary 固定为：
 | --- | --- | --- | --- | --- |
 | 项目规则审查 | <passed / failed / cannot-verify-from-package> | <critical / major / minor / not-applicable> | <rules-review final summary / report path / runId> | <一句话结论> |
 
+- Status / Severity 只能是 passed + not-applicable，或 failed / cannot-verify-from-package + critical / major / minor。
 - selectedRuleIds: CORE-001, TEST-002
 - validation: <rules-review validate command> => passed / failed
 - summary: <一句话说明>
