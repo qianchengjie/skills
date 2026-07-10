@@ -4,7 +4,9 @@
 
 ## 控制器流程
 
-控制器负责分叉、拷问、上下文预检、执行确认、生成 task brief、接收门禁、硬门禁、review-package、用户验收和提交。implementer subagent 只负责在自己的 forked workspace 实现当前切片；控制器接收结果后再集成和验证。task brief 是注意力收束视图，不是真源；若 brief 不足以判断实现、边界或验证，implementer 必须 blocked 回控制器，不得自行扩大上下文。
+控制器负责分叉、拷问、上下文预检、执行确认、生成 task brief、接收门禁、硬门禁、review-package、用户验收和提交。implementer subagent 只负责在共享工作区实现当前切片；运行时不提供独立 workspace，改动会立即对控制器和其他 agent 可见。控制器在 implementer 运行期间不得修改业务文件；subagent 返回后，控制器直接检查当前 diff 和 task report，再运行接收门禁和验证，不做“集成”。task brief 是注意力收束视图，不是真源；若 brief 不足以判断实现、边界或验证，implementer 必须 blocked 回控制器，不得自行扩大上下文。
+
+同一工作区同一时间只允许一个 implementer 写业务文件。若已有其他写入型 agent 正在运行或修改范围可能重叠，控制器必须等待或停止派发。task brief 的读取和修改范围是 implementer 必须遵守的行为边界，不是文件权限沙盒。
 
 派发前必须满足：
 
@@ -18,13 +20,13 @@
 
 ```json
 {
-  "agent_type": "worker",
-  "fork_context": false,
+  "task_name": "implement_s1_a1",
+  "fork_turns": "none",
   "message": "<使用下方任务包模板>"
 }
 ```
 
-不要设置 `model`、`reasoning_effort` 或 `service_tier`，除非用户明确要求。不得用普通新会话、自由 prompt 或当前控制器上下文模拟 subagent。
+`task_name` 使用小写字母、数字和下划线，并包含切片号与本轮尝试号；例如 `S1` 第一次实现使用 `implement_s1_a1`。不要添加当前 `spawn_agent` schema 未定义的字段。不得用普通新会话、自由 prompt 或当前控制器上下文模拟 subagent。
 
 subagent 返回后，控制器先做接收门禁：
 
@@ -44,8 +46,9 @@ subagent 返回后，控制器先做接收门禁：
 Task brief：<dev-plans/.../task-briefs/<S-id>.md>
 
 硬规则：
-- fork_context=false，本任务包是你的唯一流程上下文。
-- 你在自己的 forked workspace 修改文件；最终列出改动文件，交由控制器集成。
+- fork_turns="none"，本任务包是你的唯一流程上下文。
+- 你在与控制器共享的工作区修改文件，改动会立即可见；最终列出改动文件，交由控制器检查。
+- 不要为本流程创建 Git worktree；若任务必须依赖 workspace 隔离，blocked 回控制器。
 - 只允许读取 task brief 及 task brief 中列出的必读上下文。
 - 禁止读取完整 plan.md、其他切片、未关联 D/A、与 task brief 无关的仓库区域。
 - 禁止直接询问用户；任何需要用户确认的问题都 blocked 回控制器。

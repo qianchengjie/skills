@@ -1,10 +1,12 @@
 # 切片开发 · Reviewer Subagent
 
-本文定义完整档生成 `review-packages/<S-id>.md` 和必要的 `review-packages/<S-id>-rules.md` 后如何派发 reviewer subagent。reviewer subagent 只输出审查结论，不写文件、不更新 plan。
+本文定义完整档生成 `review-packages/<S-id>.md` 和必要的 `review-packages/<S-id>-rules.md` 后如何派发 reviewer subagent。general reviewer 只输出审查结论；rule-reviewer 只允许写 rules-review 自己的临时协议工件；两者都不更新 plan 或业务文件。
 
 ## 控制器流程
 
-控制器负责生成 review-package、派发 general reviewer subagent、必要时派发 rule-reviewer subagent，并把四 verdict 一次性写回 `plan.md` / D/A。review package 是注意力收束视图，不是真源；reviewer subagent 不直接修改仓库。
+控制器负责生成 review-package、派发 general reviewer subagent、必要时派发 rule-reviewer subagent，并把四 verdict 一次性写回 `plan.md` / D/A。review package 是注意力收束视图，不是真源；reviewer subagent 不修改业务文件或 sliced-dev 真源。
+
+当前运行时只提供上下文隔离，不提供独立 workspace 或 reviewer 权限沙盒。reviewer 与控制器共享工作区；下述只读边界由 reviewer 遵守，控制器仍以 final summary 和实际 diff 做接收检查。
 
 派发前必须满足：
 
@@ -17,13 +19,13 @@
 
 ```json
 {
-  "agent_type": "worker",
-  "fork_context": false,
+  "task_name": "review_s1_a1",
+  "fork_turns": "none",
   "message": "<使用下方任务包模板>"
 }
 ```
 
-不要设置 `model`、`reasoning_effort` 或 `service_tier`，除非用户明确要求。
+`task_name` 使用小写字母、数字和下划线，并包含切片号与本轮尝试号；general reviewer 例如 `review_s1_a1`，rule-reviewer 例如 `rule_review_s1_a1`。不要添加当前 `spawn_agent` schema 未定义的字段。
 
 ## General Reviewer 任务包模板
 
@@ -82,7 +84,7 @@ final summary 只输出三 verdict 表、Claims 证据缺口和必要的 open qu
 
 ## Rule Reviewer 任务包模板
 
-仅当控制器提供 `项目规则审查：required` 时派发。派发参数仍固定为 `agent_type: worker`、`fork_context: false`。
+仅当控制器提供 `项目规则审查：required` 时派发。派发时仍使用 `fork_turns: "none"`，并把 `task_name` 设为本轮唯一的 `rule_review_<slice>_<attempt>`。
 
 ```text
 你是 sliced-dev rule-reviewer subagent，负责对当前切片运行项目规则审查。

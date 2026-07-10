@@ -8,6 +8,21 @@ import { test } from 'node:test';
 
 import { __private__, diffCheckPlan, initPlan, validatePlan } from '../../skills/sliced-dev/scripts/dev-plan.mjs';
 
+test('subagent 文档使用当前共享工作区契约', async () => {
+  const [skill, implementer, reviewer, executionRules] = await Promise.all(
+    ['SKILL.md', 'IMPLEMENTER-SUBAGENT.md', 'REVIEWER-SUBAGENT.md', 'EXECUTION-RULES.md']
+      .map((name) => fs.readFile(new URL(`../../skills/sliced-dev/${name}`, import.meta.url), 'utf8')),
+  );
+  const contract = [skill, implementer, reviewer, executionRules].join('\n');
+
+  assert.doesNotMatch(contract, /\bfork_context\b|\bagent_type\b|forked workspace/);
+  assert.match(implementer, /"task_name": "implement_s1_a1"/);
+  assert.match(implementer, /"fork_turns": "none"/);
+  assert.match(implementer, /同一工作区同一时间只允许一个 implementer/);
+  assert.match(reviewer, /"task_name": "review_s1_a1"/);
+  assert.match(reviewer, /"fork_turns": "none"/);
+});
+
 async function withTempRepo(fn) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sliced-dev-'));
   const previous = process.cwd();

@@ -55,7 +55,7 @@ REPORT_AND_NEXT
 - `PREPARE_CLAIMS`：创建或细化 `claims/<S-id>.json`；claims 是本片可验证执行声明，不写完整 Markdown 表格，不把 claims 状态双写进 `plan.md`。
 - `WRITE_TASK_BRIEF`：生成当前片 `task-briefs/<S-id>.md`，作为 implementer 的窄上下文入口；brief 必须渲染当前片 claims；需确认片必须先生成 brief，再发执行预告。
 - `CONFIRM_TASK`：仅需确认片使用；执行预告引用 task brief 路径和摘要，等待用户确认，不修改业务代码。用户确认后必须在同一连续流程内派发 implementer subagent；若确认后未派发即中断，续跑时重新预告并重新确认。
-- `IMPLEMENT_TASK`：控制器按 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 派发 `agent_type: worker`、`fork_context: false` 的 implementer subagent；完整档实现只能由 implementer subagent 执行，轻量档没有 task brief，不能使用 subagent。
+- `IMPLEMENT_TASK`：控制器按 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 派发 `fork_turns: "none"` 的 implementer subagent；运行时共享工作区，派发期间控制器和其他写入型 agent 不得修改业务文件。完整档实现只能由 implementer subagent 执行，轻量档没有 task brief，不能使用 subagent。
 - `ACCEPT_IMPLEMENTER_REPORT`：控制器读取 subagent summary 和 `task-reports/<S-id>.json`，确认 `conclusion: ready-for-review`、最小 handoff 字段已填写、实际改动未越过 `允许修改` / `禁止修改`、且 subagent 未报告 blocked / 新分叉 / 风险升级；不通过则停止或重新派发，不进入硬门禁。
 - `RUN_HARD_GATES`：执行 lint / type-check / test / `diff-check` 等确定性门禁；控制器依据真实证据更新 `claims/<S-id>.json`，不要让 implementer 自行最终裁定 `verified`。
 - `AI_REVIEW_PACKAGE_AND_REVIEW`：生成当前片 review-package，再按 [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md) 派发 general reviewer subagent 输出三 verdict；若 `项目规则审查：required`，生成 rule-review-package 并派发 rule-reviewer。controller 最终一次性写回四 verdict。
@@ -240,7 +240,7 @@ C 类切片的实现方案并入执行预告一起给出：上下文预检和读
 
 ## Implementer Subagent
 
-完整档进入 `IMPLEMENT_TASK` 后，控制器必须按 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 派发 implementer subagent，不用当前控制器上下文直接实现。subagent 完成后，控制器先做接收门禁，再运行硬门禁。
+完整档进入 `IMPLEMENT_TASK` 后，控制器必须按 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 派发 implementer subagent，不用当前控制器上下文直接实现。subagent 完成后，控制器直接基于共享工作区中的实际 diff 做接收门禁，再运行硬门禁；不执行额外集成步骤。
 
 接收门禁至少检查：
 
