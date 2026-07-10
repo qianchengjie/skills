@@ -66,6 +66,7 @@ const DECISION_REF_RE = /(?<![A-Za-z0-9])D\d+(?:\.\d+)*(?![A-Za-z0-9.])/g;
 const AUDIT_REF_RE = /(?<![A-Za-z0-9])A\d+(?![A-Za-z0-9.])/g;
 const SLICE_REF_RE = /(?<![A-Za-z0-9])S\d+(?:\.\d+)*(?![A-Za-z0-9.])/g;
 const PLAN_GLOBAL_CONSTRAINTS_SECTION = '全局约束';
+const ZERO_KNOWN_DEFECTS_CLOSURE_FIELD = '零已知缺陷收口';
 const PLAN_WHOLE_REVIEW_FIELD = '整任务审查';
 const PLAN_WHOLE_REVIEW_VERDICTS_SECTION = '整任务审查结论';
 const SLICE_CONTEXT_PREFLIGHT_SECTION = '上下文预检';
@@ -392,6 +393,24 @@ function getListFieldValues(block, name) {
 
 function getListFieldValue(block, name) {
   return getListFieldValues(block, name).join(' ').trim();
+}
+
+function getTopLevelListFieldValues(block, name) {
+  const values = [];
+  const pattern = new RegExp(`^-\\s*${escapeRegExp(name)}[：:]\\s*(.*)$`, 'i');
+  forEachMarkdownLineOutsideFences(block, (line) => {
+    const match = pattern.exec(line);
+    if (match) values.push(match[1].trim());
+  });
+  return values;
+}
+
+function hasZeroKnownDefectsClosure(plan) {
+  const values = getTopLevelListFieldValues(
+    getSection(plan, PLAN_GLOBAL_CONSTRAINTS_SECTION),
+    ZERO_KNOWN_DEFECTS_CLOSURE_FIELD,
+  );
+  return values.length === 1 && values[0] === 'enabled';
 }
 
 function forEachMarkdownLineOutsideFences(markdown, callback) {
@@ -2172,6 +2191,11 @@ function renderRuleReviewVerdictTemplate() {
 
 - selectedRuleIds: <rule ids>
 - validation: <rules-review validate command> => passed / failed
+- recommendation: <ready_for_merge / must_fix_before_merge / should_review_before_merge / manual_verification_required / review_incomplete / review_blocked>
+- issueSummary:
+  - mustFix: <integer>
+  - shouldFix: <integer>
+  - cannotVerify: <integer>
 - summary: <一句话说明>
 - rulesReviewReport: <可选 report path / runId>`;
 }
@@ -2557,7 +2581,14 @@ function validationPassed(value) {
   return /(?:=>|：|:)\s*passed(?:$|[\s，,。.)）])/i.test(value ?? '');
 }
 
-function validateProjectRuleReviewAuditForClose(sliceId, auditId, auditBody, verdict, projectRuleReview) {
+function validateProjectRuleReviewAuditForClose(
+  sliceId,
+  auditId,
+  auditBody,
+  verdict,
+  projectRuleReview,
+  zeroKnownDefectsClosure,
+) {
   const errors = [];
   const auditRuleIds = parseRuleIds(getListFieldValues(auditBody, 'selectedRuleIds'));
   const validation = getListFieldValue(auditBody, 'validation');
@@ -2585,11 +2616,23 @@ function validateProjectRuleReviewAuditForClose(sliceId, auditId, auditBody, ver
   if (isPlaceholderText(summary)) {
     errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} must include summary`);
   }
+  if (zeroKnownDefectsClosure) {
+    const recommendation = getListFieldValue(auditBody, 'recommendation');
+    if (recommendation !== 'ready_for_merge') {
+      errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} zero-known-defects recommendation must be ready_for_merge, got ${recommendation || '<missing>'}`);
+    }
+    for (const metric of ['mustFix', 'shouldFix', 'cannotVerify']) {
+      const value = getListFieldValue(auditBody, metric);
+      if (value !== '0') {
+        errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} zero-known-defects issueSummary.${metric} must be 0, got ${value || '<missing>'}`);
+      }
+    }
+  }
 
   return errors;
 }
 
-function validateProjectRuleReviewVerdictForClose(sliceId, sliceBody, audits) {
+function validateProjectRuleReviewVerdictForClose(sliceId, sliceBody, audits, zeroKnownDefectsClosure) {
   const errors = [];
   const verdicts = parseReviewVerdicts(sliceBody);
   if (verdicts.missing || verdicts.invalid) return errors;
@@ -2613,7 +2656,14 @@ function validateProjectRuleReviewVerdictForClose(sliceId, sliceBody, audits) {
       for (const auditId of auditRefs) {
         const audit = audits.get(auditId);
         if (!audit) continue;
-        const candidateErrors = validateProjectRuleReviewAuditForClose(sliceId, auditId, audit.body, verdict, projectRuleReview);
+        const candidateErrors = validateProjectRuleReviewAuditForClose(
+          sliceId,
+          auditId,
+          audit.body,
+          verdict,
+          projectRuleReview,
+          zeroKnownDefectsClosure,
+        );
         if (candidateErrors.length === 0) {
           hasValidAudit = true;
           break;
@@ -2631,7 +2681,7 @@ function validateProjectRuleReviewVerdictForClose(sliceId, sliceBody, audits) {
   return errors;
 }
 
-async function validateTaskHandoffForClose(planDir, sliceId, sliceBody, audits) {
+async function validateTaskHandoffForClose(planDir, sliceId, sliceBody, audits, zeroKnownDefectsClosure) {
   const errors = [];
   const header = getSliceHeaderBlock(sliceBody);
   const risk = getField(header, '风险');
@@ -2693,7 +2743,12 @@ async function validateTaskHandoffForClose(planDir, sliceId, sliceBody, audits) 
     errors.push(...validateSliceReviewPackageFormat(reviewPackage.content)
       .map((error) => `close-check:${sliceId}: ${error}`));
   }
-  errors.push(...validateProjectRuleReviewVerdictForClose(sliceId, sliceBody, audits));
+  errors.push(...validateProjectRuleReviewVerdictForClose(
+    sliceId,
+    sliceBody,
+    audits,
+    zeroKnownDefectsClosure,
+  ));
 
   return errors;
 }
@@ -3097,6 +3152,7 @@ async function closeCheckPlan(planDir) {
   ]);
   const decisions = getBlocks(decisionsMarkdown, DECISION_ID_RE);
   const audits = getBlocks(auditsMarkdown, AUDIT_ID_RE);
+  const zeroKnownDefectsClosure = hasZeroKnownDefectsClosure(plan);
   for (const [id, block] of decisions) {
     if (getField(block.body, '状态') === 'open') {
       errors.push(`close-check:${id}: open decision blocks close`);
@@ -3127,7 +3183,13 @@ async function closeCheckPlan(planDir) {
     }
     if (status === 'done') {
       errors.push(...validateDiffCheckEvidenceForClose(planDir, id, block.body));
-      errors.push(...await validateTaskHandoffForClose(planDir, id, block.body, audits));
+      errors.push(...await validateTaskHandoffForClose(
+        planDir,
+        id,
+        block.body,
+        audits,
+        zeroKnownDefectsClosure,
+      ));
     }
   }
 
@@ -3327,6 +3389,17 @@ function validatePlanMarkdown(plan, decisions, audits, errors) {
     }
   }
 
+  const zeroKnownDefectsClosureValues = getTopLevelListFieldValues(
+    getSection(plan, PLAN_GLOBAL_CONSTRAINTS_SECTION),
+    ZERO_KNOWN_DEFECTS_CLOSURE_FIELD,
+  );
+  const zeroKnownDefectsClosure = zeroKnownDefectsClosureValues.length === 1
+    && zeroKnownDefectsClosureValues[0] === 'enabled';
+  if (zeroKnownDefectsClosureValues.length > 0 && !zeroKnownDefectsClosure) {
+    const value = zeroKnownDefectsClosureValues.map((item) => item || '<empty>').join(', ');
+    errors.push(`plan.md: ${ZERO_KNOWN_DEFECTS_CLOSURE_FIELD} must appear once with value enabled, got ${value}`);
+  }
+
   const tier = getMeta(plan, '档位');
   if (tier !== '完整') {
     errors.push(`plan.md: 档位 must be 完整, got ${tier ?? '<missing>'}`);
@@ -3410,6 +3483,13 @@ function validatePlanMarkdown(plan, decisions, audits, errors) {
   const referencedDecisions = new Set();
   for (const [id, block] of slices) {
     validateSliceBlock(id, block.body, slices, decisions, audits, referencedDecisions, errors);
+    if (
+      zeroKnownDefectsClosure
+      && getField(getSliceHeaderBlock(block.body), '状态') === 'done'
+      && getStatusPrefix(getField(getSliceHeaderBlock(block.body), 'AI Review')) === 'skipped'
+    ) {
+      errors.push(`plan.md:${id}: zero-known-defects closure requires AI Review passed`);
+    }
   }
   validateOpenDecisionVisibility(decisions, referencedDecisions, errors);
   if (planStatus === 'done') {

@@ -334,6 +334,13 @@ function withRequiredProjectRuleReview(plan) {
     - CORE-001：适用原因：当前切片修改核心流程。`);
 }
 
+function withZeroKnownDefectsClosure(plan) {
+  return plan.replace(
+    '- 不新增 ks / dd 平台分支。',
+    '- 不新增 ks / dd 平台分支。\n- 零已知缺陷收口：enabled',
+  );
+}
+
 function withUnavailableProjectRuleReview(plan) {
   return plan.replace(`- 项目规则审查:
   - 状态：not-applicable
@@ -619,6 +626,10 @@ async function appendProjectRuleReviewAudit(planDir, {
   validation = 'node .agents/skills/rules-review/scripts/validate.js --mode run --dir .rules-review-tmp/S1 => passed',
   verdict = 'passed',
   severity = 'not-applicable',
+  recommendation = 'ready_for_merge',
+  mustFix = 0,
+  shouldFix = 0,
+  cannotVerify = 0,
   summary = 'rules-review clean',
 } = {}) {
   const auditsPath = path.join(planDir, 'audits.md');
@@ -632,6 +643,13 @@ async function appendProjectRuleReviewAudit(planDir, {
   if (validation !== null) lines.push(`- validation: ${validation}`);
   if (verdict !== null) lines.push(`- verdict: ${verdict}`);
   if (severity !== null) lines.push(`- severity: ${severity}`);
+  if (recommendation !== null) lines.push(`- recommendation: ${recommendation}`);
+  if (mustFix !== null || shouldFix !== null || cannotVerify !== null) {
+    lines.push('- issueSummary:');
+    if (mustFix !== null) lines.push(`  - mustFix: ${mustFix}`);
+    if (shouldFix !== null) lines.push(`  - shouldFix: ${shouldFix}`);
+    if (cannotVerify !== null) lines.push(`  - cannotVerify: ${cannotVerify}`);
+  }
   if (summary !== null) lines.push(`- summary: ${summary}`);
   await fs.writeFile(
     auditsPath,
@@ -1113,6 +1131,58 @@ test('validate requires 全局约束 and rejects confirmed principles section', 
     const errors = await validatePlan(planDir);
     assert(errors.some((error) => error.includes('plan.md: unexpected ## 已确认原则')));
     assert(errors.some((error) => error.includes('plan.md: missing ## 全局约束')));
+  });
+});
+
+test('validate accepts only the fixed zero-known-defects closure token', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-zero-known-defects-token');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = withZeroKnownDefectsClosure(await fs.readFile(planPath, 'utf8'));
+    await fs.writeFile(planPath, plan, 'utf8');
+
+    assert.deepEqual(await validatePlan(planDir), []);
+
+    await fs.writeFile(planPath, plan.replace('零已知缺陷收口：enabled', '零已知缺陷收口：yes'), 'utf8');
+    let errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('零已知缺陷收口 must appear once with value enabled')));
+
+    await fs.writeFile(planPath, plan.replace('零已知缺陷收口：enabled', '零已知缺陷收口：'), 'utf8');
+    errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('零已知缺陷收口 must appear once with value enabled')));
+
+    await fs.writeFile(
+      planPath,
+      plan.replace('- 零已知缺陷收口：enabled', '- 零已知缺陷收口：enabled\n- 零已知缺陷收口：enabled'),
+      'utf8',
+    );
+    errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('零已知缺陷收口 must appear once with value enabled')));
+
+    await fs.writeFile(
+      planPath,
+      plan.replace('- 零已知缺陷收口：enabled', '```markdown\n- 零已知缺陷收口：yes\n```'),
+      'utf8',
+    );
+    assert.deepEqual(await validatePlan(planDir), []);
+  });
+});
+
+test('validate zero-known-defects closure rejects skipped AI Review on A slices', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-zero-known-defects-review');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = withZeroKnownDefectsClosure(
+      withClosedDoneSlice(await fs.readFile(planPath, 'utf8'), planDir),
+    )
+      .replace('- 风险：B', '- 风险：A')
+      .replace('- AI Review：passed', '- AI Review：skipped（A 类用户允许跳过）');
+    await fs.writeFile(planPath, plan, 'utf8');
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('zero-known-defects closure requires AI Review passed')));
   });
 });
 
@@ -3237,6 +3307,9 @@ test('CLI rule-review-package writes rules-only package when project rule review
     assert.match(reviewPackage, /## 项目规则审查/);
     assert.match(reviewPackage, /CORE-001/);
     assert.match(reviewPackage, /## Rule Reviewer 结论模板/);
+    assert.match(reviewPackage, /recommendation: <ready_for_merge/);
+    assert.match(reviewPackage, /shouldFix: <integer>/);
+    assert.match(reviewPackage, /cannotVerify: <integer>/);
     assert.doesNotMatch(reviewPackage, /## AI Review 结论/);
     assert.doesNotMatch(reviewPackage, /#### AI Review 结论/);
     assert.doesNotMatch(reviewPackage, /需求符合性/);
@@ -3898,6 +3971,47 @@ test('CLI close-check requires project rule review A* evidence when required', a
 
     await appendProjectRuleReviewAudit(planDir);
     const passed = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-required']);
+    assert.equal(passed.status, 0, passed.stderr.toString());
+  });
+});
+
+test('CLI close-check blocks should-fix findings under zero-known-defects closure', async () => {
+  await withTempRepo(async () => {
+    const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-zero-known-defects');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    let plan = withZeroKnownDefectsClosure(
+      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
+    );
+    await fs.writeFile(planPath, plan, 'utf8');
+    await writeCloseCheckHandoffFixtures('dev-plans/2026-06-10-close-check-zero-known-defects');
+    plan = withPassedRequiredProjectRuleReviewVerdict(
+      withClosedDoneSlice(await fs.readFile(planPath, 'utf8'), planDir),
+    );
+    await fs.writeFile(planPath, plan, 'utf8');
+    await appendProjectRuleReviewAudit(planDir, {
+      recommendation: 'should_review_before_merge',
+      shouldFix: 1,
+      summary: '存在 SHOULD finding',
+    });
+    initGitRepo();
+
+    const blocked = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-zero-known-defects']);
+    assert.equal(blocked.status, 1, blocked.stderr.toString());
+    assert.match(blocked.stderr.toString(), /zero-known-defects recommendation must be ready_for_merge/);
+    assert.match(blocked.stderr.toString(), /zero-known-defects issueSummary.shouldFix must be 0/);
+
+    const auditsPath = path.join(planDir, 'audits.md');
+    const audits = await fs.readFile(auditsPath, 'utf8');
+    await fs.writeFile(
+      auditsPath,
+      audits
+        .replace('recommendation: should_review_before_merge', 'recommendation: ready_for_merge')
+        .replace('shouldFix: 1', 'shouldFix: 0'),
+      'utf8',
+    );
+    const passed = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-zero-known-defects']);
     assert.equal(passed.status, 0, passed.stderr.toString());
   });
 });

@@ -122,6 +122,19 @@ final summary 固定为：
 - Status / Severity 只能是 passed + not-applicable，或 failed / cannot-verify-from-package + critical / major / minor。
 - selectedRuleIds: CORE-001, TEST-002
 - validation: <rules-review validate command> => passed / failed
+- recommendation: <ready_for_merge / must_fix_before_merge / should_review_before_merge / manual_verification_required / review_incomplete / review_blocked>
+- issueSummary:
+  - mustFix: <integer>
+  - shouldFix: <integer>
+  - cannotVerify: <integer>
 - summary: <一句话说明>
 - rulesReviewReport: <可选 report path / runId>
 ```
+
+若 rule review package 的 `全局约束` 包含固定 token `- 零已知缺陷收口：enabled`，必须按 `rules-review` 的结构化结果投影：
+
+- `recommendation = ready_for_merge` 且 `mustFix / shouldFix / cannotVerify` 均为 `0`：`passed + not-applicable`。
+- `recommendation = must_fix_before_merge / should_review_before_merge`：`failed + critical / major / minor`。
+- `recommendation = manual_verification_required / review_incomplete / review_blocked`：`cannot-verify-from-package + critical / major / minor`。
+
+不得把 `should_review_before_merge` 静默投影为 `passed`，也不得用 claim waiver、风险接受或 follow-up 改写 rules-review 的 finding。既有且未被本次变更加重的 observation 不属于该收口门禁。

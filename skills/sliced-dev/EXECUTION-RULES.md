@@ -292,6 +292,18 @@ done slice 的 `#### 门禁记录` 必须保留 diff-check 的结构化证据；
 
 general reviewer 以 `review-packages/<S-id>.md` 为主输入，只输出前三个 verdict；普通包不包含 `项目规则审查` 信息。若前三个 verdict 失败，不运行 rule-reviewer，先修复后重新生成 package 并重跑 general reviewer。若前三个 verdict 通过且 `项目规则审查：required`，生成 `review-packages/<S-id>-rules.md` 并派发 rule-reviewer 运行完整 `rules-review` 协议；若 rule-reviewer 失败，修复后 general reviewer 和 rule-reviewer 都必须重跑。
 
+### 零已知缺陷收口
+
+全局约束包含固定 token `- 零已知缺陷收口：enabled` 时，按以下规则收口：
+
+- 本次变更引入或加重的所有 finding，无论 `must_fix` / `should_fix`，都进入本片有限修复；不得用风险接受、claim waiver 或 follow-up 关闭缺陷。
+- 所有执行型切片都必须完成 AI Review；A 类也不得使用 `AI Review：skipped`。
+- `cannot_verify` 必须补证清零。规则审查的 `recommendation = must_fix_before_merge / should_review_before_merge` 投影为 `项目规则审查 failed`，`manual_verification_required / review_incomplete / review_blocked` 投影为 `cannot-verify-from-package`；只有 `ready_for_merge` 可投影为 `passed`。
+- controller 写回规则审查 A* 时，除既有最小投影外，还要记录 `recommendation` 和 `issueSummary.mustFix / shouldFix / cannotVerify`。`close-check` 要求 recommendation 为 `ready_for_merge` 且三个计数均为 `0`。
+- 既有且未被本次变更加重的 observation 不自动扩入范围。修复需要越过允许修改范围或令风险升为 C 时立即停止，不能标 `done`。
+
+脚本只检查固定 token、规则审查显式 recommendation 和计数，不根据 finding 文案、代码规模或 reviewer 语气推断是否“完美”。
+
 package 是注意力收束视图，不是事实真源。允许针对 P0/P1 claim、具名风险、边界或证据缺口做 focused Read / `rg` / focused test，但禁止运行 `git diff` / `git log` / `git status` 重新构造审查范围。`review-packages/**`、`task-briefs/**`、`task-reports/**` 是临时输入，脚本会维护 `dev-plans/.gitignore` 的对应模式，并从 diff-check 和 package inventory 中排除；审计结论必须由控制器写回 plan / D/A。
 
 生成 package：
