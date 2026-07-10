@@ -53,7 +53,7 @@ REPORT_AND_NEXT
 - `PREFLIGHT_TASK`：只产出或更新 `#### 上下文预检`，不得修改业务代码。
 - `READ_CONTEXT`：只读取必读上下文；若上下文不足，写 `上下文预检：blocked` 并停止。
 - `PREPARE_CLAIMS`：创建或细化 `claims/<S-id>.json`；claims 是本片可验证执行声明，不写完整 Markdown 表格，不把 claims 状态双写进 `plan.md`。
-- `WRITE_TASK_BRIEF`：生成当前片 `task-briefs/<S-id>.md`，作为 implementer 的窄上下文入口；brief 必须渲染当前片 claims；需确认片必须先生成 brief，再发执行预告。
+- `WRITE_TASK_BRIEF`：生成当前片 `task-briefs/<S-id>.md`，作为 implementer 的窄上下文入口；brief 必须渲染当前片 claims；`项目规则审查：blocked` 时不得生成；需确认片必须先生成 brief，再发执行预告。
 - `CONFIRM_TASK`：仅需确认片使用；执行预告引用 task brief 路径和摘要，等待用户确认，不修改业务代码。用户确认后必须在同一连续流程内派发 implementer subagent；若确认后未派发即中断，续跑时重新预告并重新确认。
 - `IMPLEMENT_TASK`：控制器按 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 派发 `fork_turns: "none"` 的 implementer subagent；运行时共享工作区，派发期间控制器和其他写入型 agent 不得修改业务文件。完整档实现只能由 implementer subagent 执行，轻量档没有 task brief，不能使用 subagent。
 - `ACCEPT_IMPLEMENTER_REPORT`：控制器读取 subagent summary 和 `task-reports/<S-id>.json`，确认 `conclusion: ready-for-review`、最小 handoff 字段已填写、实际改动未越过 `允许修改` / `禁止修改`、且 subagent 未报告 blocked / 新分叉 / 风险升级；不通过则停止或重新派发，不进入硬门禁。
@@ -125,7 +125,7 @@ REPORT_AND_NEXT
 - `执行：自动/需确认/待判定`
 - `上下文预检：ready/blocked/skipped`
 
-写 `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不得仍是占位内容；`项目规则审查` 必须显式存在且状态不是 `blocked`，`禁止修改` 必须显式存在，可写 `无`。
+写 `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不得仍是占位内容；`项目规则审查` 必须显式存在且状态不是 `blocked`，`禁止修改` 必须显式存在，可写 `无`。`项目规则审查` 只有无适用规则时才能写 `not-applicable`；有适用规则但 `rules-review` 不可用时写 `blocked`，并把切片头部 `上下文预检` 同步写为 `blocked` 后停止。
 
 ### 上下文预检输出限制
 
@@ -337,7 +337,7 @@ AI Review 结果写回：
 
 `AI Review：issues` / `AI Review：blocked` 必须在头部括号中写非占位摘要 / 原因；若头部未写原因，`#### AI Review 结论` 中必须有对应 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位。占位包括 `TBD`、`TODO`、`暂无`、`待补充`、`未填写`、`pending`、`待执行前补充`。
 
-阻塞规则：任一 verdict 为 `failed`、任一 `Severity=critical`、或仍有 `cannot-verify-from-package`，都阻塞 `AI Review：passed` 和 `状态：done`；只要头部已写 `AI Review：passed`，四 verdict 必须完整且无阻塞项。`项目规则审查：required` 时，第四 verdict 不能是 `not-applicable`，Evidence 必须引用当前最终 A*，且 A* 至少包含 `selectedRuleIds`、`validation: <rules-review validate command> => passed`、`verdict`、`severity` 和 `summary`；`项目规则审查：not-applicable` 时，第四 verdict 必须为 `not-applicable`。
+阻塞规则：任一 verdict 为 `failed`、任一 `Severity=critical`、仍有 `cannot-verify-from-package`、或 `项目规则审查：blocked`，都阻塞 `AI Review：passed` 和 `状态：done`；只要头部已写 `AI Review：passed`，四 verdict 必须完整且无阻塞项。`项目规则审查：required` 时，第四 verdict 不能是 `not-applicable`，Evidence 必须引用当前最终 A*，且 A* 至少包含 `selectedRuleIds`、`validation: <rules-review validate command> => passed`、`verdict`、`severity` 和 `summary`；`项目规则审查：not-applicable` 时，第四 verdict 必须为 `not-applicable`，且上下文预检不得列出适用规则 ID。
 
 ## 用户验收
 
@@ -373,7 +373,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/<date-slu
 - 每个 done slice 必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确；最终 claim 状态必须是 `verified` 或 `waived`。
 - 每个 done + `AI Review：passed` slice 必须有非空 task brief、`conclusion: ready-for-review` 的非空 task report、非空 review-package；JSON report 必须 schema valid；review-package 必须包含 Task Brief、Task Report、Claims、Git Diff 统计、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID；Git Diff 统计必须使用 `text` fence，Git Diff 必须使用 `diff` fence，允许无当前 dirty diff。
 - `split` / `skipped` 不要求 done slice 的实现证据；它们分别以 `替代切片` / `跳过依据` 作为拒收门禁。脚本只检查 `替代切片` ID 非重复、真实存在且为父片后代，不判断这些切片是否完整覆盖父片任务与验收；覆盖关系由拆分拷问 / 计划审查判断。
-- `项目规则审查：required` 时，第四 verdict 不能是 `not-applicable`，Evidence 必须引用存在且包含最小投影字段的 A*；`项目规则审查：not-applicable` 时，第四 verdict 必须为 `not-applicable`；若上下文预检仍列出 selectedRuleIds，Note 必须包含 `未执行独立项目规则审查`。`close-check` 不判断 rule ID 是否该选、规则是否满足或 rules-review 映射是否准确。
+- `项目规则审查：required` 时，第四 verdict 不能是 `not-applicable`，Evidence 必须引用存在且包含最小投影字段的 A*；`项目规则审查：not-applicable` 时，第四 verdict 必须为 `not-applicable`，且上下文预检不得列出适用规则 ID；`项目规则审查：blocked` 时阻塞 `上下文预检：ready`、`AI Review：passed` 和 `状态：done`。`close-check` 不判断 rule ID 是否该选、规则是否满足或 rules-review 映射是否准确。
 
 `close-check` 只信 `claims/<S-id>.json` 的终态，不从 task report 推断 claim 完成。`waived` 只接受 `risk` / `scope` claim 且必须有非占位 note；P0/P1 `behavior`、`scope`、`validation` claim 写 `verified` 时必须有 `ai-statement` 之外的证据。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。

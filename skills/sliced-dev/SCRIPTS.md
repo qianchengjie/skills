@@ -125,7 +125,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs claims-template dev-plans/YYYY-
 node <sliced-dev-skill-dir>/scripts/dev-plan.mjs task-brief dev-plans/YYYY-MM-DD-<slug> <S-id>
 ```
 
-作用：生成当前切片的 `dev-plans/YYYY-MM-DD-<slug>/task-briefs/<S-id>.md`，作为 implementer 的窄上下文入口和注意力收束视图。生成前先运行 `validate`，并维护 `dev-plans/.gitignore`。
+作用：生成当前切片的 `dev-plans/YYYY-MM-DD-<slug>/task-briefs/<S-id>.md`，作为 implementer 的窄上下文入口和注意力收束视图。生成前先运行 `validate`；`项目规则审查：blocked` 时退出 1，不生成 task brief；通过后维护 `dev-plans/.gitignore`。
 
 task brief 只从 `plan.md`、`decisions.md`、`audits.md` 和 `claims/<S-id>.json` 抽取必要上下文：
 
@@ -297,7 +297,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/YYYY-MM-D
 - 每个 `done` slice 必须在 `#### 门禁记录` 中有 `diff-check` 结构化记录，`Status` 必须为 `passed`，`Command` 和 `Evidence` 必须非空、非占位。
 - 每个 `done` slice 必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确；最终 claim 状态必须是 `verified` 或 `waived`，不会从 task report 推断完成。
 - 每个 `done` 且 `AI Review：passed` 的 slice 必须存在非空 task brief、结论为 `ready-for-review` 的非空 task report、非空 review-package；JSON report 必须 schema valid；review-package 必须包含 Task Brief、Task Report、Claims、Git Diff 统计、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID；Git Diff 统计必须使用 `text` fence，Git Diff 必须使用 `diff` fence，允许无当前 dirty diff。
-- `AI Review：passed` 必须有四个固定 verdict；`项目规则审查：required` 时，第四 verdict 不能是 `not-applicable`，Evidence 必须引用存在的 A*，且 A* 至少包含 `selectedRuleIds`、`validation: <rules-review validate command> => passed`、`verdict`、`severity` 和 `summary`；`项目规则审查：not-applicable` 时，第四 verdict 必须为 `not-applicable`，若仍列出 selectedRuleIds，Note 必须包含 `未执行独立项目规则审查`。
+- `AI Review：passed` 必须有四个固定 verdict；`项目规则审查：required` 时，第四 verdict 不能是 `not-applicable`，Evidence 必须引用存在的 A*，且 A* 至少包含 `selectedRuleIds`、`validation: <rules-review validate command> => passed`、`verdict`、`severity` 和 `summary`；`项目规则审查：not-applicable` 时，第四 verdict 必须为 `not-applicable`，且上下文预检不得列出适用规则 ID；`项目规则审查：blocked` 时阻塞 `上下文预检：ready`、`AI Review：passed` 和 `状态：done`。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。
 - `整任务审查：passed` 或 `整任务审查：blocked` 时，`review-packages/whole-task.md` 必须存在、非空，且包含 `whole-review-package` 生成器承诺的顶层章节，包括 Reviewer Instructions、计划头、全局约束、切片概览、切片交接、Claims 概览、D/A 摘要与全文、切片 AI Review、Task Reports、变更文件、Git Diff 和整任务审查结论模板；`整任务审查：package-generated` 和 `整任务审查：blocked` 都阻塞 `close-check`。
 ## show
@@ -380,6 +380,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - `#### AI Review 结论` 必须使用 `Verdict | Status | Severity | Evidence | Note` 五列格式；旧四列格式会被判为无效表格。
 - `AI Review：issues` / `AI Review：blocked` 必须有非占位头部原因，或在 `#### AI Review 结论` 中有 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位。
 - verdict `Status` 只允许 `passed` / `failed` / `cannot-verify-from-package` / `not-applicable`；`Severity` 只允许 `critical` / `major` / `minor` / `not-applicable`。
+- `项目规则审查：not-applicable` 不得列出适用规则 ID；有适用规则但 `rules-review` 不可用时必须写 `blocked`，并把切片头部 `上下文预检` 同步写为 `blocked`。
 - `AI Review：passed` 或 `状态：done` 的切片中，任一 verdict 为 `failed`、`cannot-verify-from-package` 或 `Severity=critical` 都非法。
 - `状态：done` 的切片必须满足 [PLAN-FILE.md](PLAN-FILE.md) 的完成态约束；`风险：B/C` 不允许三项机器门禁为 `skipped`；`执行：需确认` / `风险：C` 必须有 `用户验收：passed/skipped`。
 - 依赖字段中出现的 `S*` 必须存在。

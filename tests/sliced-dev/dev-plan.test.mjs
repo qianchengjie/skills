@@ -341,10 +341,10 @@ function withUnavailableProjectRuleReview(plan) {
   - 规则获取：不适用
   - 规则校验：skipped（已检查规则仓，本片无适用 rule ID）
   - 适用规则：无`, `- 项目规则审查:
-  - 状态：not-applicable
+  - 状态：blocked
   - rules-review：unavailable
   - 规则获取：node .agents/skills/rule-steward/scripts/get-rules.mjs CORE-001
-  - 规则校验：skipped（rules-review unavailable，未执行独立项目规则审查）
+  - 规则校验：skipped（rules-review unavailable）
   - 适用规则：
     - CORE-001：适用原因：当前切片修改核心流程。`);
 }
@@ -2210,18 +2210,31 @@ test('validate rejects required 项目规则审查 without available rules-revie
   });
 });
 
-test('validate rejects not-applicable 项目规则审查 with rule IDs unless rules-review is unavailable', async () => {
+test('validate rejects not-applicable 项目规则审查 with rule IDs even when rules-review is unavailable', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-project-rule-review-unavailable');
     await writeValidExecutingPlan(planDir);
     const planPath = path.join(planDir, 'plan.md');
-    const plan = withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8'))
-      .replace('- 状态：required', '- 状态：not-applicable')
-      .replace('- rules-review：available', '- rules-review：not-checked');
+    const plan = withUnavailableProjectRuleReview(await fs.readFile(planPath, 'utf8'))
+      .replace('- 状态：blocked', '- 状态：not-applicable');
     await fs.writeFile(planPath, plan, 'utf8');
 
     const errors = await validatePlan(planDir);
-    assert(errors.some((error) => error.includes('not-applicable with rule IDs requires rules-review unavailable')));
+    assert(errors.some((error) => error.includes('not-applicable cannot list applicable rule IDs')));
+  });
+});
+
+test('validate accepts blocked 项目规则审查 when rules-review is unavailable', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-project-rule-review-blocked');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = withUnavailableProjectRuleReview(await fs.readFile(planPath, 'utf8'))
+      .replace('- 状态：not-started', '- 状态：blocked')
+      .replace('- 上下文预检：pending', '- 上下文预检：blocked（rules-review unavailable）');
+    await fs.writeFile(planPath, plan, 'utf8');
+
+    assert.deepEqual(await validatePlan(planDir), []);
   });
 });
 
@@ -2753,6 +2766,22 @@ test('CLI task-brief writes narrow implementer brief', async () => {
     assert.match(brief, /task-reports\/S1\.json/);
     assert.doesNotMatch(brief, /## 文件索引/);
     assert.doesNotMatch(brief, /## 切片\n/);
+  });
+});
+
+test('CLI task-brief rejects blocked project rule review', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-brief-rule-review-blocked');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = withUnavailableProjectRuleReview(await fs.readFile(planPath, 'utf8'))
+      .replace('- 状态：not-started', '- 状态：blocked')
+      .replace('- 上下文预检：pending', '- 上下文预检：blocked（rules-review unavailable）');
+    await fs.writeFile(planPath, plan, 'utf8');
+
+    const result = runDevPlanCli(['task-brief', 'dev-plans/2026-06-10-task-brief-rule-review-blocked', 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /task-brief: 项目规则审查 blocked/);
   });
 });
 
@@ -3844,29 +3873,21 @@ test('CLI close-check rejects thin project rule review A* projection', async () 
   });
 });
 
-test('CLI close-check requires explicit unavailable note for skipped project rule review', async () => {
+test('CLI close-check rejects blocked project rule review', async () => {
   await withTempRepo(async () => {
     const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
     const planDir = path.join('dev-plans', '2026-06-10-close-check-rule-review-unavailable');
     await writeValidExecutingPlan(planDir);
     let plan = withUnavailableProjectRuleReview(await fs.readFile(path.join(planDir, 'plan.md'), 'utf8'));
     await fs.writeFile(path.join(planDir, 'plan.md'), plan, 'utf8');
-    await writeCloseCheckHandoffFixtures('dev-plans/2026-06-10-close-check-rule-review-unavailable');
     plan = withClosedDoneSlice(await fs.readFile(path.join(planDir, 'plan.md'), 'utf8'), planDir);
     await fs.writeFile(path.join(planDir, 'plan.md'), plan, 'utf8');
     initGitRepo();
 
-    const missingNote = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-unavailable']);
-    assert.equal(missingNote.status, 1, missingNote.stderr.toString());
-    assert.match(missingNote.stderr.toString(), /unavailable verdict note must include 未执行独立项目规则审查/);
-
-    await fs.writeFile(
-      path.join(planDir, 'plan.md'),
-      plan.replace('本切片无适用项目规则', '未执行独立项目规则审查；implementer 仍按 selectedRuleIds 与 get-rules 实现'),
-      'utf8',
-    );
-    const passed = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-unavailable']);
-    assert.equal(passed.status, 0, passed.stderr.toString());
+    const result = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-unavailable']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /项目规则审查 blocked requires 上下文预检 blocked/);
+    assert.match(result.stderr.toString(), /项目规则审查 blocked cannot use AI Review passed/);
   });
 });
 

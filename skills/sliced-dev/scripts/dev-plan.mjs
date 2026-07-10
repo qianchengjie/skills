@@ -123,7 +123,6 @@ const REQUIRED_FILLED_CONTEXT_PREFLIGHT_LABELS = [
 const REQUIRED_HANDOFF_LABELS = ['输入', '输出'];
 const CODE_QUALITY_REVIEW_VERDICT = '代码质量 / AI 污染检查';
 const PROJECT_RULE_REVIEW_VERDICT = PROJECT_RULE_REVIEW_FIELD;
-const PROJECT_RULE_REVIEW_UNAVAILABLE_NOTE = '未执行独立项目规则审查';
 const GENERAL_REVIEW_VERDICTS = [
   '需求符合性',
   '切片边界 / 交接一致性',
@@ -824,13 +823,16 @@ function validateProjectRuleReviewField(id, section, errors) {
     }
   }
   if (projectRuleReview.status === 'not-applicable' && projectRuleReview.selectedRuleIds.length > 0) {
-    if (getStatusPrefix(projectRuleReview.rulesReview) !== 'unavailable') {
-      errors.push(`plan.md:${id}: ${SLICE_CONTEXT_PREFLIGHT_SECTION} ${PROJECT_RULE_REVIEW_FIELD} not-applicable with rule IDs requires rules-review unavailable`);
-    }
+    errors.push(`plan.md:${id}: ${SLICE_CONTEXT_PREFLIGHT_SECTION} ${PROJECT_RULE_REVIEW_FIELD} not-applicable cannot list applicable rule IDs`);
+  }
+  if (projectRuleReview.status === 'blocked' && projectRuleReview.selectedRuleIds.length > 0) {
     if (isMissingProjectRuleFetch(projectRuleReview.ruleFetch)) {
-      errors.push(`plan.md:${id}: ${SLICE_CONTEXT_PREFLIGHT_SECTION} ${PROJECT_RULE_REVIEW_FIELD} unavailable must keep resolved 规则获取`);
+      errors.push(`plan.md:${id}: ${SLICE_CONTEXT_PREFLIGHT_SECTION} ${PROJECT_RULE_REVIEW_FIELD} blocked must keep resolved 规则获取`);
     }
-    if (getStatusPrefix(projectRuleReview.ruleValidation) !== 'skipped') {
+    if (
+      getStatusPrefix(projectRuleReview.rulesReview) === 'unavailable'
+      && getStatusPrefix(projectRuleReview.ruleValidation) !== 'skipped'
+    ) {
       errors.push(`plan.md:${id}: ${SLICE_CONTEXT_PREFLIGHT_SECTION} ${PROJECT_RULE_REVIEW_FIELD} unavailable requires skipped 规则校验`);
     }
   }
@@ -840,10 +842,6 @@ function validateReadyProjectRuleReview(id, section, errors) {
   const projectRuleReview = parseProjectRuleReview(section);
   if (projectRuleReview.items.length === 0 || isPlaceholderText(projectRuleReview.status)) {
     errors.push(`plan.md:${id}: ${SLICE_CONTEXT_PREFLIGHT_SECTION} ${PROJECT_RULE_REVIEW_FIELD} must be filled before ready`);
-    return;
-  }
-  if (projectRuleReview.status === 'blocked') {
-    errors.push(`plan.md:${id}: ${SLICE_CONTEXT_PREFLIGHT_SECTION} ready cannot keep ${PROJECT_RULE_REVIEW_FIELD} blocked`);
   }
 }
 
@@ -1901,6 +1899,10 @@ async function buildTaskBrief(planDir, sliceId) {
   if (!slice) {
     throw usageError(`task-brief: slice ${sliceId} does not exist`);
   }
+  const projectRuleReview = parseProjectRuleReview(getSubsection(slice.body, SLICE_CONTEXT_PREFLIGHT_SECTION));
+  if (projectRuleReview.status === 'blocked') {
+    throw gateError(`task-brief: ${PROJECT_RULE_REVIEW_FIELD} blocked`);
+  }
 
   const decisions = getBlocks(decisionsMarkdown, DECISION_ID_RE);
   const audits = getBlocks(auditsMarkdown, AUDIT_ID_RE);
@@ -2602,13 +2604,6 @@ function validateProjectRuleReviewVerdictForClose(sliceId, sliceBody, audits) {
 
   if (projectRuleReview.status === 'not-applicable' && verdict.status !== 'not-applicable') {
     errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} not-applicable preflight requires not-applicable verdict`);
-  }
-  if (
-    projectRuleReview.status === 'not-applicable'
-    && projectRuleReview.selectedRuleIds.length > 0
-    && !verdict.note.includes(PROJECT_RULE_REVIEW_UNAVAILABLE_NOTE)
-  ) {
-    errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} unavailable verdict note must include ${PROJECT_RULE_REVIEW_UNAVAILABLE_NOTE}`);
   }
 
   return errors;
@@ -3543,6 +3538,15 @@ function validateSliceBlock(id, body, slices, decisions, audits, referencedDecis
       }
     }
     validateProjectRuleReviewField(id, contextPreflight, errors);
+    const projectRuleReview = parseProjectRuleReview(contextPreflight);
+    if (projectRuleReview.status === 'blocked') {
+      if (getStatusPrefix(preflight) !== 'blocked') {
+        errors.push(`plan.md:${id}: ${PROJECT_RULE_REVIEW_FIELD} blocked requires ${SLICE_CONTEXT_PREFLIGHT_SECTION} blocked`);
+      }
+      if (getStatusPrefix(aiReview) === 'passed') {
+        errors.push(`plan.md:${id}: ${PROJECT_RULE_REVIEW_FIELD} blocked cannot use AI Review passed`);
+      }
+    }
     if (getStatusPrefix(preflight) === 'ready') {
       validateContextPreflightReady(id, contextPreflight, errors);
     }
