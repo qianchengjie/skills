@@ -23,6 +23,33 @@ test('subagent 文档使用当前共享工作区契约', async () => {
   assert.match(reviewer, /"fork_turns": "none"/);
 });
 
+test('授权边界术语防回退', async () => {
+  const [skill, executionRules, planFile, implementer] = await Promise.all(
+    ['SKILL.md', 'EXECUTION-RULES.md', 'PLAN-FILE.md', 'IMPLEMENTER-SUBAGENT.md']
+      .map((name) => fs.readFile(new URL(`../../skills/sliced-dev/${name}`, import.meta.url), 'utf8')),
+  );
+  const contract = [skill, executionRules, planFile, implementer].join('\n');
+
+  assert.match(skill, /不把 task brief 的文件 \/ 验证清单固化为用户责任/);
+  assert.match(executionRules, /AI 执行边界/);
+  assert.match(executionRules, /不创建 open D，不重新询问用户/);
+  assert.match(executionRules, /未新增命中「需确认」面且无需新的执行确认/);
+  assert.match(executionRules, /重新判断项目规则适用性、selectedRuleIds、规则校验、风险 \/ 执行和 claims/);
+  assert.match(executionRules, /“字段缺席还是传 `undefined`”这类契约语义变化必须确认/);
+  assert.match(executionRules, /仅内部文件落点不同由控制器判断/);
+  assert.match(executionRules, /不得通过回填 `允许修改` 使本轮通过/);
+  assert.match(executionRules, /只有确认由本轮 implementer 写入越界文件时才记录接收违约/);
+  assert.match(planFile, /`允许修改`：控制器维护的可审计执行清单.*它不是用户授权范围/);
+  assert.match(planFile, /`禁止修改`：本片不可自动进入的硬边界.*不能通过更新 `允许修改` 绕开/);
+  assert.match(implementer, /必须在修改越界文件前立即 blocked/);
+  assert.match(executionRules, /不得事后补入 `基线脏文件`/);
+  assert.doesNotMatch(contract, /执行预告后 task brief 变化时，重新预告并重新确认|用户确认的是这份 brief/);
+  assert.doesNotMatch(contract, /用户授权边界[^\n]*风险等级|风险等级变化/);
+  assert.doesNotMatch(contract, /[、，]依赖 \/ 不可逆外部操作/);
+  assert.doesNotMatch(contract, /实际 diff[^\n]*必须记录接收违约/);
+  assert.doesNotMatch(contract, /补正(?:到)? `基线脏文件`/);
+});
+
 async function withTempRepo(fn) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sliced-dev-'));
   const previous = process.cwd();
