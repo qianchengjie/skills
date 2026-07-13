@@ -6,6 +6,7 @@
 
 ```text
 skills/
+  tell-me-first/
   bounded-agency-review/
   rule-steward/
   rules-review/
