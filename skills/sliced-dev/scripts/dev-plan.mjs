@@ -3610,9 +3610,6 @@ function validateSliceBlock(id, body, slices, decisions, audits, referencedDecis
   }
   const repair = validateRepairAttempts(repairAttempts);
   if (!repair.valid) errors.push(`plan.md:${id}: invalid 修复次数 ${repairAttempts ?? '<missing>'}`);
-  if (repair.valid && repair.max === 4 && !['issues', 'passed'].includes(getStatusPrefix(aiReview))) {
-    errors.push(`plan.md:${id}: 修复次数上限 4 requires AI Review issues or passed`);
-  }
   if (risk === 'C' && execution === '自动') {
     errors.push(`plan.md:${id}: C risk slice cannot use 执行：自动`);
   }
