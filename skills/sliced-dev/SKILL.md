@@ -1,6 +1,7 @@
 ---
 name: sliced-dev
-description: 中大型编码任务的垂直薄片分步开发流程；仅当用户显式发起 /sliced-dev、续跑 dev-plans，或任务需要跨 context 恢复、subagent 上下文隔离实现、独立 review-package、逐 claim 证据闭环 / close-check，或碰 requests 契约·路由·构建·CI 等高风险面时使用；轻量小改动且不需要这些控制需求时不使用。
+description: 中大型编码任务的垂直薄片分步开发流程，支持续跑 dev-plans、跨 context 恢复、subagent 上下文隔离实现、独立 review-package、逐 claim 证据闭环 / close-check，以及 requests 契约、路由、构建、CI 等高风险变更。
+disable-model-invocation: true
 ---
 
 # 切片开发

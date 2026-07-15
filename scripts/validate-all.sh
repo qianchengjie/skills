@@ -3,12 +3,31 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 VALIDATOR="$HOME/.codex/skills/.system/skill-creator/scripts/quick_validate.py"
+INVOCATION_VALIDATOR="$ROOT/scripts/validate-skill-invocation.mjs"
+TMP_DIR=
+
+cleanup() {
+  [ -z "$TMP_DIR" ] || rm -rf "$TMP_DIR"
+}
+
+trap cleanup EXIT HUP INT TERM
 
 validate_skill() {
   skill=$1
 
+  node "$INVOCATION_VALIDATOR" "$skill"
+
   if python3 -c 'import yaml' >/dev/null 2>&1; then
-    python3 "$VALIDATOR" "$skill"
+    [ -n "$TMP_DIR" ] || TMP_DIR=$(mktemp -d)
+    projected_skill="$TMP_DIR/$(basename "$skill")"
+    mkdir -p "$projected_skill"
+    awk '
+      NR == 1 && $0 == "---" { in_frontmatter = 1; print; next }
+      in_frontmatter && $0 == "---" { in_frontmatter = 0; print; next }
+      in_frontmatter && $0 ~ /^disable-model-invocation:[[:space:]]*(true|false)[[:space:]]*$/ { next }
+      { print }
+    ' "$skill/SKILL.md" > "$projected_skill/SKILL.md"
+    python3 "$VALIDATOR" "$projected_skill"
     return
   fi
 
