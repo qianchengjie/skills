@@ -28,7 +28,7 @@ scripts/
 ./scripts/install.sh
 ```
 
-安装脚本会把 `skills/*` 同步到 `${CODEX_HOME:-$HOME/.codex}/skills`，并覆盖本机同名 skill。
+安装脚本会把 `skills/*` 同步到 `~/.agents/skills`，并覆盖本机同名 skill。
 
 未克隆仓库且 GitHub 仓库可访问时：
 

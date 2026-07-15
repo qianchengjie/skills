@@ -32,7 +32,7 @@ if ! has_skills "$ROOT"; then
   ROOT=$(find "$TMP_DIR" -mindepth 1 -maxdepth 1 -type d | sed -n '1p')
 fi
 
-DEST="${CODEX_HOME:-$HOME/.codex}/skills"
+DEST="$HOME/.agents/skills"
 
 mkdir -p "$DEST"
 
