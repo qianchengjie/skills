@@ -1140,22 +1140,79 @@ function matchesPathPattern(file, pattern) {
 }
 
 function parseGitStatus(output) {
-  return output
-    .split('\n')
-    .map((line) => line.trimEnd())
-    .filter(Boolean)
-    .flatMap((line) => {
-      const untracked = line.startsWith('??');
-      const rawPath = line.slice(3).trim();
+  if (typeof output !== 'string') throw new Error('git status output must be text');
+  const lines = output.split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  return lines.flatMap((rawLine, index) => {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+    if (line.length < 4 || line[2] !== ' ') throw new Error(`unable to parse git status line ${index + 1}`);
+    const status = line.slice(0, 2);
+    if (!/^[ MADRCUT?!]{2}$/.test(status) || status === '  ') throw new Error(`invalid git status code on line ${index + 1}`);
+    if ((status.includes('?') && status !== '??') || (status.includes('!') && status !== '!!')) {
+      throw new Error(`invalid git status pair on line ${index + 1}`);
+    }
+    const rawPath = line.slice(3);
+    let paths = [rawPath];
+    if (/[RC]/.test(status)) {
+      const separator = rawPath.indexOf(' -> ');
+      if (separator < 0 || separator !== rawPath.lastIndexOf(' -> ')) throw new Error(`unable to parse rename/copy on git status line ${index + 1}`);
       // rename / copy 的旧路径同样是本次改动，必须一并接受边界检查
-      const paths = rawPath.includes(' -> ') ? rawPath.split(' -> ') : [rawPath];
-      return paths.map((entry) => ({ file: normalizeRepoPath(entry), untracked }));
-    })
-    .filter((entry) => entry.file);
+      paths = [rawPath.slice(0, separator), rawPath.slice(separator + 4)];
+    }
+    return paths.map((entry) => {
+      const file = decodeGitStatusPath(entry);
+      assertGitStatusPath(file);
+      return { file, untracked: status === '??' };
+    });
+  });
+}
+
+function decodeGitStatusPath(value) {
+  if (!value.startsWith('"')) {
+    if (!value) throw new Error('git status path must not be empty');
+    return value;
+  }
+  if (value.length < 2 || !value.endsWith('"')) throw new Error('unterminated quoted git status path');
+  const body = value.slice(1, -1);
+  let decoded = '';
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index];
+    if (char !== '\\') {
+      decoded += char;
+      continue;
+    }
+    index += 1;
+    if (index >= body.length) throw new Error('unterminated git path escape');
+    const escaped = body[index];
+    if (/[0-7]/.test(escaped)) {
+      let octal = escaped;
+      while (octal.length < 3 && /[0-7]/.test(body[index + 1] || '')) {
+        index += 1;
+        octal += body[index];
+      }
+      decoded += String.fromCharCode(Number.parseInt(octal, 8));
+      continue;
+    }
+    const escapes = { a: '\x07', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\x0b', '\\': '\\', '"': '"' };
+    if (!(escaped in escapes)) throw new Error(`unsupported git path escape \\${escaped}`);
+    decoded += escapes[escaped];
+  }
+  return decoded;
+}
+
+function assertGitStatusPath(file) {
+  if (!file || file.includes('\0') || file.includes('\\') || path.posix.isAbsolute(file) || /^[A-Za-z]:\//.test(file)) {
+    throw new Error(`unsafe git status path: ${file}`);
+  }
+  if (file.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    throw new Error(`unsafe git status path segments: ${file}`);
+  }
 }
 
 function getChangedFiles() {
-  const output = execFileSync('git', ['-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-uall'], {
+  const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+  if (!root || root.includes('\n')) throw new Error('unable to determine a single Git worktree root');
+  const output = execFileSync('git', ['-C', root, '-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-uall'], {
     encoding: 'utf8',
   });
   const entries = new Map();
@@ -2203,13 +2260,9 @@ function renderRuleReviewVerdictTemplate() {
 function collectChangedFileInventory(planDir, sliceBody) {
   const controls = parseContextControls(sliceBody);
   const isBaselineDirty = (file) => controls.dirtyBaseline.some((pattern) => matchesPathPattern(file, pattern));
-  try {
-    return getChangedFiles()
-      .filter(({ file }) => !isPlanGeneratedFile(file, planDir) && !isBaselineDirty(file))
-      .map(({ file, untracked }) => ({ file, untracked }));
-  } catch {
-    return [];
-  }
+  return getChangedFiles()
+    .filter(({ file }) => !isPlanGeneratedFile(file, planDir) && !isBaselineDirty(file))
+    .map(({ file, untracked }) => ({ file, untracked }));
 }
 
 function countTextLines(content) {
@@ -2268,13 +2321,9 @@ async function renderDiffForChangedFiles(changedFiles) {
 }
 
 function collectWholeReviewChangedFileInventory(planDir) {
-  try {
-    return getChangedFiles()
-      .filter(({ file }) => (planDir ? !isPlanGeneratedFile(file, planDir) : !isReviewPackageFile(file) && !isTaskHandoffFile(file) && !isDevPlansGitignore(file)))
-      .map(({ file, untracked }) => ({ file, untracked }));
-  } catch {
-    return [];
-  }
+  return getChangedFiles()
+    .filter(({ file }) => (planDir ? !isPlanGeneratedFile(file, planDir) : !isReviewPackageFile(file) && !isTaskHandoffFile(file) && !isDevPlansGitignore(file)))
+    .map(({ file, untracked }) => ({ file, untracked }));
 }
 
 async function renderChangedFileSections(changedFiles) {
@@ -4262,6 +4311,8 @@ export const __private__ = {
   validateUniqueBlockIds,
   parseContextControls,
   matchesPathPattern,
+  parseGitStatus,
+  getChangedFiles,
   claimValidationErrors,
   claimsTemplate,
 };

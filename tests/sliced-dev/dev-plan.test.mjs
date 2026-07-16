@@ -622,11 +622,13 @@ Evidence：
 }
 
 async function writeGeneratedReviewPackageFixture(planDir, sliceId = 'S1') {
+  await ensureGitRepoFixture();
   const result = runDevPlanCli(['review-package', planDir, sliceId]);
   assert.equal(result.status, 0, result.stderr.toString());
 }
 
 async function writeWholeReviewPackageFixture(planDir) {
+  await ensureGitRepoFixture();
   const result = runDevPlanCli(['whole-review-package', planDir]);
   assert.equal(result.status, 0, result.stderr.toString());
 }
@@ -2179,6 +2181,31 @@ test('matchesPathPattern matches globstar with zero segments and directory prefi
   assert.equal(matchesPathPattern('srcx/a.ts', 'src/'), false);
 });
 
+test('git status parser preserves rename inventory and fails closed on malformed output', () => {
+  const { parseGitStatus } = __private__;
+
+  assert.deepEqual(parseGitStatus(''), []);
+  assert.deepEqual(parseGitStatus(' M src/example.ts\n?? src/new file.ts\nR  src/old.ts -> src/new.ts\n'), [
+    { file: 'src/example.ts', untracked: false },
+    { file: 'src/new file.ts', untracked: true },
+    { file: 'src/old.ts', untracked: false },
+    { file: 'src/new.ts', untracked: false },
+  ]);
+  assert.throws(() => parseGitStatus('malformed\n'), /unable to parse git status line/);
+  assert.throws(() => parseGitStatus('R  missing-separator\n'), /unable to parse rename\/copy/);
+});
+
+test('git inventory resolves repository-root paths when called from a subdirectory', async () => {
+  await withTempRepo(async () => {
+    initGitRepo();
+    await fs.writeFile('root-file.ts', 'export {};\n', 'utf8');
+    await fs.mkdir('nested');
+    process.chdir('nested');
+
+    assert.deepEqual(__private__.getChangedFiles(), [{ file: 'root-file.ts', untracked: true }]);
+  });
+});
+
 test('diff-check flags forbidden terms only in added content', async () => {
   await withTempRepo(async () => {
     execFileSync('git', ['init']);
@@ -2790,6 +2817,7 @@ test('CLI review-package accepts task brief with earlier proposed claim statuses
     await fs.writeFile(claimsPath, `${JSON.stringify(claims, null, 2)}\n`, 'utf8');
     await writeTaskReportTemplateFixture('dev-plans/2026-06-10-review-package-proposed-brief', 'S1');
     await markTaskReportReady('dev-plans/2026-06-10-review-package-proposed-brief', 'S1');
+    initGitRepo();
 
     const result = runDevPlanCli(['review-package', 'dev-plans/2026-06-10-review-package-proposed-brief', 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
@@ -3366,6 +3394,35 @@ test('CLI rule-review-package skips when project rule review is not applicable',
   });
 });
 
+test('all review package inventories fail closed outside a Git worktree', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-package-inventory-failure');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withPassedReviewVerdicts(withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8'))),
+      'utf8',
+    );
+    await writeReadyTaskHandoff(planDir, 'S1');
+
+    const commands = [
+      ['review-package', planDir, 'S1'],
+      ['rule-review-package', planDir, 'S1'],
+      ['whole-review-package', planDir],
+    ];
+    for (const args of commands) {
+      const result = runDevPlanCli(args);
+      assert.equal(result.status, 1, `${args[0]} should fail: ${result.stderr.toString()}`);
+      assert.match(result.stderr.toString(), /not a git repository|git status/);
+    }
+
+    assert.equal(await fs.stat(path.join(planDir, 'review-packages', 'S1.md')).then(() => true, () => false), false);
+    assert.equal(await fs.stat(path.join(planDir, 'review-packages', 'S1-rules.md')).then(() => true, () => false), false);
+    assert.equal(await fs.stat(path.join(planDir, 'review-packages', 'whole-task.md')).then(() => true, () => false), false);
+  });
+});
+
 test('CLI review-package ensures missing dev-plans .gitignore', async () => {
   await withTempRepo(async () => {
     const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
@@ -3373,6 +3430,7 @@ test('CLI review-package ensures missing dev-plans .gitignore', async () => {
     await writeValidExecutingPlan(planDir);
     await writeReadyTaskHandoff('dev-plans/2026-06-10-review-package-gitignore', 'S1');
     await fs.rm(path.join('dev-plans', '.gitignore'), { force: true });
+    initGitRepo();
 
     const result = spawnSync('node', [script, 'review-package', 'dev-plans/2026-06-10-review-package-gitignore', 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
@@ -3516,6 +3574,7 @@ test('CLI review-prompt only points reviewer to review-package path', async () =
     const planDir = path.join('dev-plans', '2026-06-10-review-prompt');
     await writeValidExecutingPlan(planDir);
     await writeReadyTaskHandoff('dev-plans/2026-06-10-review-prompt', 'S1');
+    initGitRepo();
 
     const missingPackage = spawnSync('node', [script, 'review-prompt', 'dev-plans/2026-06-10-review-prompt', 'S1']);
     assert.equal(missingPackage.status, 2, missingPackage.stderr.toString());
@@ -3567,6 +3626,7 @@ test('CLI review-prompt rejects duplicate top-level review package sections', as
     const planDir = path.join('dev-plans', '2026-06-10-review-prompt-duplicate-section');
     await writeValidExecutingPlan(planDir);
     await writeReadyTaskHandoff('dev-plans/2026-06-10-review-prompt-duplicate-section', 'S1');
+    initGitRepo();
     const pack = spawnSync('node', [script, 'review-package', 'dev-plans/2026-06-10-review-prompt-duplicate-section', 'S1']);
     assert.equal(pack.status, 0, pack.stderr.toString());
 
@@ -4160,6 +4220,7 @@ test('CLI whole-review-package writes cross-slice package', async () => {
       withPassedReviewVerdicts(plan).replace('- AI Review：pending', '- AI Review：passed'),
       'utf8',
     );
+    initGitRepo();
     const result = spawnSync('node', [script, 'whole-review-package', 'dev-plans/2026-06-10-whole-review-package']);
 
     assert.equal(result.status, 0, result.stderr.toString());
@@ -4195,6 +4256,7 @@ test('CLI whole-review-package renders missing slice AI Review with Note column'
     const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
     const planDir = path.join('dev-plans', '2026-06-10-whole-review-package-missing-ai-review');
     await writeValidExecutingPlan(planDir);
+    initGitRepo();
 
     const result = spawnSync('node', [script, 'whole-review-package', 'dev-plans/2026-06-10-whole-review-package-missing-ai-review']);
     assert.equal(result.status, 0, result.stderr.toString());

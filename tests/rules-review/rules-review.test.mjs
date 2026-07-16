@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,16 @@ const fixtures = path.join(repoRoot, "tests/rules-review/fixtures");
 
 async function runValidate(args) {
   return execFileAsync(process.execPath, [script, ...args], { cwd: repoRoot });
+}
+
+async function assertValidateFails(args, pattern) {
+  try {
+    await runValidate(args);
+  } catch (error) {
+    assert.match(`${error.stdout}${error.stderr}`, pattern);
+    return;
+  }
+  assert.fail(`Expected validator command to fail: ${args.join(" ")}`);
 }
 
 async function assertRunPass(fixture, expectedGate) {
@@ -126,6 +137,206 @@ function runValidationResult(finalReview) {
     issueSummary: finalReview.issueSummary,
     recommendation: finalReview.recommendation,
   };
+}
+
+function git(cwd, args) {
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
+function hashBytes(bytes) {
+  return `sha256:${crypto.createHash("sha256").update(bytes).digest("hex")}`;
+}
+
+function createV3RunFixture({ changedFiles, inputRefs = ["src/example.js", "src/deleted.js"] } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-v3-"));
+  const runDir = path.join(root, ".rules-review-tmp", "run");
+  fs.mkdirSync(path.dirname(runDir), { recursive: true });
+  fs.cpSync(path.join(fixtures, "run-pass-full-clean"), runDir, { recursive: true });
+  fs.mkdirSync(path.join(root, ".agents", "rules"), { recursive: true });
+  fs.mkdirSync(path.join(root, "src"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".agents", "rules", "index.md"), "# Rules\n\n- CORE-001\n");
+  fs.writeFileSync(path.join(root, ".agents", "rules", "core.md"), "# CORE-001\n\nCurrent rule bytes.\n");
+  fs.writeFileSync(path.join(root, "src", "example.js"), "before\r\n");
+  fs.writeFileSync(path.join(root, "src", "deleted.js"), "deleted before seal\n");
+
+  const dispatchPath = path.join(runDir, "dispatch.json");
+  const dispatch = readJson(dispatchPath);
+  dispatch.schemaVersion = 3;
+  if (changedFiles !== undefined) dispatch.changedFiles = changedFiles;
+  dispatch.inputSnapshot = {
+    files: [{ inputRef: "src/example.js", state: "present", contentHash: `sha256:${"0".repeat(64)}` }],
+  };
+  dispatch.ruleSet.sourceIndexHash = `sha256:${"0".repeat(64)}`;
+  dispatch.ruleSet.ruleSources.forEach((source) => {
+    source.sourceFile = ".agents/rules/core.md";
+    source.sourceHash = `sha256:${"0".repeat(64)}`;
+  });
+  [...dispatch.targets.changedUnits, ...dispatch.targets.candidates].forEach((target) => {
+    target.inputRefs = inputRefs;
+    target.contentHash = `sha256:${"f".repeat(64)}`;
+  });
+  writeJson(dispatchPath, dispatch);
+
+  git(root, ["init", "-q"]);
+  git(root, ["config", "user.email", "test@example.com"]);
+  git(root, ["config", "user.name", "Test User"]);
+  git(root, ["add", "."]);
+  git(root, ["commit", "-qm", "baseline"]);
+  fs.writeFileSync(path.join(root, "src", "example.js"), "after\r\n");
+  fs.rmSync(path.join(root, "src", "deleted.js"));
+  return { root, runDir, dispatchPath };
+}
+
+function v3ConsumerCommands(runDir, dispatchPath) {
+  return [
+    ["--mode", "dispatch", "--input", dispatchPath],
+    ["--mode", "build-tasks", "--dispatch", dispatchPath, "--out", path.join(runDir, "tasks")],
+    ["--mode", "aggregate-final", "--dir", runDir, "--output", path.join(runDir, "finalReview.json")],
+    ["--mode", "render-final", "--input", path.join(runDir, "finalReview.json"), "--dispatch", dispatchPath, "--output", path.join(runDir, "final.md")],
+    ["--mode", "run", "--dir", runDir],
+    ["--mode", "render-response", "--dir", runDir],
+    ["--mode", "final-md", "--input", path.join(runDir, "final.md"), "--final-review", path.join(runDir, "finalReview.json"), "--dispatch", dispatchPath],
+  ];
+}
+
+{
+  const { root, runDir, dispatchPath } = createV3RunFixture();
+  const codePath = path.join(root, "src", "example.js");
+  const rulePath = path.join(root, ".agents", "rules", "core.md");
+  try {
+    const seal = await runValidate(["--mode", "seal-dispatch", "--input", dispatchPath]);
+    assert.equal(JSON.parse(seal.stdout).ok, true);
+    const sealed = readJson(dispatchPath);
+    assert.deepEqual(sealed.changedFiles, ["src/deleted.js", "src/example.js"]);
+    assert.deepEqual(sealed.inputSnapshot.files, [
+      { inputRef: "src/deleted.js", state: "deleted" },
+      { inputRef: "src/example.js", state: "present", contentHash: hashBytes(Buffer.from("after\r\n")) },
+    ]);
+    assert.equal(sealed.ruleSet.sourceIndexHash, hashBytes(fs.readFileSync(path.join(root, ".agents", "rules", "index.md"))));
+    assert(sealed.ruleSet.ruleSources.every((source) => source.sourceHash === hashBytes(fs.readFileSync(rulePath))));
+
+    for (const command of v3ConsumerCommands(runDir, dispatchPath)) {
+      const result = await runValidate(command);
+      assert.equal(JSON.parse(result.stdout).ok, true, command.join(" "));
+    }
+    const task = readJson(path.join(runDir, "tasks", "B001.json"));
+    assert.equal(task.schemaVersion, 2);
+    assert.deepEqual(task.targets[0].inputRefs, ["src/example.js", "src/deleted.js"]);
+    assert.equal(Object.hasOwn(task, "inputSnapshot"), false);
+    assert.equal(Object.hasOwn(task, "changedFiles"), false);
+    assert.equal(Object.hasOwn(task.targets[0], "contentHash"), false);
+
+    const unrelatedV2Dispatch = JSON.parse(JSON.stringify(sealed));
+    unrelatedV2Dispatch.schemaVersion = 2;
+    unrelatedV2Dispatch.runId = "unrelated-v2-run";
+    writeJson(dispatchPath, unrelatedV2Dispatch);
+    await assertValidateFails(
+      ["--mode", "render-final", "--input", path.join(runDir, "finalReview.json"), "--dispatch", dispatchPath, "--output", path.join(runDir, "final.md")],
+      /dispatch runId must match finalReview runId/,
+    );
+    await assertValidateFails(
+      ["--mode", "final-md", "--input", path.join(runDir, "final.md"), "--final-review", path.join(runDir, "finalReview.json"), "--dispatch", dispatchPath],
+      /dispatch runId must match finalReview runId/,
+    );
+    writeJson(dispatchPath, sealed);
+
+    fs.writeFileSync(codePath, "tampered code\n");
+    for (const command of v3ConsumerCommands(runDir, dispatchPath)) {
+      await assertValidateFails(command, /current Git worktree input verification failed closed/);
+    }
+
+    fs.writeFileSync(codePath, "after\r\n");
+    fs.writeFileSync(rulePath, "tampered rule\n");
+    for (const command of v3ConsumerCommands(runDir, dispatchPath)) {
+      await assertValidateFails(command, /current Git worktree input verification failed closed/);
+    }
+    fs.writeFileSync(rulePath, "# CORE-001\n\nCurrent rule bytes.\n");
+    fs.writeFileSync(path.join(root, ".agents", "rules", "index.md"), "# Tampered index\n");
+    await assertValidateFails(["--mode", "dispatch", "--input", dispatchPath], /current rule index hash does not match/);
+    fs.writeFileSync(path.join(root, ".agents", "rules", "index.md"), "# Rules\n\n- CORE-001\n");
+
+    const forged = JSON.parse(JSON.stringify(sealed));
+    forged.inputSnapshot.files.find((entry) => entry.state === "present").contentHash = `sha256:${"f".repeat(64)}`;
+    writeJson(dispatchPath, forged);
+    await assertValidateFails(["--mode", "dispatch", "--input", dispatchPath], /current input snapshot mismatch/);
+
+    const escaped = JSON.parse(JSON.stringify(sealed));
+    escaped.targets.changedUnits[0].inputRefs = ["../outside.js"];
+    writeJson(dispatchPath, escaped);
+    await assertValidateFails(["--mode", "seal-dispatch", "--input", dispatchPath], /unsafe repository path segments/);
+
+    const missingRule = JSON.parse(JSON.stringify(sealed));
+    missingRule.ruleSet.ruleSources[0].sourceFile = ".agents/rules/missing.md";
+    writeJson(dispatchPath, missingRule);
+    await assertValidateFails(["--mode", "seal-dispatch", "--input", dispatchPath], /required repository file is missing/);
+
+    const uncovered = JSON.parse(JSON.stringify(sealed));
+    delete uncovered.changedFiles;
+    writeJson(dispatchPath, uncovered);
+    fs.writeFileSync(path.join(root, "src", "uncovered.js"), "uncovered\n");
+    await assertValidateFails(["--mode", "seal-dispatch", "--input", dispatchPath], /each changedFile must be covered by changedUnits\.inputRefs/);
+    fs.rmSync(path.join(root, "src", "uncovered.js"));
+
+    const symlinked = JSON.parse(JSON.stringify(sealed));
+    fs.symlinkSync("example.js", path.join(root, "src", "link.js"));
+    symlinked.targets.changedUnits[0].inputRefs = ["src/link.js"];
+    writeJson(dispatchPath, symlinked);
+    await assertValidateFails(["--mode", "seal-dispatch", "--input", dispatchPath], /symlink repository input is forbidden/);
+    fs.rmSync(path.join(root, "src", "link.js"));
+
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-v3-outside-"));
+    const outsideDispatch = path.join(outside, "dispatch.json");
+    writeJson(outsideDispatch, sealed);
+    await assertValidateFails(["--mode", "seal-dispatch", "--input", outsideDispatch], /not a git repository|Git worktree/);
+    fs.rmSync(outside, { recursive: true, force: true });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  const { root, dispatchPath } = createV3RunFixture({
+    changedFiles: ["src/example.js"],
+    inputRefs: ["src/example.js"],
+  });
+  try {
+    await runValidate(["--mode", "seal-dispatch", "--input", dispatchPath]);
+    const sealed = readJson(dispatchPath);
+    assert.deepEqual(sealed.changedFiles, ["src/example.js"]);
+    assert.deepEqual(sealed.inputSnapshot.files, [
+      { inputRef: "src/example.js", state: "present", contentHash: hashBytes(Buffer.from("after\r\n")) },
+    ]);
+    fs.writeFileSync(path.join(root, "src", "unrelated.js"), "new unrelated change\n");
+    const verified = await runValidate(["--mode", "dispatch", "--input", dispatchPath]);
+    assert.equal(JSON.parse(verified.stdout).ok, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  const { root, dispatchPath } = createV3RunFixture({ changedFiles: ["src/not-in-inventory.js"] });
+  try {
+    await assertValidateFails(
+      ["--mode", "seal-dispatch", "--input", dispatchPath],
+      /changedFile does not belong to current Git inventory/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  const { root, runDir, dispatchPath } = createV3RunFixture();
+  try {
+    fs.writeFileSync(path.join(root, "src", "example.js"), "before\r\n");
+    fs.writeFileSync(path.join(root, "src", "deleted.js"), "deleted before seal\n");
+    fs.writeFileSync(path.join(runDir, "protocol-note.txt"), "excluded protocol artifact\n");
+    await runValidate(["--mode", "seal-dispatch", "--input", dispatchPath]);
+    assert.deepEqual(readJson(dispatchPath).changedFiles, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 }
 
 await assertRunPass("run-pass-full-clean", {

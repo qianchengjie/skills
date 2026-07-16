@@ -2,9 +2,12 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 
 const MODES = new Set([
   'dispatch',
+  'seal-dispatch',
   'task',
   'retry-task',
   'shard',
@@ -18,6 +21,7 @@ const MODES = new Set([
 ]);
 
 const SCHEMA_VERSION = 2;
+const DISPATCH_SCHEMA_VERSIONS = [SCHEMA_VERSION, 3];
 const RETURN_STATUSES = ['not_started', 'started', 'returned', 'not_returned', 'format_invalid', 'untrusted'];
 const AGGREGATE_STATUSES = ['aggregated', 'not_aggregated'];
 const RESULT_STATUSES = ['passed', 'finding', 'observation', 'not_applicable', 'cannot_verify'];
@@ -37,6 +41,7 @@ const APPLICABILITY_STATUSES = ['applicable', 'not_applicable'];
 const FAILURE_CHECK_OUTCOMES = ['checked_no_violation', 'not_triggered'];
 const REVIEW_ITEM_RE = /^RI\d{3}$/;
 const FINDING_RE = /^F\d{3}$/;
+const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
 
 const LABELS = {
   passed: '协议通过',
@@ -165,9 +170,11 @@ function run(args) {
   if (mode !== 'render-final' && result.exitCode === 2) return result;
 
   try {
-    if (mode === 'dispatch') {
+    if (mode === 'seal-dispatch') {
+      sealDispatchMode(args, result);
+    } else if (mode === 'dispatch') {
       const dispatch = readJson(args.input, args.input, result, 'D001');
-      if (dispatch) validateDispatch(dispatch, args.input, result);
+      if (dispatch) validateDispatch(dispatch, args.input, result, args.input);
     } else if (mode === 'task') {
       const task = readJson(args.input, args.input, result, 'T001');
       if (task) validateTask(task, args.input, result);
@@ -251,10 +258,363 @@ function readText(filePath, artifact, result, code, gateImpact = 'blocked') {
   }
 }
 
-function validateDispatch(dispatch, artifact, result) {
+function sealDispatchMode(args, result) {
+  const draft = readJson(args.input, args.input, result, 'D001');
+  if (!draft) return;
+  if (draft.schemaVersion !== 3) {
+    addViolation(result, 'SD001', args.input, '/schemaVersion', 'seal-dispatch only accepts internal schemaVersion 3 drafts', 3, draft.schemaVersion, 2);
+    return;
+  }
+
+  let sealed;
+  try {
+    const worktree = loadCurrentWorktree(args.input);
+    sealed = JSON.parse(JSON.stringify(draft));
+    sealed.changedFiles = selectChangedFiles(worktree.changedFiles, sealed.changedFiles);
+    sealed.inputSnapshot = {
+      files: collectDeclaredInputRefs(sealed)
+        .sort(compareStrings)
+        .map((repoPath) => snapshotRepoInput(worktree.root, repoPath)),
+    };
+
+    if (!isObject(sealed.ruleSet)) throw new Error('dispatch.ruleSet must be an object before sealing');
+    sealed.ruleSet.sourceIndexHash = hashRepoFile(worktree.root, '.agents/rules/index.md');
+    if (!Array.isArray(sealed.ruleSet.ruleSources)) throw new Error('dispatch.ruleSet.ruleSources must be an array before sealing');
+    const sourceHashes = new Map();
+    sealed.ruleSet.ruleSources.forEach((source, index) => {
+      if (!isNonEmptyString(source && source.sourceFile)) throw new Error(`ruleSources[${index}].sourceFile must be a non-empty repository path`);
+      assertSafeRepoRelativePath(source.sourceFile);
+      if (!sourceHashes.has(source.sourceFile)) sourceHashes.set(source.sourceFile, hashRepoFile(worktree.root, source.sourceFile));
+      source.sourceHash = sourceHashes.get(source.sourceFile);
+    });
+  } catch (error) {
+    addViolation(result, 'SD002', args.input, null, `seal-dispatch failed closed: ${error.message}`, 'current Git worktree files and inventory', error.message, 2);
+    return;
+  }
+
+  validateDispatch(sealed, args.input, result, args.input);
+  if (result.violations.length > 0) return;
+  fs.writeFileSync(args.input, `${JSON.stringify(sealed, null, 2)}\n`);
+  result.rendered = args.input;
+}
+
+function validateDispatchSchemaVersion(dispatch, artifact, result) {
+  if (!isObject(dispatch) || !DISPATCH_SCHEMA_VERSIONS.includes(dispatch.schemaVersion)) {
+    addViolation(result, 'D003', artifact, '/schemaVersion', 'dispatch schemaVersion must be supported', DISPATCH_SCHEMA_VERSIONS, dispatch && dispatch.schemaVersion);
+  }
+}
+
+function collectDeclaredInputRefs(dispatch) {
+  const refs = new Set();
+  const targets = [
+    ...asArray(dispatch && dispatch.targets && dispatch.targets.changedUnits),
+    ...asArray(dispatch && dispatch.targets && dispatch.targets.candidates),
+  ];
+  targets.forEach((target, index) => {
+    if (target && target.inputRefs === undefined) return;
+    if (!Array.isArray(target && target.inputRefs)) throw new Error(`target[${index}].inputRefs must be an array`);
+    const targetRefs = new Set();
+    target.inputRefs.forEach((repoPath) => {
+      assertSafeRepoRelativePath(repoPath);
+      if (targetRefs.has(repoPath)) throw new Error(`target[${index}].inputRefs contains duplicate path ${repoPath}`);
+      targetRefs.add(repoPath);
+      refs.add(repoPath);
+    });
+  });
+  return [...refs];
+}
+
+function loadCurrentWorktree(dispatchPath) {
+  if (!isNonEmptyString(dispatchPath)) throw new Error('dispatch path is required');
+  const absoluteDispatchPath = path.resolve(dispatchPath);
+  const dispatchStat = fs.lstatSync(absoluteDispatchPath);
+  if (dispatchStat.isSymbolicLink() || !dispatchStat.isFile()) throw new Error('dispatch input must be a regular non-symlink file');
+  const realDispatchPath = fs.realpathSync(absoluteDispatchPath);
+  const rootOutput = execFileSync('git', ['-C', path.dirname(realDispatchPath), 'rev-parse', '--show-toplevel'], {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  }).trim();
+  if (!rootOutput || rootOutput.includes('\n')) throw new Error('unable to determine a single Git worktree root');
+  const root = fs.realpathSync(rootOutput);
+  assertPathInsideRoot(root, realDispatchPath, 'dispatch input');
+
+  const status = execFileSync('git', ['-C', root, '-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-uall'], {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const changedFiles = [...new Set(parseGitStatus(status)
+    .map((entry) => entry.file)
+    .filter((repoPath) => !isRulesReviewProtocolPath(repoPath) && !isRuleInputPath(repoPath)))]
+    .sort(compareStrings);
+  return { root, changedFiles };
+}
+
+function selectChangedFiles(inventory, declared) {
+  if (declared === undefined) return inventory;
+  if (!Array.isArray(declared)) throw new Error('changedFiles must be an array');
+  const inventorySet = new Set(inventory);
+  const seen = new Set();
+  return declared.map((repoPath) => {
+    assertSafeRepoRelativePath(repoPath);
+    if (seen.has(repoPath)) throw new Error(`changedFiles contains duplicate path ${repoPath}`);
+    if (!inventorySet.has(repoPath)) throw new Error(`changedFile does not belong to current Git inventory: ${repoPath}`);
+    seen.add(repoPath);
+    return repoPath;
+  });
+}
+
+function parseGitStatus(output) {
+  if (typeof output !== 'string') throw new Error('Git inventory output must be text');
+  const lines = output.split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  return lines.flatMap((rawLine, index) => {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+    if (line.length < 4 || line[2] !== ' ') throw new Error(`unable to parse Git inventory line ${index + 1}`);
+    const status = line.slice(0, 2);
+    if (!/^[ MADRCUT?!]{2}$/.test(status) || status === '  ') throw new Error(`invalid Git status code on inventory line ${index + 1}`);
+    if ((status.includes('?') && status !== '??') || (status.includes('!') && status !== '!!')) {
+      throw new Error(`invalid Git status pair on inventory line ${index + 1}`);
+    }
+    const rawPath = line.slice(3);
+    const renamed = /[RC]/.test(status);
+    let pathTokens = [rawPath];
+    if (renamed) {
+      const separator = rawPath.indexOf(' -> ');
+      if (separator < 0 || separator !== rawPath.lastIndexOf(' -> ')) throw new Error(`unable to parse rename/copy inventory line ${index + 1}`);
+      pathTokens = [rawPath.slice(0, separator), rawPath.slice(separator + 4)];
+    }
+    return pathTokens.map((token) => {
+      const file = decodeGitPath(token);
+      assertSafeRepoRelativePath(file);
+      return { file, untracked: status === '??' };
+    });
+  });
+}
+
+function decodeGitPath(value) {
+  if (!value.startsWith('"')) {
+    if (!value) throw new Error('Git inventory path must not be empty');
+    return value;
+  }
+  if (value.length < 2 || !value.endsWith('"')) throw new Error('unterminated quoted Git inventory path');
+  const body = value.slice(1, -1);
+  let decoded = '';
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index];
+    if (char !== '\\') {
+      decoded += char;
+      continue;
+    }
+    index += 1;
+    if (index >= body.length) throw new Error('unterminated Git path escape');
+    const escaped = body[index];
+    if (/[0-7]/.test(escaped)) {
+      let octal = escaped;
+      while (octal.length < 3 && /[0-7]/.test(body[index + 1] || '')) {
+        index += 1;
+        octal += body[index];
+      }
+      decoded += String.fromCharCode(Number.parseInt(octal, 8));
+      continue;
+    }
+    const escapes = { a: '\x07', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\x0b', '\\': '\\', '"': '"' };
+    if (!(escaped in escapes)) throw new Error(`unsupported Git path escape \\${escaped}`);
+    decoded += escapes[escaped];
+  }
+  return decoded;
+}
+
+function assertSafeRepoRelativePath(repoPath) {
+  if (!isNonEmptyString(repoPath)) throw new Error('repository path must be a non-empty string');
+  if (repoPath.includes('\\') || repoPath.includes('\0')) throw new Error(`unsafe repository path: ${repoPath}`);
+  if (path.posix.isAbsolute(repoPath) || /^[A-Za-z]:\//.test(repoPath)) throw new Error(`absolute repository path is forbidden: ${repoPath}`);
+  const segments = repoPath.split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) throw new Error(`unsafe repository path segments: ${repoPath}`);
+  if (path.posix.normalize(repoPath) !== repoPath) throw new Error(`non-canonical repository path: ${repoPath}`);
+}
+
+function assertPathInsideRoot(root, candidate, labelText) {
+  const relative = path.relative(root, candidate);
+  if (relative === '' || relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative)) {
+    throw new Error(`${labelText} must be inside the current Git worktree`);
+  }
+}
+
+function inspectRepoInput(root, repoPath, allowMissing) {
+  assertSafeRepoRelativePath(repoPath);
+  const absolute = path.resolve(root, ...repoPath.split('/'));
+  assertPathInsideRoot(root, absolute, repoPath);
+  let current = root;
+  const segments = repoPath.split('/');
+  for (let index = 0; index < segments.length; index += 1) {
+    current = path.join(current, segments[index]);
+    let stat;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (error) {
+      if (allowMissing && error.code === 'ENOENT') return { state: 'deleted', absolute };
+      throw new Error(`required repository file is missing: ${repoPath}`);
+    }
+    if (stat.isSymbolicLink()) throw new Error(`symlink repository input is forbidden: ${repoPath}`);
+    if (index < segments.length - 1 && !stat.isDirectory()) throw new Error(`repository path ancestor is not a directory: ${repoPath}`);
+    if (index === segments.length - 1 && !stat.isFile()) throw new Error(`repository input must be a regular file: ${repoPath}`);
+  }
+  return { state: 'present', absolute };
+}
+
+function snapshotRepoInput(root, repoPath) {
+  const inspected = inspectRepoInput(root, repoPath, true);
+  if (inspected.state === 'deleted') return { inputRef: repoPath, state: 'deleted' };
+  return { inputRef: repoPath, state: 'present', contentHash: hashBytes(fs.readFileSync(inspected.absolute)) };
+}
+
+function hashRepoFile(root, repoPath) {
+  const inspected = inspectRepoInput(root, repoPath, false);
+  return hashBytes(fs.readFileSync(inspected.absolute));
+}
+
+function hashBytes(bytes) {
+  return `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
+}
+
+function validateCurrentInputShape(dispatch, reviewItems, artifact, result) {
+  const changedFiles = validateRepoPathArray(dispatch.changedFiles, artifact, result, 'D200', '/changedFiles');
+  changedFiles.forEach((repoPath, index) => {
+    if (isRulesReviewProtocolPath(repoPath) || isRuleInputPath(repoPath)) {
+      addViolation(result, 'D201', artifact, `/changedFiles/${index}`, 'changedFiles must exclude rules-review protocol and rule input paths', 'non-protocol non-rule path', repoPath);
+    }
+  });
+
+  const referencedTargetIds = new Set([...reviewItems.values()].map((item) => item && item.targetId).filter(Boolean));
+  const allInputRefs = new Set();
+  const changedUnitInputRefs = new Set();
+  const targetGroups = [
+    ['changedUnits', asArray(dispatch.targets && dispatch.targets.changedUnits)],
+    ['candidates', asArray(dispatch.targets && dispatch.targets.candidates)],
+  ];
+  targetGroups.forEach(([group, entries]) => {
+    entries.forEach((target, index) => {
+      const pointer = `/targets/${group}/${index}/inputRefs`;
+      const required = group === 'changedUnits' || referencedTargetIds.has(target && target.targetId);
+      const refs = validateRepoPathArray(target && target.inputRefs, artifact, result, 'D202', pointer, !required);
+      if (required && refs.length === 0) addViolation(result, 'D203', artifact, pointer, 'changedUnits and reviewItem targets require non-empty inputRefs', 'non-empty inputRefs', target && target.inputRefs);
+      refs.forEach((repoPath) => {
+        if (isRulesReviewProtocolPath(repoPath) || isRuleInputPath(repoPath)) {
+          addViolation(result, 'D217', artifact, pointer, 'inputRefs must exclude rules-review protocol and rule input paths', 'code/config/contract path', repoPath);
+        }
+        allInputRefs.add(repoPath);
+        if (group === 'changedUnits') changedUnitInputRefs.add(repoPath);
+      });
+    });
+  });
+
+  const snapshotFiles = dispatch.inputSnapshot && dispatch.inputSnapshot.files;
+  if (!isObject(dispatch.inputSnapshot)) addViolation(result, 'D204', artifact, '/inputSnapshot', 'inputSnapshot must be object', 'object', dispatch.inputSnapshot);
+  if (!Array.isArray(snapshotFiles)) addViolation(result, 'D205', artifact, '/inputSnapshot/files', 'inputSnapshot.files must be array', 'array', snapshotFiles);
+  const snapshotPaths = new Set();
+  asArray(snapshotFiles).forEach((entry, index) => {
+    const pointer = `/inputSnapshot/files/${index}`;
+    requireFields(entry, artifact, result, 'D206', pointer, ['inputRef', 'state']);
+    const repoPath = entry && entry.inputRef;
+    try {
+      assertSafeRepoRelativePath(repoPath);
+    } catch (error) {
+      addViolation(result, 'D207', artifact, `${pointer}/inputRef`, error.message, 'safe repository-relative POSIX path', repoPath);
+      return;
+    }
+    if (snapshotPaths.has(repoPath)) addViolation(result, 'D208', artifact, `${pointer}/inputRef`, 'inputSnapshot inputRef must be unique', 'unique inputRef', repoPath);
+    snapshotPaths.add(repoPath);
+    if (!['present', 'deleted'].includes(entry.state)) addViolation(result, 'D209', artifact, `${pointer}/state`, 'snapshot state must be present or deleted', ['present', 'deleted'], entry.state);
+    if (entry.state === 'present' && !SHA256_RE.test(entry.contentHash || '')) addViolation(result, 'D210', artifact, `${pointer}/contentHash`, 'present snapshot requires sha256 contentHash', 'sha256:<64hex>', entry.contentHash);
+    if (entry.state === 'deleted' && Object.prototype.hasOwnProperty.call(entry, 'contentHash')) addViolation(result, 'D211', artifact, `${pointer}/contentHash`, 'deleted snapshot forbids contentHash', 'field absent', entry.contentHash);
+  });
+  if (!setsEqual(allInputRefs, snapshotPaths)) addViolation(result, 'D212', artifact, '/inputSnapshot/files', 'inputSnapshot inputRefs must exactly equal declared target inputRefs', [...allInputRefs].sort(compareStrings), [...snapshotPaths].sort(compareStrings));
+  changedFiles.forEach((repoPath) => {
+    if (!changedUnitInputRefs.has(repoPath)) addViolation(result, 'D213', artifact, '/targets/changedUnits', 'each changedFile must be covered by changedUnits.inputRefs', repoPath, [...changedUnitInputRefs]);
+  });
+
+  if (!SHA256_RE.test((dispatch.ruleSet && dispatch.ruleSet.sourceIndexHash) || '')) addViolation(result, 'D214', artifact, '/ruleSet/sourceIndexHash', 'sourceIndexHash must use sha256:<64hex>', 'sha256:<64hex>', dispatch.ruleSet && dispatch.ruleSet.sourceIndexHash);
+  asArray(dispatch.ruleSet && dispatch.ruleSet.ruleSources).forEach((source, index) => {
+    try {
+      assertSafeRepoRelativePath(source && source.sourceFile);
+    } catch (error) {
+      addViolation(result, 'D215', artifact, `/ruleSet/ruleSources/${index}/sourceFile`, error.message, 'safe repository-relative POSIX path', source && source.sourceFile);
+    }
+    if (!SHA256_RE.test((source && source.sourceHash) || '')) addViolation(result, 'D216', artifact, `/ruleSet/ruleSources/${index}/sourceHash`, 'sourceHash must use sha256:<64hex>', 'sha256:<64hex>', source && source.sourceHash);
+  });
+}
+
+function validateRepoPathArray(value, artifact, result, code, pointer, optional = false) {
+  if (optional && value === undefined) return [];
+  if (!Array.isArray(value)) {
+    addViolation(result, code, artifact, pointer, 'value must be an array of safe repository paths', 'array', value);
+    return [];
+  }
+  const seen = new Set();
+  const valid = [];
+  value.forEach((repoPath, index) => {
+    try {
+      assertSafeRepoRelativePath(repoPath);
+    } catch (error) {
+      addViolation(result, code, artifact, `${pointer}/${index}`, error.message, 'safe repository-relative POSIX path', repoPath);
+      return;
+    }
+    if (seen.has(repoPath)) {
+      addViolation(result, code, artifact, `${pointer}/${index}`, 'repository paths must be unique', 'unique paths', repoPath);
+      return;
+    }
+    seen.add(repoPath);
+    valid.push(repoPath);
+  });
+  return valid;
+}
+
+function verifyCurrentDispatchInputs(dispatch, currentInputPath, artifact, result) {
+  try {
+    const worktree = loadCurrentWorktree(currentInputPath);
+    const inventory = new Set(worktree.changedFiles);
+    asArray(dispatch.changedFiles).forEach((repoPath) => {
+      if (!inventory.has(repoPath)) throw new Error(`changedFile no longer belongs to current Git inventory: ${repoPath}`);
+    });
+
+    asArray(dispatch.inputSnapshot && dispatch.inputSnapshot.files).forEach((entry) => {
+      if (!entry || !isNonEmptyString(entry.inputRef)) throw new Error('inputSnapshot contains an invalid inputRef');
+      const actual = snapshotRepoInput(worktree.root, entry.inputRef);
+      if (actual.state !== entry.state || actual.contentHash !== entry.contentHash) {
+        throw new Error(`current input snapshot mismatch for ${entry.inputRef}`);
+      }
+    });
+
+    const actualIndexHash = hashRepoFile(worktree.root, '.agents/rules/index.md');
+    if (dispatch.ruleSet.sourceIndexHash !== actualIndexHash) throw new Error('current rule index hash does not match sourceIndexHash');
+    const sourceHashes = new Map();
+    asArray(dispatch.ruleSet && dispatch.ruleSet.ruleSources).forEach((source) => {
+      if (!sourceHashes.has(source.sourceFile)) sourceHashes.set(source.sourceFile, hashRepoFile(worktree.root, source.sourceFile));
+      if (source.sourceHash !== sourceHashes.get(source.sourceFile)) throw new Error(`current rule source hash mismatch for ${source.sourceFile}`);
+    });
+  } catch (error) {
+    addViolation(result, 'D240', artifact, null, `current Git worktree input verification failed closed: ${error.message}`, 'sealed current worktree inputs', error.message, 2);
+  }
+}
+
+function isRulesReviewProtocolPath(repoPath) {
+  return repoPath === '.rules-review-tmp' || repoPath.startsWith('.rules-review-tmp/');
+}
+
+function isRuleInputPath(repoPath) {
+  return repoPath === '.agents/rules' || repoPath.startsWith('.agents/rules/');
+}
+
+function compareStrings(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function validateDispatch(dispatch, artifact, result, currentInputPath = artifact) {
   expectKind(dispatch, artifact, result, 'D002', 'rules-review-dispatch');
-  validateSchemaVersion(dispatch, artifact, result, 'D003');
-  requireFields(dispatch, artifact, result, 'D004', '', ['kind', 'schemaVersion', 'runId', 'ruleSet', 'targets', 'applicabilityMatrix', 'reviewItems', 'executionPlan', 'reviewBatches']);
+  validateDispatchSchemaVersion(dispatch, artifact, result);
+  const requiredFields = ['kind', 'schemaVersion', 'runId', 'ruleSet', 'targets', 'applicabilityMatrix', 'reviewItems', 'executionPlan', 'reviewBatches'];
+  if (dispatch && dispatch.schemaVersion === 3) requiredFields.push('changedFiles', 'inputSnapshot');
+  requireFields(dispatch, artifact, result, 'D004', '', requiredFields);
   if (!isNonEmptyString(dispatch.runId)) addViolation(result, 'D005', artifact, '/runId', 'runId must be non-empty string', 'string', dispatch.runId);
   validateNoPriorReviewInputs(dispatch, artifact, result);
 
@@ -265,6 +625,10 @@ function validateDispatch(dispatch, artifact, result) {
   validateRequiredContextCoverage(ruleSet, dispatch.targets, artifact, result);
   validateReviewBatches(dispatch.reviewBatches, ruleSet, reviewItems, artifact, result);
   validateExecutionPlan(dispatch.executionPlan, dispatch, ruleSet, reviewItems, artifact, result);
+  if (dispatch && dispatch.schemaVersion === 3) {
+    validateCurrentInputShape(dispatch, reviewItems, artifact, result);
+    verifyCurrentDispatchInputs(dispatch, currentInputPath, artifact, result);
+  }
 }
 
 function validateRuleSet(ruleSet, artifact, result) {
@@ -769,6 +1133,7 @@ function validateTask(task, artifact, result) {
   asArray(task.targets).forEach((target, index) => {
     const pointer = `/targets/${index}`;
     requireFields(target, artifact, result, 'T012', pointer, ['targetId', 'targetKind']);
+    if (target && target.inputRefs !== undefined) validateRepoPathArray(target.inputRefs, artifact, result, 'T021', `${pointer}/inputRefs`);
   });
   if (!isObject(task.outputContract)) {
     addViolation(result, 'T013', artifact, '/outputContract', 'outputContract must be object', 'object', task.outputContract);
@@ -1040,7 +1405,7 @@ function validateRun(runDir, result) {
   const finalReviewPath = path.join(runDir, 'finalReview.json');
   const finalMdPath = path.join(runDir, 'final.md');
   const dispatch = readJson(dispatchPath, rel(runDir, dispatchPath), result, 'D001');
-  if (dispatch) validateDispatch(dispatch, rel(runDir, dispatchPath), result);
+  if (dispatch) validateDispatch(dispatch, rel(runDir, dispatchPath), result, dispatchPath);
 
   const finalReview = readJson(finalReviewPath, rel(runDir, finalReviewPath), result, 'FR001');
   if (finalReview) validateFinalReviewShape(finalReview, rel(runDir, finalReviewPath), result);
@@ -1474,7 +1839,12 @@ function buildTasks(dispatch) {
         reviewItems,
         rules: asArray(dispatch.ruleSet.ruleSources).filter((source) => source && ruleRefs.has(source.ruleRef) && ruleSourcesByRuleRef.has(source.ruleRef)),
         targets: [...asArray(dispatch.targets && dispatch.targets.changedUnits), ...asArray(dispatch.targets && dispatch.targets.candidates)]
-          .filter((target) => target && targetIds.has(target.targetId) && targetsById.has(target.targetId)),
+          .filter((target) => target && targetIds.has(target.targetId) && targetsById.has(target.targetId))
+          .map((target) => {
+            const projected = { targetId: target.targetId, targetKind: target.targetKind };
+            copyOptionalFields(target, projected, ['inputRefs', 'loc', 'source', 'summary']);
+            return projected;
+          }),
         applicabilityMatrix: applicabilityRows,
         outputContract: {
           format: 'strict_json',
@@ -1499,13 +1869,12 @@ function aggregateFinalMode(args, result) {
   validateRunDirectoryFiles(runDir, result);
   const dispatchPath = path.join(runDir, 'dispatch.json');
   const dispatch = readJson(dispatchPath, rel(runDir, dispatchPath), result, 'D001');
-  if (dispatch) validateDispatch(dispatch, rel(runDir, dispatchPath), result);
+  if (dispatch) validateDispatch(dispatch, rel(runDir, dispatchPath), result, dispatchPath);
+  if (!dispatch || result.violations.length > 0) return;
   const runState = dispatch ? validateRunArtifacts(runDir, dispatch, result) : { results: [], resultOwners: new Map() };
   if (dispatch) validateRequiredResults(dispatch, runState.results, runState.resultOwners, result);
   const gate = calculateGate(dispatch, runState.results, result);
   result.gate = gate;
-  if (!dispatch) return;
-
   const finalReview = buildFinalReview(dispatch, runState.results, gate);
   fs.mkdirSync(path.dirname(args.output), { recursive: true });
   fs.writeFileSync(args.output, `${JSON.stringify(finalReview, null, 2)}\n`);
@@ -1646,8 +2015,15 @@ function renderFinalMode(args, result) {
     addViolation(result, 'EXEC004', null, '/output', 'render-final requires --output', 'output path', args.output || null, 2);
     return;
   }
-  const dispatch = args.dispatch && args.dispatch !== true ? readJson(args.dispatch, args.dispatch, result, 'D001') : null;
-  if (dispatch) validateDispatch(dispatch, args.dispatch, result);
+  const siblingDispatchPath = path.join(path.dirname(path.resolve(args.input)), 'dispatch.json');
+  const dispatchPath = args.dispatch && args.dispatch !== true
+    ? args.dispatch
+    : fs.existsSync(siblingDispatchPath) ? siblingDispatchPath : null;
+  const dispatch = dispatchPath ? readJson(dispatchPath, dispatchPath, result, 'D001') : null;
+  if (dispatch) validateDispatch(dispatch, dispatchPath, result, dispatchPath);
+  if (dispatch && dispatch.runId !== finalReview.runId) {
+    addViolation(result, 'EXEC005', dispatchPath, '/runId', 'dispatch runId must match finalReview runId before rendering', finalReview.runId, dispatch.runId, 2);
+  }
   if (result.violations.length > 0) return;
   const runDir = path.dirname(path.resolve(args.input));
   const markdown = renderFinalMarkdown(finalReview, dispatch, runDir);
@@ -1684,8 +2060,15 @@ function renderResponseMode(args, result) {
 function validateFinalMarkdownMode(args, result) {
   const finalReview = readJson(args['final-review'], args['final-review'], result, 'FR001');
   if (!finalReview) return;
-  const dispatch = args.dispatch && args.dispatch !== true ? readJson(args.dispatch, args.dispatch, result, 'D001') : null;
-  if (dispatch) validateDispatch(dispatch, args.dispatch, result);
+  const siblingDispatchPath = path.join(path.dirname(path.resolve(args['final-review'])), 'dispatch.json');
+  const dispatchPath = args.dispatch && args.dispatch !== true
+    ? args.dispatch
+    : fs.existsSync(siblingDispatchPath) ? siblingDispatchPath : null;
+  const dispatch = dispatchPath ? readJson(dispatchPath, dispatchPath, result, 'D001') : null;
+  if (dispatch) validateDispatch(dispatch, dispatchPath, result, dispatchPath);
+  if (dispatch && dispatch.runId !== finalReview.runId) {
+    addViolation(result, 'FM020', dispatchPath, '/runId', 'dispatch runId must match finalReview runId before final Markdown validation', finalReview.runId, dispatch.runId, 2);
+  }
   if (result.violations.length > 0) return;
   validateFinalMarkdown(finalReview, args.input, result, dispatch);
 }
@@ -2150,6 +2533,9 @@ function validateTargetSnapshot(actual, expected, artifact, result, code, pointe
       addViolation(result, code, artifact, `${pointer}/${field}`, 'task target snapshot must match dispatch target', expected[field], actual[field]);
     }
   });
+  if (expected.inputRefs !== undefined && !optionalJsonEqual(actual.inputRefs, expected.inputRefs)) {
+    addViolation(result, code, artifact, `${pointer}/inputRefs`, 'task target inputRefs must match dispatch target', expected.inputRefs, actual.inputRefs);
+  }
 }
 
 function validateReviewTargetContext(target, artifact, result, code, pointer) {

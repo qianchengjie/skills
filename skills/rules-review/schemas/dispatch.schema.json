@@ -6,7 +6,7 @@
   "required": ["kind", "schemaVersion", "runId", "ruleSet", "targets", "applicabilityMatrix", "reviewItems", "executionPlan", "reviewBatches"],
   "properties": {
     "kind": { "const": "rules-review-dispatch" },
-    "schemaVersion": { "const": 2 },
+    "schemaVersion": { "enum": [2, 3] },
     "runId": { "type": "string", "minLength": 1 },
     "ruleSet": {
       "type": "object",
@@ -35,8 +35,29 @@
     "reviewItems": { "type": "array", "items": { "$ref": "#/$defs/reviewItem" } },
     "executionPlan": { "$ref": "#/$defs/executionPlan" },
     "reviewBatches": { "type": "array", "items": { "$ref": "#/$defs/reviewBatch" } },
+    "changedFiles": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "inputSnapshot": {
+      "type": "object",
+      "required": ["files"],
+      "properties": {
+        "files": { "type": "array", "items": { "$ref": "#/$defs/inputSnapshotFile" } }
+      }
+    },
     "priorReviewCheck": false
   },
+  "allOf": [
+    {
+      "if": {
+        "required": ["schemaVersion"],
+        "properties": { "schemaVersion": { "const": 3 } }
+      },
+      "then": { "required": ["changedFiles", "inputSnapshot"] }
+    }
+  ],
   "$defs": {
     "executionPlan": {
       "type": "object",
@@ -135,6 +156,11 @@
       "properties": {
         "targetId": { "type": "string", "minLength": 1 },
         "targetKind": { "type": "string", "minLength": 1 },
+        "inputRefs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
         "loc": { "type": "string" },
         "source": { "type": "string" },
         "summary": { "type": "string" }
@@ -177,6 +203,25 @@
         "aggregateStatus": { "enum": ["aggregated", "not_aggregated"] },
         "unaggregatedReason": { "type": ["string", "null"] }
       }
+    },
+    "inputSnapshotFile": {
+      "type": "object",
+      "required": ["inputRef", "state"],
+      "properties": {
+        "inputRef": { "type": "string", "minLength": 1 },
+        "state": { "enum": ["present", "deleted"] },
+        "contentHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "const": "present" } } },
+          "then": { "required": ["contentHash"] }
+        },
+        {
+          "if": { "properties": { "state": { "const": "deleted" } } },
+          "then": { "not": { "required": ["contentHash"] } }
+        }
+      ]
     },
     "evidence": {
       "type": "object",
