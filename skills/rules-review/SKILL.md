@@ -8,6 +8,8 @@ disable-model-invocation: true
 
 `rules-review` 是项目规则驱动的规范审查 skill。它不维护 `.agents/rules/`，不发明规则分类，不替代 `AGENTS.md`、OpenSpec、共享能力文档或代码证据；它只负责消费已有 active 规则、建立目标边界、分派审查原子、回收结果并输出可校验结论。
 
+迁移边界：S4 新增的 `shouldSetHash` 与 sliced-dev 消费绑定只用于内部迁移和回归验证；S5 统一升级其余 schema / validator 常量并闭合首条安全 `full → incremental` 链前，实际执行入口不得使用该 v3 中间态。
+
 项目规则入口是 `.agents/rules/index.md`。最小消费前提：
 
 - 能解析 `namespace id`、`source path`、`trigger / applies-to` 和稳定 `ruleRef`。
@@ -359,6 +361,8 @@ ready_for_merge / must_fix_before_merge / should_review_before_merge / manual_ve
 - `protocolGate = "passed"` 且 `issueSummary.shouldFix > 0` => `should_review_before_merge`
 - `protocolGate = "passed"` 且无 finding、无 cannot_verify => `ready_for_merge`
 
+当 `validate.js --mode run` 派生 `recommendation = "should_review_before_merge"` 时，输出的 `gate.shouldSetHash` 绑定当前 run 全部 `priority = "should_fix"` 的完整 finding 对象；其它 recommendation 不得输出该字段。算法固定为：按 findingId 的十进制数值后缀排序，使用数字字符串长度与字典序比较以避免 `Number` 溢出；对象键按代码单元递归排序，数组保持原顺序；对紧凑 JSON 的 UTF-8 字节计算 SHA-256。该值是 validator 派生输出，不新增 `finalReview.json` schema / artifact 字段，也不改变 finding、priority 或 recommendation。
+
 `validationResults[]` 不是人工自述，至少必须包含 `mode = "run"` 的 validator 摘要：
 
 - `ok`
@@ -457,6 +461,7 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 - `finalReview.validationResults[mode=run]` 必须匹配本次 validator 复算结果。
 - scoped 模式必须有 `excludedRuleRefs`，且不得声明 `coverageClaim = "full_complete"`。
 - `.rules-review-tmp/<run-id>/` 只能包含协议工件：`dispatch.json`、`finalReview.json`、`final.md`、`response.md`，以及 `tasks/`、`retries/`、`shards/`、`validations/` 下的一层 JSON 文件；出现临时脚本或其它非协议文件 => `blocked`。
+- `validate.js --mode run` 在读取任一 run artifact 前确定性检查整棵 run tree；run 根或任意嵌套目录 / 文件为 symlink、任一 realpath 逃出 run 根或出现非普通文件时立即 `blocked`，且不继续读取该树中的 artifact。
 - `retries/*.json` 必须只包含 retry schema 的固定字段，通过 `retry-task` 校验，并且 `runId`、`originalTaskRef` 分别匹配当前 dispatch 和其中一个 task。
 
 `semanticVerdict` 派生规则：
@@ -468,7 +473,7 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 
 `finding` 不导致 `protocolGate` 失败。`protocolGate` 只表示审查协议是否闭合；`semanticVerdict` 才表示是否发现问题。人类输出不得把 `protocolGate = "passed"` 单独写成“通过”，必须写成“协议通过”，并同时展示审查结论、问题数、无法验证数量和修复建议。
 
-`validate.js --mode run` 输出 gate 计算结果；`protocolGate !== "passed"` 时自动化 gate 不视为通过。JSON 输出保留英文 enum，并在 `gate.issueSummary` 与 `gate.recommendation` 中给出派生结论。human-readable 摘要必须使用“协议门禁通过；审查结论：...；问题数：...；必须修复：...；建议修复：...；无法验证：...”这类组合表达，不得把 passed 简化为“通过”。
+`validate.js --mode run` 输出 gate 计算结果；`protocolGate !== "passed"` 时自动化 gate 不视为通过。JSON 输出保留英文 enum，并在 `gate.issueSummary` 与 `gate.recommendation` 中给出派生结论；仅 `should_review_before_merge` 追加 validator 计算的 `gate.shouldSetHash`。human-readable 摘要必须使用“协议门禁通过；审查结论：...；问题数：...；必须修复：...；建议修复：...；无法验证：...”这类组合表达，不得把 passed 简化为“通过”。
 
 退出码：
 

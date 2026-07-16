@@ -1422,7 +1422,7 @@ function validateRun(runDir, result) {
     return;
   }
 
-  validateRunDirectoryFiles(runDir, result);
+  if (!validateRunDirectoryFiles(runDir, result)) return;
 
   const dispatchPath = path.join(runDir, 'dispatch.json');
   const finalReviewPath = path.join(runDir, 'finalReview.json');
@@ -1439,6 +1439,9 @@ function validateRun(runDir, result) {
   const beforeFinalGate = calculateGate(dispatch, runState.results, result);
   if (finalReview && dispatch) validateFinalReviewAgainstComputed(finalReview, dispatch, runState.results, beforeFinalGate, rel(runDir, finalReviewPath), result);
   result.gate = calculateGate(dispatch, runState.results, result);
+  if (finalReview && result.gate.recommendation === 'should_review_before_merge') {
+    result.gate.shouldSetHash = calculateShouldSetHash(finalReview);
+  }
 
   if (result.gate.protocolGate !== 'passed') {
     addViolation(result, 'RUN900', rel(runDir, 'finalReview.json'), '/protocolGate', 'protocolGate must be passed for automation gate success', 'passed', result.gate.protocolGate, 1, null);
@@ -1447,24 +1450,77 @@ function validateRun(runDir, result) {
   }
 }
 
+function compareFindingIdSuffix(left, right) {
+  const leftSuffix = String(left.findingId).slice(1).replace(/^0+(?=\d)/, '');
+  const rightSuffix = String(right.findingId).slice(1).replace(/^0+(?=\d)/, '');
+  return (leftSuffix.length - rightSuffix.length)
+    || (leftSuffix < rightSuffix ? -1 : leftSuffix > rightSuffix ? 1 : 0)
+    || compareStrings(String(left.findingId), String(right.findingId));
+}
+
+function canonicalStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalStringify).join(',')}]`;
+  if (!isObject(value)) return JSON.stringify(value);
+  return `{${Object.keys(value)
+    .sort(compareStrings)
+    .map((key) => `${JSON.stringify(key)}:${canonicalStringify(value[key])}`)
+    .join(',')}}`;
+}
+
+function calculateShouldSetHash(finalReview) {
+  const findings = asArray(finalReview && finalReview.findings)
+    .filter((finding) => finding && finding.priority === 'should_fix')
+    .sort(compareFindingIdSuffix);
+  return hashBytes(Buffer.from(canonicalStringify(findings), 'utf8'));
+}
+
 function validateRunDirectoryFiles(runDir, result) {
-  if (!fs.existsSync(runDir) || !fs.statSync(runDir).isDirectory()) {
-    addViolation(result, 'RUN002', null, '/dir', 'run directory must exist', 'directory', runDir, 2);
-    return;
+  let stat;
+  let realRoot;
+  const absoluteRoot = path.resolve(runDir);
+  try {
+    stat = fs.lstatSync(absoluteRoot);
+    if (stat.isSymbolicLink()) throw new Error('run directory must not be a symbolic link');
+    if (!stat.isDirectory()) throw new Error('run directory must be a directory');
+    realRoot = fs.realpathSync(absoluteRoot);
+  } catch (error) {
+    addViolation(result, 'RUN002', null, '/dir', 'run directory must be a readable real directory', 'real directory', error.message, 2);
+    return false;
   }
-  collectFiles(runDir).forEach((filePath) => {
+
+  let files;
+  try {
+    files = collectFiles(absoluteRoot, realRoot);
+  } catch (error) {
+    addViolation(result, 'RUN004', null, '/dir', 'run tree must not contain symbolic links or escape the run root', 'contained regular files and directories', error.message, 2);
+    return false;
+  }
+
+  files.forEach((filePath) => {
     const relativePath = rel(runDir, filePath);
     if (!isAllowedRunArtifact(relativePath)) {
       addViolation(result, 'RUN003', relativePath, null, 'run directory must only contain rules-review protocol artifacts', 'dispatch/finalReview/final/response or JSON under tasks/retries/shards/validations', relativePath);
     }
   });
+  return true;
 }
 
-function collectFiles(dir) {
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const entryPath = path.join(dir, entry.name);
-    return entry.isDirectory() ? collectFiles(entryPath) : [entryPath];
-  });
+function collectFiles(dir, realRoot = fs.realpathSync(dir)) {
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .sort((left, right) => compareStrings(left.name, right.name))
+    .flatMap((entry) => {
+      const entryPath = path.join(dir, entry.name);
+      const stat = fs.lstatSync(entryPath);
+      if (stat.isSymbolicLink()) throw new Error(`symbolic link is forbidden: ${rel(dir, entryPath)}`);
+      const realPath = fs.realpathSync(entryPath);
+      const relativeRealPath = path.relative(realRoot, realPath);
+      if (relativeRealPath.startsWith('..') || path.isAbsolute(relativeRealPath)) {
+        throw new Error(`real path escapes run root: ${realPath}`);
+      }
+      if (stat.isDirectory()) return collectFiles(entryPath, realRoot);
+      if (!stat.isFile()) throw new Error(`non-regular run artifact is forbidden: ${entryPath}`);
+      return [entryPath];
+    });
 }
 
 function isAllowedRunArtifact(relativePath) {
@@ -1908,7 +1964,7 @@ function aggregateFinalMode(args, result) {
     return;
   }
 
-  validateRunDirectoryFiles(runDir, result);
+  if (!validateRunDirectoryFiles(runDir, result)) return;
   const dispatchPath = path.join(runDir, 'dispatch.json');
   const dispatch = readJson(dispatchPath, rel(runDir, dispatchPath), result, 'D001');
   if (dispatch) validateDispatch(dispatch, rel(runDir, dispatchPath), result, dispatchPath);

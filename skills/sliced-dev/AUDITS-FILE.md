@@ -47,6 +47,29 @@ A27
 <长证据、矩阵或清单>
 ```
 
+项目规则审查为 `required` 时，controller 为当前最终 run 新建一个 `done` A*，不要覆盖旧 A*：
+
+```markdown
+### A28：S2 当前项目规则审查结论
+
+- 状态：done
+- 关联：S2
+- selectedRuleIds: CORE-001, TEST-002
+- rulesReviewRunId: <当前 plan 选择的 runId>
+- validation: <rules-review validate command> => passed
+- recommendation: <rules-review recommendation>
+- shouldSetHash: <仅 should_review_before_merge 时存在>
+- issueSummary:
+  - mustFix: <非负整数>
+  - shouldFix: <非负整数>
+  - cannotVerify: <非负整数>
+- verdict: <passed / failed / cannot-verify-from-package>
+- severity: <critical / major / minor / not-applicable>
+- summary: <非占位摘要>
+```
+
+`rulesReviewRunId`、recommendation、三个计数和条件性 `shouldSetHash` 必须来自同一 rule-reviewer fixed summary；A* 的 validation 只展示命令，`close-check` 不执行它，而会重验 plan 选择的真实 run。默认 SHOULD 被用户整组接受时，A* 仍保留 `failed` 和原始 severity；只改变第四 verdict。部分修复或重跑必须使用新 runId 和新 A*。
+
 ## 状态
 
 `A*` 只允许：

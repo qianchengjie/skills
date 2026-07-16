@@ -57,6 +57,21 @@ D27.1
 - 证据：<短证据；长证据引用 A*>
 ```
 
+默认模式下，只有真实用户明确接受当前 `should_review_before_merge` run 的全部剩余 SHOULD 时，controller 才创建整组接受 D*：
+
+```markdown
+### D28：是否接受 S2 当前完整 SHOULD 集合
+
+- 状态：decided
+- 关联：S2
+- 结论：<人工逐项记录当前每个剩余问题的具体内容、风险和接受决定>
+- 证据：A28
+- SHOULD 接受：<runId>#A28#<shouldSetHash>
+- 确认记录：<用户原话或可定位会话引用>
+```
+
+该 D* 必须与当前切片 `关联项` 中的 `decided` D、当前最终 A* 和 plan 唯一 runId 同时绑定。真实用户接受后，controller 必须人工把当前每个剩余问题的具体内容、风险和接受决定逐项记录到 `结论`，并把用户原话或可定位会话引用保存到 `确认记录`；controller、reviewer 或机器不得代替用户生成接受决定。机器只检查字段、token、状态、引用闭合和字段非占位，不通过自然语言关键词或充分性启发式判断风险说明、用户理解或确认真实性。用户不能只接受集合中的部分 finding：部分修复后必须生成新 runId 和新 A*，剩余集合如仍接受则重新形成当前 D*。启用“零已知缺陷收口”或 recommendation 不是 `should_review_before_merge` 时不得创建该接受链。
+
 ## 状态
 
 `D*` 只允许：

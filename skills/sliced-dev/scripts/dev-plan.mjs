@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const PLAN_STATUSES = new Set(['draft', 'executing', 'paused', 'done']);
 const PHASES = new Set(['slicing', 'executing', 'blocked', 'closing', 'done']);
@@ -144,6 +144,20 @@ const PROJECT_RULE_REVIEW_VERDICT_STATUSES = new Set([
 ]);
 const REVIEW_VERDICT_SEVERITIES = new Set(['critical', 'major', 'minor', 'not-applicable']);
 const PROJECT_RULE_REVIEW_STATUSES = new Set(['required', 'not-applicable', 'blocked']);
+const RULES_REVIEW_RECOMMENDATIONS = new Set([
+  'ready_for_merge',
+  'must_fix_before_merge',
+  'should_review_before_merge',
+  'manual_verification_required',
+  'review_incomplete',
+  'review_blocked',
+]);
+const SAFE_RULES_REVIEW_RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const SHOULD_REVIEW_RECOMMENDATION = 'should_review_before_merge';
+const SHOULD_ACCEPTANCE_FIELD = 'SHOULD 接受';
+const SHOULD_ACCEPTANCE_CONFIRMATION_FIELD = '确认记录';
+const SHOULD_ACCEPTANCE_NOTE = '用户接受当前 run 全部剩余 SHOULD';
+const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
 const WHOLE_REVIEW_VERDICTS = [
   '全局约束符合性',
   '跨切片交接一致性',
@@ -632,6 +646,18 @@ function parseReviewVerdicts(block) {
   return { missing: false, invalid: undefined, items };
 }
 
+function parseRulesReviewRunSelector(block) {
+  const values = getTopLevelListFieldValues(
+    getSubsection(block, SLICE_AI_REVIEW_VERDICTS_SECTION),
+    `${PROJECT_RULE_REVIEW_FIELD} runId`,
+  );
+  return { values, runId: values.length === 1 ? values[0] : undefined };
+}
+
+function isSafeRulesReviewRunId(runId) {
+  return SAFE_RULES_REVIEW_RUN_ID_RE.test(runId ?? '');
+}
+
 function parseWholeReviewVerdicts(plan) {
   const section = getSection(plan, PLAN_WHOLE_REVIEW_VERDICTS_SECTION);
   if (!section) return { missing: true, invalid: undefined, items: [] };
@@ -920,6 +946,27 @@ function isValidReviewVerdictCombination(status, severity) {
 function validateReviewVerdicts(id, body, { status, aiReview }, errors) {
   const aiReviewStatus = getStatusPrefix(aiReview);
   const verdicts = parseReviewVerdicts(body);
+  const projectRuleReview = parseProjectRuleReview(getSubsection(body, SLICE_CONTEXT_PREFLIGHT_SECTION));
+  const selector = parseRulesReviewRunSelector(body);
+  if (selector.values.length > 1) {
+    errors.push(`plan.md:${id}: ${PROJECT_RULE_REVIEW_FIELD} runId selector must appear exactly once`);
+  }
+  if (selector.runId && !isSafeRulesReviewRunId(selector.runId)) {
+    errors.push(`plan.md:${id}: ${PROJECT_RULE_REVIEW_FIELD} runId selector is unsafe: ${selector.runId}`);
+  }
+  if (
+    projectRuleReview.status === 'required'
+    && (status === 'done' || aiReviewStatus === 'passed')
+    && selector.values.length !== 1
+  ) {
+    errors.push(`plan.md:${id}: ${PROJECT_RULE_REVIEW_FIELD} required must select exactly one current runId`);
+  }
+  if (projectRuleReview.status !== 'required' && selector.values.length > 0) {
+    errors.push(`plan.md:${id}: ${PROJECT_RULE_REVIEW_FIELD} runId selector requires project rule review required`);
+  }
+  if (projectRuleReview.status === 'required' && aiReviewStatus === 'skipped') {
+    errors.push(`plan.md:${id}: ${PROJECT_RULE_REVIEW_FIELD} required cannot skip AI Review`);
+  }
   if (verdicts.missing) {
     if (aiReviewStatus === 'passed') {
       errors.push(`plan.md:${id}: AI Review passed requires ${SLICE_AI_REVIEW_VERDICTS_SECTION}`);
@@ -2247,8 +2294,10 @@ function renderRuleReviewVerdictTemplate() {
 | ${PROJECT_RULE_REVIEW_VERDICT} | cannot-verify-from-package | major | rules-review final summary / report path / runId | 待 rule-reviewer 判断 |
 
 - selectedRuleIds: <rule ids>
+- rulesReviewRunId: <当前切片选择的 runId>
 - validation: <rules-review validate command> => passed / failed
 - recommendation: <ready_for_merge / must_fix_before_merge / should_review_before_merge / manual_verification_required / review_incomplete / review_blocked>
+- shouldSetHash: <仅 should_review_before_merge 时填写 validator 派生值>
 - issueSummary:
   - mustFix: <integer>
   - shouldFix: <integer>
@@ -2630,12 +2679,217 @@ function validationPassed(value) {
   return /(?:=>|：|:)\s*passed(?:$|[\s，,。.)）])/i.test(value ?? '');
 }
 
+function parseSingleTopLevelField(block, name) {
+  const values = getTopLevelListFieldValues(block, name);
+  return { values, value: values.length === 1 ? values[0] : undefined };
+}
+
+function parseNonNegativeInteger(value) {
+  if (!/^\d+$/.test(value ?? '')) return undefined;
+  const number = Number(value);
+  return Number.isSafeInteger(number) ? number : undefined;
+}
+
+function expectedRuleReviewVerdict(recommendation) {
+  if (recommendation === 'ready_for_merge') return 'passed';
+  if (recommendation === 'must_fix_before_merge' || recommendation === SHOULD_REVIEW_RECOMMENDATION) {
+    return 'failed';
+  }
+  return 'cannot-verify-from-package';
+}
+
+function validateAuditDisplayCommand(validation, runId, runDir) {
+  if (!validationPassed(validation)) return false;
+  const args = splitCommandArgs(validation);
+  const modeIndex = args.indexOf('--mode');
+  const dirIndex = args.indexOf('--dir');
+  if (modeIndex < 0 || args[modeIndex + 1] !== 'run' || dirIndex < 0 || !args[dirIndex + 1]) return false;
+  const displayedDir = args[dirIndex + 1];
+  const normalized = normalizeRepoPath(displayedDir).replace(/^\.\//, '');
+  return normalized === `.rules-review-tmp/${runId}` || path.resolve(displayedDir) === runDir;
+}
+
+async function inspectTrustedPath(target, expectedType, label) {
+  let stat;
+  try {
+    stat = await fs.lstat(target);
+  } catch (error) {
+    if (error.code === 'ENOENT') throw new Error(`${label} missing: ${target}`);
+    throw error;
+  }
+  if (stat.isSymbolicLink()) throw new Error(`${label} must not be a symlink: ${target}`);
+  if (expectedType === 'directory' && !stat.isDirectory()) throw new Error(`${label} must be a directory: ${target}`);
+  if (expectedType === 'file' && !stat.isFile()) throw new Error(`${label} must be a regular file: ${target}`);
+  if (await fs.realpath(target) !== target) throw new Error(`${label} must not traverse a symlink: ${target}`);
+}
+
+async function resolveRulesReviewValidatorForClose() {
+  const slicedDevRoot = await fs.realpath(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
+  const skillsRoot = path.dirname(slicedDevRoot);
+  const validator = path.resolve(skillsRoot, 'rules-review', 'scripts', 'validate.js');
+  const relative = path.relative(skillsRoot, validator);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error('trusted rules-review validator escaped current skill root');
+  }
+  await inspectTrustedPath(validator, 'file', 'trusted rules-review validator');
+  return validator;
+}
+
+async function readRulesReviewProjectionForClose(runId) {
+  if (!isSafeRulesReviewRunId(runId)) {
+    return { errors: [`unsafe ${PROJECT_RULE_REVIEW_FIELD} runId selector: ${runId || '<missing>'}`] };
+  }
+
+  try {
+    const repoRootOutput = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    const repoRoot = await fs.realpath(repoRootOutput);
+    const runsRoot = path.join(repoRoot, '.rules-review-tmp');
+    const runDir = path.join(runsRoot, runId);
+    if (path.dirname(runDir) !== runsRoot) throw new Error('rules-review run path escaped .rules-review-tmp');
+    await inspectTrustedPath(runDir, 'directory', 'rules-review run directory');
+
+    const validator = await resolveRulesReviewValidatorForClose();
+    const finalReviewPath = path.join(runDir, 'finalReview.json');
+    await inspectTrustedPath(finalReviewPath, 'file', 'rules-review finalReview');
+    let stdout;
+    try {
+      stdout = execFileSync(process.execPath, [validator, '--mode', 'run', '--dir', runDir], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      const detail = String(error.stderr || error.stdout || error.message || '').trim();
+      throw new Error(`trusted rules-review validator failed${detail ? `: ${detail}` : ''}`);
+    }
+
+    let output;
+    try {
+      output = JSON.parse(stdout);
+    } catch {
+      throw new Error('trusted rules-review validator returned invalid JSON');
+    }
+    if (output.ok !== true || output.gate?.protocolGate !== 'passed') {
+      throw new Error('trusted rules-review validator did not return a passed run gate');
+    }
+
+    let finalReview;
+    try {
+      finalReview = JSON.parse(await fs.readFile(finalReviewPath, 'utf8'));
+    } catch (error) {
+      throw new Error(`rules-review finalReview is unreadable: ${error.message}`);
+    }
+
+    const recommendation = output.gate.recommendation;
+    const issueSummary = output.gate.issueSummary;
+    if (!RULES_REVIEW_RECOMMENDATIONS.has(recommendation)) {
+      throw new Error(`trusted rules-review validator returned invalid recommendation: ${recommendation ?? '<missing>'}`);
+    }
+    for (const metric of ['mustFix', 'shouldFix', 'cannotVerify']) {
+      if (!Number.isSafeInteger(issueSummary?.[metric]) || issueSummary[metric] < 0) {
+        throw new Error(`trusted rules-review validator returned invalid issueSummary.${metric}`);
+      }
+    }
+    if (finalReview.runId !== runId) throw new Error(`finalReview runId must be ${runId}`);
+    if (finalReview.recommendation !== recommendation) throw new Error('finalReview recommendation does not match run gate');
+    for (const metric of ['mustFix', 'shouldFix', 'cannotVerify']) {
+      if (finalReview.issueSummary?.[metric] !== issueSummary[metric]) {
+        throw new Error(`finalReview issueSummary.${metric} does not match run gate`);
+      }
+    }
+    const shouldSetHash = output.gate.shouldSetHash;
+    if (recommendation === SHOULD_REVIEW_RECOMMENDATION && !SHA256_RE.test(shouldSetHash ?? '')) {
+      throw new Error('trusted rules-review validator did not derive a valid shouldSetHash');
+    }
+    if (recommendation !== SHOULD_REVIEW_RECOMMENDATION && shouldSetHash !== undefined) {
+      throw new Error('trusted rules-review validator returned shouldSetHash for another recommendation');
+    }
+
+    return {
+      errors: [],
+      projection: { runId, runDir, recommendation, issueSummary, shouldSetHash },
+    };
+  } catch (error) {
+    return { errors: [error.message] };
+  }
+}
+
+function validateAssociatedItemForClose(sliceId, sliceBody, itemId, expectedStatus, itemBody, itemType) {
+  const errors = [];
+  const association = parseAssociationItems(sliceBody);
+  const associated = association.items.find((item) => item.id === itemId);
+  if (!associated || associated.status !== expectedStatus) {
+    errors.push(`close-check:${sliceId}: ${itemId} must enter current slice 关联项 as ${expectedStatus}`);
+  }
+  if (getField(itemBody, '状态') !== expectedStatus) {
+    errors.push(`close-check:${sliceId}: ${itemType} ${itemId} must be ${expectedStatus}`);
+  }
+  const relatedSlices = extractIds(getListFieldValue(itemBody, '关联'), SLICE_REF_RE);
+  if (!relatedSlices.includes(sliceId)) {
+    errors.push(`close-check:${sliceId}: ${itemType} ${itemId} must belong to current slice`);
+  }
+  return errors;
+}
+
+function validateShouldAcceptanceForClose(
+  sliceId,
+  sliceBody,
+  verdict,
+  auditId,
+  decisions,
+  projection,
+) {
+  const errors = [];
+  const decisionRefs = extractIds(verdict.evidence, DECISION_REF_RE);
+  if (decisionRefs.length !== 1) {
+    errors.push(`close-check:${sliceId}: SHOULD acceptance verdict evidence must reference exactly one D*`);
+    return errors;
+  }
+  const decisionId = decisionRefs[0];
+  const decision = decisions.get(decisionId);
+  if (!decision) {
+    errors.push(`close-check:${sliceId}: SHOULD acceptance evidence references missing decision ${decisionId}`);
+    return errors;
+  }
+  errors.push(...validateAssociatedItemForClose(sliceId, sliceBody, decisionId, 'decided', decision.body, 'decision'));
+
+  const evidenceAuditRefs = extractIds(getListFieldValue(decision.body, '证据'), AUDIT_REF_RE);
+  if (evidenceAuditRefs.length !== 1 || evidenceAuditRefs[0] !== auditId) {
+    errors.push(`close-check:${sliceId}: decision ${decisionId} evidence must point to current audit ${auditId}`);
+  }
+  const acceptance = parseSingleTopLevelField(decision.body, SHOULD_ACCEPTANCE_FIELD);
+  const expectedAcceptance = `${projection.runId}#${auditId}#${projection.shouldSetHash}`;
+  if (acceptance.values.length !== 1 || acceptance.value !== expectedAcceptance) {
+    errors.push(`close-check:${sliceId}: decision ${decisionId} ${SHOULD_ACCEPTANCE_FIELD} must be ${expectedAcceptance}`);
+  }
+  for (const field of ['结论', SHOULD_ACCEPTANCE_CONFIRMATION_FIELD]) {
+    const parsed = parseSingleTopLevelField(decision.body, field);
+    if (
+      parsed.values.length !== 1
+      || isPlaceholderText(parsed.value)
+      || hasTemplatePlaceholder(parsed.value)
+    ) {
+      errors.push(`close-check:${sliceId}: decision ${decisionId} ${field} must be non-placeholder`);
+    }
+  }
+  if (!verdict.note.includes(SHOULD_ACCEPTANCE_NOTE)) {
+    errors.push(`close-check:${sliceId}: SHOULD acceptance verdict note must state ${SHOULD_ACCEPTANCE_NOTE}`);
+  }
+  return errors;
+}
+
 function validateProjectRuleReviewAuditForClose(
   sliceId,
   auditId,
   auditBody,
   verdict,
   projectRuleReview,
+  projection,
+  sliceBody,
+  decisions,
   zeroKnownDefectsClosure,
 ) {
   const errors = [];
@@ -2648,40 +2902,106 @@ function validateProjectRuleReviewAuditForClose(
   if (auditRuleIds.length === 0) {
     errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} must list selectedRuleIds`);
   }
-  for (const ruleId of projectRuleReview.selectedRuleIds) {
-    if (!auditRuleIds.includes(ruleId)) {
-      errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} missing selectedRuleId ${ruleId}`);
-    }
+  if (
+    auditRuleIds.length !== projectRuleReview.selectedRuleIds.length
+    || projectRuleReview.selectedRuleIds.some((ruleId) => !auditRuleIds.includes(ruleId))
+  ) {
+    errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} selectedRuleIds must equal current project rules`);
   }
-  if (!validationPassed(validation)) {
-    errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} validation must be passed`);
+  if (!validateAuditDisplayCommand(validation, projection.runId, projection.runDir)) {
+    errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} validation must display the selected passed run`);
   }
-  if (auditVerdict !== verdict.status) {
-    errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} verdict must be ${verdict.status}`);
+  const expectedAuditVerdict = expectedRuleReviewVerdict(projection.recommendation);
+  if (auditVerdict !== expectedAuditVerdict) {
+    errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} verdict must be ${expectedAuditVerdict}`);
   }
   if (!REVIEW_VERDICT_SEVERITIES.has(severity)) {
     errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} must include valid severity`);
+  } else if (!isValidReviewVerdictCombination(auditVerdict, severity)) {
+    errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} has invalid verdict/severity ${auditVerdict}/${severity}`);
   }
   if (isPlaceholderText(summary)) {
     errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} must include summary`);
   }
+
+  const auditRunId = parseSingleTopLevelField(auditBody, 'rulesReviewRunId');
+  if (auditRunId.values.length !== 1 || auditRunId.value !== projection.runId) {
+    errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} rulesReviewRunId must be ${projection.runId}`);
+  }
+  const auditRecommendation = parseSingleTopLevelField(auditBody, 'recommendation');
+  if (
+    auditRecommendation.values.length !== 1
+    || auditRecommendation.value !== projection.recommendation
+  ) {
+    errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} recommendation must be ${projection.recommendation}`);
+  }
+  for (const metric of ['mustFix', 'shouldFix', 'cannotVerify']) {
+    const value = parseNonNegativeInteger(getListFieldValue(auditBody, metric));
+    if (value !== projection.issueSummary[metric]) {
+      errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} issueSummary.${metric} must be ${projection.issueSummary[metric]}`);
+    }
+  }
+  const auditShouldSetHash = parseSingleTopLevelField(auditBody, 'shouldSetHash');
+  if (projection.recommendation === SHOULD_REVIEW_RECOMMENDATION) {
+    if (auditShouldSetHash.values.length !== 1 || auditShouldSetHash.value !== projection.shouldSetHash) {
+      errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} shouldSetHash must match the selected run`);
+    }
+  } else if (auditShouldSetHash.values.length > 0) {
+    errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} must not include shouldSetHash`);
+  }
+
+  errors.push(...validateAssociatedItemForClose(sliceId, sliceBody, auditId, 'done', auditBody, 'audit'));
+
   if (zeroKnownDefectsClosure) {
-    const recommendation = getListFieldValue(auditBody, 'recommendation');
-    if (recommendation !== 'ready_for_merge') {
-      errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} zero-known-defects recommendation must be ready_for_merge, got ${recommendation || '<missing>'}`);
+    if (projection.recommendation !== 'ready_for_merge') {
+      errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} zero-known-defects recommendation must be ready_for_merge, got ${projection.recommendation}`);
     }
     for (const metric of ['mustFix', 'shouldFix', 'cannotVerify']) {
-      const value = getListFieldValue(auditBody, metric);
-      if (value !== '0') {
-        errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} zero-known-defects issueSummary.${metric} must be 0, got ${value || '<missing>'}`);
+      const value = projection.issueSummary[metric];
+      if (value !== 0) {
+        errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} zero-known-defects issueSummary.${metric} must be 0, got ${value}`);
       }
+    }
+  }
+
+  const isShouldAcceptance = projection.recommendation === SHOULD_REVIEW_RECOMMENDATION
+    && verdict.status === 'passed'
+    && !zeroKnownDefectsClosure;
+  if (isShouldAcceptance) {
+    if (
+      projection.issueSummary.mustFix !== 0
+      || projection.issueSummary.shouldFix <= 0
+      || projection.issueSummary.cannotVerify !== 0
+    ) {
+      errors.push(`close-check:${sliceId}: selected run is not eligible for complete SHOULD acceptance`);
+    }
+    errors.push(...validateShouldAcceptanceForClose(
+      sliceId,
+      sliceBody,
+      verdict,
+      auditId,
+      decisions,
+      projection,
+    ));
+  } else {
+    if (extractIds(verdict.evidence, DECISION_REF_RE).length > 0) {
+      errors.push(`close-check:${sliceId}: non-acceptance ${PROJECT_RULE_REVIEW_VERDICT} evidence must not reference D*`);
+    }
+    if (verdict.status !== auditVerdict || verdict.severity !== severity) {
+      errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} verdict must equal audit ${auditId} raw verdict`);
     }
   }
 
   return errors;
 }
 
-function validateProjectRuleReviewVerdictForClose(sliceId, sliceBody, audits, zeroKnownDefectsClosure) {
+async function validateProjectRuleReviewVerdictForClose(
+  sliceId,
+  sliceBody,
+  audits,
+  decisions,
+  zeroKnownDefectsClosure,
+) {
   const errors = [];
   const verdicts = parseReviewVerdicts(sliceBody);
   if (verdicts.missing || verdicts.invalid) return errors;
@@ -2694,32 +3014,32 @@ function validateProjectRuleReviewVerdictForClose(sliceId, sliceBody, audits, ze
     if (verdict.status === 'not-applicable') {
       errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} required cannot be not-applicable`);
     }
+    const selector = parseRulesReviewRunSelector(sliceBody);
+    if (selector.values.length !== 1 || !isSafeRulesReviewRunId(selector.runId)) {
+      errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} required needs one safe current runId selector`);
+      return errors;
+    }
+    const runResult = await readRulesReviewProjectionForClose(selector.runId);
+    errors.push(...runResult.errors.map((error) => `close-check:${sliceId}: ${error}`));
+
     const auditRefs = extractIds(verdict.evidence, AUDIT_REF_RE);
-    if (auditRefs.length === 0) {
-      errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} required evidence must reference A*`);
-    } else if (!auditRefs.some((auditId) => audits.has(auditId))) {
-      errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} evidence references missing audit ${auditRefs.join(', ')}`);
-    } else {
-      const auditErrors = [];
-      let hasValidAudit = false;
-      for (const auditId of auditRefs) {
-        const audit = audits.get(auditId);
-        if (!audit) continue;
-        const candidateErrors = validateProjectRuleReviewAuditForClose(
-          sliceId,
-          auditId,
-          audit.body,
-          verdict,
-          projectRuleReview,
-          zeroKnownDefectsClosure,
-        );
-        if (candidateErrors.length === 0) {
-          hasValidAudit = true;
-          break;
-        }
-        auditErrors.push(...candidateErrors);
-      }
-      if (!hasValidAudit) errors.push(...auditErrors);
+    if (auditRefs.length !== 1) {
+      errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} required evidence must reference exactly one A*`);
+    } else if (!audits.has(auditRefs[0])) {
+      errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} evidence references missing audit ${auditRefs[0]}`);
+    } else if (runResult.projection) {
+      const auditId = auditRefs[0];
+      errors.push(...validateProjectRuleReviewAuditForClose(
+        sliceId,
+        auditId,
+        audits.get(auditId).body,
+        verdict,
+        projectRuleReview,
+        runResult.projection,
+        sliceBody,
+        decisions,
+        zeroKnownDefectsClosure,
+      ));
     }
   }
 
@@ -2730,7 +3050,14 @@ function validateProjectRuleReviewVerdictForClose(sliceId, sliceBody, audits, ze
   return errors;
 }
 
-async function validateTaskHandoffForClose(planDir, sliceId, sliceBody, audits, zeroKnownDefectsClosure) {
+async function validateTaskHandoffForClose(
+  planDir,
+  sliceId,
+  sliceBody,
+  audits,
+  decisions,
+  zeroKnownDefectsClosure,
+) {
   const errors = [];
   const header = getSliceHeaderBlock(sliceBody);
   const risk = getField(header, '风险');
@@ -2792,10 +3119,11 @@ async function validateTaskHandoffForClose(planDir, sliceId, sliceBody, audits, 
     errors.push(...validateSliceReviewPackageFormat(reviewPackage.content)
       .map((error) => `close-check:${sliceId}: ${error}`));
   }
-  errors.push(...validateProjectRuleReviewVerdictForClose(
+  errors.push(...await validateProjectRuleReviewVerdictForClose(
     sliceId,
     sliceBody,
     audits,
+    decisions,
     zeroKnownDefectsClosure,
   ));
 
@@ -3237,6 +3565,7 @@ async function closeCheckPlan(planDir) {
         id,
         block.body,
         audits,
+        decisions,
         zeroKnownDefectsClosure,
       ));
     }

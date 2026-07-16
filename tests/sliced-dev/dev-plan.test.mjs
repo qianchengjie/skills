@@ -8,6 +8,10 @@ import { test } from 'node:test';
 
 import { __private__, diffCheckPlan, initPlan, validatePlan } from '../../skills/sliced-dev/scripts/dev-plan.mjs';
 
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const rulesReviewValidator = path.join(repoRoot, 'skills/rules-review/scripts/validate.js');
+const cleanRulesReviewFixture = path.join(repoRoot, 'tests/rules-review/fixtures/run-pass-full-clean');
+
 test('subagent 文档使用当前共享工作区契约', async () => {
   const [skill, implementer, reviewer, executionRules] = await Promise.all(
     ['SKILL.md', 'IMPLEMENTER-SUBAGENT.md', 'REVIEWER-SUBAGENT.md', 'EXECUTION-RULES.md']
@@ -383,10 +387,18 @@ function withUnavailableProjectRuleReview(plan) {
     - CORE-001：适用原因：当前切片修改核心流程。`);
 }
 
-function withPassedRequiredProjectRuleReviewVerdict(plan) {
-  return plan.replace(
+function withPassedRequiredProjectRuleReviewVerdict(plan, {
+  runId,
+  evidence = 'A2',
+  note = 'rules-review 结论 clean',
+} = {}) {
+  const updated = plan.replace(
     '| 项目规则审查 | not-applicable | not-applicable | 上下文预检 / 项目规则审查 | 本切片无适用项目规则 |',
-    '| 项目规则审查 | passed | not-applicable | A2 | rules-review 结论 clean |',
+    `| 项目规则审查 | passed | not-applicable | ${evidence} | ${note} |`,
+  );
+  return updated.replace(
+    '\n#### 门禁记录',
+    `\n- 项目规则审查 runId：${runId}\n\n#### 门禁记录`,
   );
 }
 
@@ -652,13 +664,15 @@ async function markWholeReviewPassed(planDir) {
 }
 
 async function appendProjectRuleReviewAudit(planDir, {
-  validation = 'node .agents/skills/rules-review/scripts/validate.js --mode run --dir .rules-review-tmp/S1 => passed',
+  runId,
+  validation = `node .agents/skills/rules-review/scripts/validate.js --mode run --dir .rules-review-tmp/${runId} => passed`,
   verdict = 'passed',
   severity = 'not-applicable',
   recommendation = 'ready_for_merge',
   mustFix = 0,
   shouldFix = 0,
   cannotVerify = 0,
+  shouldSetHash,
   summary = 'rules-review clean',
 } = {}) {
   const auditsPath = path.join(planDir, 'audits.md');
@@ -668,11 +682,13 @@ async function appendProjectRuleReviewAudit(planDir, {
     '- 关联：S1',
     '',
     '- selectedRuleIds: CORE-001',
+    `- rulesReviewRunId: ${runId}`,
   ];
   if (validation !== null) lines.push(`- validation: ${validation}`);
   if (verdict !== null) lines.push(`- verdict: ${verdict}`);
   if (severity !== null) lines.push(`- severity: ${severity}`);
   if (recommendation !== null) lines.push(`- recommendation: ${recommendation}`);
+  if (shouldSetHash !== undefined) lines.push(`- shouldSetHash: ${shouldSetHash}`);
   if (mustFix !== null || shouldFix !== null || cannotVerify !== null) {
     lines.push('- issueSummary:');
     if (mustFix !== null) lines.push(`  - mustFix: ${mustFix}`);
@@ -688,6 +704,66 @@ async function appendProjectRuleReviewAudit(planDir, {
 
 ${lines.join('\n')}
 `,
+    'utf8',
+  );
+  const planPath = path.join(planDir, 'plan.md');
+  const plan = await fs.readFile(planPath, 'utf8');
+  await fs.writeFile(
+    planPath,
+    plan.replace('| A1 | done |', '| A1 | done |\n| A2 | done |'),
+    'utf8',
+  );
+}
+
+async function appendShouldAcceptanceDecision(planDir, { runId, shouldSetHash } = {}) {
+  const decisionsPath = path.join(planDir, 'decisions.md');
+  const decisions = await fs.readFile(decisionsPath, 'utf8');
+  await fs.writeFile(
+    decisionsPath,
+    `${decisions.trimEnd()}
+
+### D2：接受当前规则审查剩余 SHOULD
+
+- 状态：decided
+- 关联：S1
+- SHOULD 接受：${runId}#A2#${shouldSetHash}
+- 结论：TYPE-001：响应字段类型约束缺口可能造成调用方类型误判，决定接受；UI-001：当前交互提示缺口可能降低可发现性，决定接受。
+- 证据：A2
+- 确认记录：会话消息 user-msg-20260716-should-accept：接受当前 run 的这两项剩余 SHOULD。
+`,
+    'utf8',
+  );
+  const planPath = path.join(planDir, 'plan.md');
+  const plan = await fs.readFile(planPath, 'utf8');
+  await fs.writeFile(
+    planPath,
+    plan.replace('| A2 | done |', '| A2 | done |\n| D2 | decided |'),
+    'utf8',
+  );
+}
+
+async function appendNonAcceptanceDecision(planDir) {
+  const decisionsPath = path.join(planDir, 'decisions.md');
+  const decisions = await fs.readFile(decisionsPath, 'utf8');
+  await fs.writeFile(
+    decisionsPath,
+    `${decisions.trimEnd()}
+
+### D2：非接受态记录
+
+- 状态：decided
+- 关联：S1
+- 结论：保留当前非接受 recommendation，不将其解释为剩余 SHOULD 的用户接受。
+- 证据：A2
+- 确认记录：会话消息 user-msg-20260716-non-acceptance：仅记录当前审查状态。
+`,
+    'utf8',
+  );
+  const planPath = path.join(planDir, 'plan.md');
+  const plan = await fs.readFile(planPath, 'utf8');
+  await fs.writeFile(
+    planPath,
+    plan.replace('| A2 | done |', '| A2 | done |\n| D2 | decided |'),
     'utf8',
   );
 }
@@ -711,7 +787,7 @@ function commitReviewableSliceDiffFixture() {
   execFileSync('git', ['commit', '-m', 'slice']);
 }
 
-async function writeCloseCheckHandoffFixtures(planDir, sliceId = 'S1') {
+async function writeCloseCheckHandoffFixtures(planDir, sliceId = 'S1', { rulesReview } = {}) {
   const planPath = path.join(planDir, 'plan.md');
   await fs.writeFile(
     planPath,
@@ -723,6 +799,14 @@ async function writeCloseCheckHandoffFixtures(planDir, sliceId = 'S1') {
   await prepareReviewableSliceDiffFixture();
   await writeGeneratedReviewPackageFixture(planDir, sliceId);
   await markSliceDone(planDir, sliceId);
+  if (rulesReview) {
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withPassedRequiredProjectRuleReviewVerdict(await fs.readFile(planPath, 'utf8'), rulesReview),
+      'utf8',
+    );
+  }
   commitReviewableSliceDiffFixture();
   await writeWholeReviewPackageFixture(planDir);
 }
@@ -731,6 +815,155 @@ function initGitRepo() {
   execFileSync('git', ['init']);
   execFileSync('git', ['config', 'user.email', 'test@example.com']);
   execFileSync('git', ['config', 'user.name', 'Test User']);
+}
+
+async function prepareRulesReviewRunFixture({
+  shouldFix = false,
+  multipleShouldFix = false,
+  mustFix = false,
+  cannotVerify = false,
+} = {}) {
+  const dispatch = JSON.parse(await fs.readFile(path.join(cleanRulesReviewFixture, 'dispatch.json'), 'utf8'));
+  const runId = dispatch.runId;
+  const runDir = path.join('.rules-review-tmp', runId);
+  await fs.mkdir(path.dirname(runDir), { recursive: true });
+  await fs.cp(cleanRulesReviewFixture, runDir, { recursive: true });
+
+  if (shouldFix || mustFix || cannotVerify) {
+    const shardPath = path.join(runDir, 'shards/B001.json');
+    const shard = JSON.parse(await fs.readFile(shardPath, 'utf8'));
+    const reviewItemId = mustFix ? 'RI001' : 'RI002';
+    const resultIndex = shard.results.findIndex((result) => result.reviewItemId === reviewItemId);
+    shard.results[resultIndex] = cannotVerify
+      ? {
+        reviewItemId,
+        status: 'cannot_verify',
+        reason: '缺少可运行的宿主环境，当前 package 无法完成验证。',
+      }
+      : {
+        reviewItemId,
+        status: 'finding',
+        origin: 'introduced_by_change',
+        evidence: [{
+          loc: mustFix ? 'src/example.ts:10' : 'src/example.ts:12',
+          summary: mustFix ? 'CORE-001 must finding' : 'TYPE-001 should finding',
+        }],
+      };
+    await fs.writeFile(shardPath, `${JSON.stringify(shard, null, 2)}\n`, 'utf8');
+    if (multipleShouldFix) {
+      shard.results[2] = {
+        reviewItemId: 'RI003',
+        status: 'finding',
+        origin: 'introduced_by_change',
+        evidence: [{
+          loc: 'src/example.ts:14',
+          summary: 'UI-001 second should finding',
+        }],
+        upgradeReason: '当前范围内存在可操作的 UI 回归。',
+      };
+      await fs.writeFile(shardPath, `${JSON.stringify(shard, null, 2)}\n`, 'utf8');
+    }
+    const aggregate = spawnSync(process.execPath, [
+      rulesReviewValidator,
+      '--mode',
+      'aggregate-final',
+      '--dir',
+      runDir,
+      '--output',
+      path.join(runDir, 'finalReview.json'),
+    ]);
+    assert.equal(aggregate.status, 0, aggregate.stderr.toString());
+    const render = spawnSync(process.execPath, [
+      rulesReviewValidator,
+      '--mode',
+      'render-final',
+      '--input',
+      path.join(runDir, 'finalReview.json'),
+      '--dispatch',
+      path.join(runDir, 'dispatch.json'),
+      '--output',
+      path.join(runDir, 'final.md'),
+    ]);
+    assert.equal(render.status, 0, render.stderr.toString());
+  }
+
+  const result = spawnSync(process.execPath, [rulesReviewValidator, '--mode', 'run', '--dir', runDir]);
+  assert.equal(result.status, 0, result.stderr.toString());
+  const gate = JSON.parse(result.stdout).gate;
+  const verdict = gate.recommendation === 'ready_for_merge'
+    ? 'passed'
+    : gate.recommendation === 'manual_verification_required'
+      ? 'cannot-verify-from-package'
+      : 'failed';
+  return {
+    runId,
+    recommendation: gate.recommendation,
+    verdict,
+    severity: verdict === 'passed'
+      ? 'not-applicable'
+      : gate.recommendation === 'manual_verification_required' ? 'major' : 'minor',
+    mustFix: gate.issueSummary.mustFix,
+    shouldFix: gate.issueSummary.shouldFix,
+    cannotVerify: gate.issueSummary.cannotVerify,
+    shouldSetHash: gate.shouldSetHash,
+  };
+}
+
+async function prepareNonPassingRulesReviewRunFixture(recommendation) {
+  const dispatch = JSON.parse(await fs.readFile(path.join(cleanRulesReviewFixture, 'dispatch.json'), 'utf8'));
+  const runId = dispatch.runId;
+  const runDir = path.join('.rules-review-tmp', runId);
+  await fs.mkdir(path.dirname(runDir), { recursive: true });
+  await fs.cp(cleanRulesReviewFixture, runDir, { recursive: true });
+  const currentDispatch = JSON.parse(await fs.readFile(path.join(runDir, 'dispatch.json'), 'utf8'));
+  const blocked = recommendation === 'review_blocked';
+  currentDispatch.reviewBatches[0].returnStatus = blocked ? 'format_invalid' : 'not_returned';
+  currentDispatch.reviewBatches[0].aggregateStatus = 'not_aggregated';
+  currentDispatch.reviewBatches[0].unaggregatedReason = blocked
+    ? 'reviewer returned an invalid artifact'
+    : 'reviewer has not returned';
+  await fs.writeFile(
+    path.join(runDir, 'dispatch.json'),
+    `${JSON.stringify(currentDispatch, null, 2)}\n`,
+    'utf8',
+  );
+
+  const aggregate = spawnSync(process.execPath, [
+    rulesReviewValidator,
+    '--mode',
+    'aggregate-final',
+    '--dir',
+    runDir,
+    '--output',
+    path.join(runDir, 'finalReview.json'),
+  ]);
+  assert.equal(aggregate.status, 1, aggregate.stderr.toString());
+  assert.equal(JSON.parse(aggregate.stdout).gate.recommendation, recommendation);
+  const render = spawnSync(process.execPath, [
+    rulesReviewValidator,
+    '--mode',
+    'render-final',
+    '--input',
+    path.join(runDir, 'finalReview.json'),
+    '--dispatch',
+    path.join(runDir, 'dispatch.json'),
+    '--output',
+    path.join(runDir, 'final.md'),
+  ]);
+  assert.equal(render.status, 0, render.stderr.toString());
+  const result = spawnSync(process.execPath, [rulesReviewValidator, '--mode', 'run', '--dir', runDir]);
+  assert.equal(result.status, 1, result.stderr.toString());
+  const gate = JSON.parse(result.stdout).gate;
+  assert.equal(gate.recommendation, recommendation);
+  return {
+    runId,
+    recommendation,
+    verdict: 'cannot-verify-from-package',
+    severity: 'major',
+    mustFix: gate.issueSummary.mustFix,
+    shouldFix: gate.issueSummary.shouldFix,
+    cannotVerify: gate.issueSummary.cannotVerify,
+  };
 }
 
 test('init creates directory plan files', async () => {
@@ -2366,6 +2599,21 @@ test('validate rejects required 项目规则审查 without available rules-revie
     assert(errors.some((error) => error.includes('required requires rules-review available')));
     assert(errors.some((error) => error.includes('required must keep resolved 规则获取')));
     assert(errors.some((error) => error.includes('required requires passed 规则校验')));
+  });
+});
+
+test('validate rejects skipped AI Review when project rule review is required', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-project-rule-review-skipped');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8'))
+      .replace('- 风险：B', '- 风险：A')
+      .replace('- AI Review：pending', '- AI Review：skipped（A 级文本切片）');
+    await fs.writeFile(planPath, plan, 'utf8');
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('项目规则审查 required cannot skip AI Review')));
   });
 });
 
@@ -4052,22 +4300,162 @@ test('CLI close-check requires project rule review A* evidence when required', a
     const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
     const planDir = path.join('dev-plans', '2026-06-10-close-check-rule-review-required');
     await writeValidExecutingPlan(planDir);
+    const rulesReview = await prepareRulesReviewRunFixture();
     let plan = withRequiredProjectRuleReview(await fs.readFile(path.join(planDir, 'plan.md'), 'utf8'));
     await fs.writeFile(path.join(planDir, 'plan.md'), plan, 'utf8');
-    await writeCloseCheckHandoffFixtures('dev-plans/2026-06-10-close-check-rule-review-required');
-    plan = withPassedRequiredProjectRuleReviewVerdict(
-      withClosedDoneSlice(await fs.readFile(path.join(planDir, 'plan.md'), 'utf8'), planDir),
+    await writeCloseCheckHandoffFixtures(
+      'dev-plans/2026-06-10-close-check-rule-review-required',
+      'S1',
+      { rulesReview },
     );
-    await fs.writeFile(path.join(planDir, 'plan.md'), plan, 'utf8');
     initGitRepo();
 
     const missingAudit = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-required']);
     assert.equal(missingAudit.status, 1, missingAudit.stderr.toString());
     assert.match(missingAudit.stderr.toString(), /项目规则审查 evidence references missing audit A2/);
 
-    await appendProjectRuleReviewAudit(planDir);
+    await appendProjectRuleReviewAudit(planDir, rulesReview);
     const passed = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-required']);
     assert.equal(passed.status, 0, passed.stderr.toString());
+
+    const auditsPath = path.join(planDir, 'audits.md');
+    await fs.writeFile(
+      auditsPath,
+      (await fs.readFile(auditsPath, 'utf8')).replace(
+        '- recommendation: ready_for_merge',
+        `- recommendation: ready_for_merge\n- shouldSetHash: sha256:${'0'.repeat(64)}`,
+      ),
+      'utf8',
+    );
+    const extraHash = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-required']);
+    assert.equal(extraHash.status, 1, extraHash.stderr.toString());
+    assert.match(extraHash.stderr.toString(), /must not include shouldSetHash/);
+  });
+});
+
+test('CLI close-check rejects acceptance D evidence for ready-for-merge runs', async () => {
+  await withTempRepo(async () => {
+    const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-ready-with-decision');
+    await writeValidExecutingPlan(planDir);
+    const rulesReview = await prepareRulesReviewRunFixture();
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
+      'utf8',
+    );
+    await writeCloseCheckHandoffFixtures(planDir, 'S1', { rulesReview });
+    await appendProjectRuleReviewAudit(planDir, rulesReview);
+    await appendShouldAcceptanceDecision(planDir, {
+      ...rulesReview,
+      shouldSetHash: `sha256:${'0'.repeat(64)}`,
+    });
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8')).replace(
+        '| 项目规则审查 | passed | not-applicable | A2 | rules-review 结论 clean |',
+        '| 项目规则审查 | passed | not-applicable | A2 / D2 | 用户接受当前 run 全部剩余 SHOULD |',
+      ),
+      'utf8',
+    );
+    initGitRepo();
+
+    const result = spawnSync('node', [script, 'close-check', planDir]);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /non-acceptance 项目规则审查 evidence must not reference D\*/);
+  });
+});
+
+test('CLI close-check rejects D evidence for manual runs and fails closed on unfinished runs', async () => {
+  await withTempRepo(async () => {
+    const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-manual-with-decision');
+    await writeValidExecutingPlan(planDir);
+    const rulesReview = await prepareRulesReviewRunFixture({ cannotVerify: true });
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
+      'utf8',
+    );
+    await writeCloseCheckHandoffFixtures(planDir, 'S1', { rulesReview });
+    await appendProjectRuleReviewAudit(planDir, rulesReview);
+    await appendNonAcceptanceDecision(planDir);
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8')).replace(
+        '| 项目规则审查 | passed | not-applicable | A2 |',
+        `| 项目规则审查 | ${rulesReview.verdict} | ${rulesReview.severity} | A2 / D2 |`,
+      ),
+      'utf8',
+    );
+    initGitRepo();
+
+    const result = spawnSync('node', [script, 'close-check', planDir]);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /项目规则审查 cannot-verify-from-package blocks done slice/);
+  });
+
+  for (const recommendation of ['review_incomplete', 'review_blocked']) {
+    await withTempRepo(async () => {
+      const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
+      const planDir = path.join('dev-plans', `2026-06-10-close-check-${recommendation.replaceAll('_', '-')}`);
+      await writeValidExecutingPlan(planDir);
+      const rulesReview = await prepareNonPassingRulesReviewRunFixture(recommendation);
+      const planPath = path.join(planDir, 'plan.md');
+      await fs.writeFile(
+        planPath,
+        withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
+        'utf8',
+      );
+      await writeCloseCheckHandoffFixtures(planDir, 'S1', { rulesReview });
+      await appendProjectRuleReviewAudit(planDir, rulesReview);
+      await appendNonAcceptanceDecision(planDir);
+      await fs.writeFile(
+        planPath,
+        (await fs.readFile(planPath, 'utf8')).replace(
+          '| 项目规则审查 | passed | not-applicable | A2 |',
+          '| 项目规则审查 | passed | not-applicable | A2 / D2 |',
+        ),
+        'utf8',
+      );
+      initGitRepo();
+
+      const result = spawnSync('node', [script, 'close-check', planDir]);
+      assert.equal(result.status, 1, `${recommendation}: ${result.stderr}`);
+      assert.match(result.stderr.toString(), /trusted rules-review validator failed/, recommendation);
+    });
+  }
+});
+
+test('CLI close-check fails closed when the isolated skill root lacks its trusted validator', async () => {
+  await withTempRepo(async () => {
+    const sourceScript = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-missing-rules-validator');
+    await writeValidExecutingPlan(planDir);
+    const rulesReview = await prepareRulesReviewRunFixture();
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
+      'utf8',
+    );
+    await writeCloseCheckHandoffFixtures(planDir, 'S1', { rulesReview });
+    await appendProjectRuleReviewAudit(planDir, rulesReview);
+    initGitRepo();
+
+    const isolatedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'sliced-dev-missing-validator-'));
+    try {
+      const isolatedScript = path.join(isolatedRoot, 'sliced-dev', 'scripts', 'dev-plan.mjs');
+      await fs.mkdir(path.dirname(isolatedScript), { recursive: true });
+      await fs.copyFile(sourceScript, isolatedScript);
+      const result = spawnSync('node', [await fs.realpath(isolatedScript), 'close-check', planDir]);
+      assert.equal(result.status, 1, result.stderr.toString());
+      assert.match(result.stderr.toString(), /trusted rules-review validator missing/);
+    } finally {
+      await fs.rm(isolatedRoot, { recursive: true, force: true });
+    }
   });
 });
 
@@ -4076,39 +4464,366 @@ test('CLI close-check blocks should-fix findings under zero-known-defects closur
     const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
     const planDir = path.join('dev-plans', '2026-06-10-close-check-zero-known-defects');
     await writeValidExecutingPlan(planDir);
+    const rulesReview = await prepareRulesReviewRunFixture({ shouldFix: true, multipleShouldFix: true });
     const planPath = path.join(planDir, 'plan.md');
     let plan = withZeroKnownDefectsClosure(
       withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
     );
     await fs.writeFile(planPath, plan, 'utf8');
-    await writeCloseCheckHandoffFixtures('dev-plans/2026-06-10-close-check-zero-known-defects');
-    plan = withPassedRequiredProjectRuleReviewVerdict(
-      withClosedDoneSlice(await fs.readFile(planPath, 'utf8'), planDir),
+    await writeCloseCheckHandoffFixtures(
+      'dev-plans/2026-06-10-close-check-zero-known-defects',
+      'S1',
+      { rulesReview },
     );
-    await fs.writeFile(planPath, plan, 'utf8');
     await appendProjectRuleReviewAudit(planDir, {
-      recommendation: 'should_review_before_merge',
-      shouldFix: 1,
+      ...rulesReview,
       summary: '存在 SHOULD finding',
     });
+    await appendShouldAcceptanceDecision(planDir, rulesReview);
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8')).replace(
+        '| 项目规则审查 | passed | not-applicable | A2 | rules-review 结论 clean |',
+        '| 项目规则审查 | passed | not-applicable | A2 / D2 | 用户接受当前 run 全部剩余 SHOULD |',
+      ),
+      'utf8',
+    );
     initGitRepo();
 
     const blocked = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-zero-known-defects']);
     assert.equal(blocked.status, 1, blocked.stderr.toString());
     assert.match(blocked.stderr.toString(), /zero-known-defects recommendation must be ready_for_merge/);
     assert.match(blocked.stderr.toString(), /zero-known-defects issueSummary.shouldFix must be 0/);
+    assert.match(blocked.stderr.toString(), /non-acceptance 项目规则审查 evidence must not reference D\*/);
 
+    const runDir = path.join('.rules-review-tmp', rulesReview.runId);
+    await fs.rm(runDir, { recursive: true, force: true });
+    await fs.cp(cleanRulesReviewFixture, runDir, { recursive: true });
     const auditsPath = path.join(planDir, 'audits.md');
     const audits = await fs.readFile(auditsPath, 'utf8');
     await fs.writeFile(
       auditsPath,
       audits
         .replace('recommendation: should_review_before_merge', 'recommendation: ready_for_merge')
-        .replace('shouldFix: 1', 'shouldFix: 0'),
+        .replace('verdict: failed', 'verdict: passed')
+        .replace('severity: minor', 'severity: not-applicable')
+        .replace(`shouldFix: ${rulesReview.shouldFix}`, 'shouldFix: 0')
+        .replace(/\n- shouldSetHash: sha256:[0-9a-f]{64}/, ''),
+      'utf8',
+    );
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8'))
+        .replace(
+          '| 项目规则审查 | passed | not-applicable | A2 / D2 | 用户接受当前 run 全部剩余 SHOULD |',
+          '| 项目规则审查 | passed | not-applicable | A2 | rules-review 结论 clean |',
+        )
+        .replace('\n| D2 | decided |', ''),
       'utf8',
     );
     const passed = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-zero-known-defects']);
     assert.equal(passed.status, 0, passed.stderr.toString());
+  });
+});
+
+test('CLI close-check binds complete default SHOULD acceptance and rejects stale projections', async () => {
+  await withTempRepo(async () => {
+    const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-should-acceptance');
+    await writeValidExecutingPlan(planDir);
+    const rulesReview = await prepareRulesReviewRunFixture({ shouldFix: true, multipleShouldFix: true });
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
+      'utf8',
+    );
+    await writeCloseCheckHandoffFixtures(planDir, 'S1', { rulesReview });
+
+    const marker = path.resolve('a-validation-must-not-run');
+    await appendProjectRuleReviewAudit(planDir, {
+      ...rulesReview,
+      validation: `node -e "require('node:fs').writeFileSync('${marker}','x')" --mode run --dir .rules-review-tmp/${rulesReview.runId} => passed`,
+      summary: '存在当前 run 的完整 SHOULD 集合',
+    });
+    await appendShouldAcceptanceDecision(planDir, rulesReview);
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8')).replace(
+        '| 项目规则审查 | passed | not-applicable | A2 | rules-review 结论 clean |',
+        '| 项目规则审查 | passed | not-applicable | A2 / D2 | 用户接受当前 run 全部剩余 SHOULD |',
+      ),
+      'utf8',
+    );
+    initGitRepo();
+
+    const runCloseCheck = () => spawnSync('node', [script, 'close-check', planDir]);
+    const accepted = runCloseCheck();
+    assert.equal(accepted.status, 0, accepted.stderr.toString());
+    assert.equal(await fs.stat(marker).then(() => true, () => false), false, 'A* validation command must not execute');
+
+    const baseline = {
+      plan: await fs.readFile(planPath, 'utf8'),
+      audits: await fs.readFile(path.join(planDir, 'audits.md'), 'utf8'),
+      decisions: await fs.readFile(path.join(planDir, 'decisions.md'), 'utf8'),
+    };
+    const mutations = [
+      {
+        name: 'missing D evidence',
+        file: 'plan',
+        mutate: (value) => value.replace('| A2 / D2 |', '| A2 |'),
+        expected: /exactly one D\*/,
+      },
+      {
+        name: 'multiple A evidence',
+        file: 'plan',
+        mutate: (value) => value.replace('| A2 / D2 |', '| A1 / A2 / D2 |'),
+        expected: /exactly one A\*/,
+      },
+      {
+        name: 'D association mismatch',
+        file: 'plan',
+        mutate: (value) => value.replace('| D2 | decided |', '| D2 | open |'),
+        expected: /status open differs from decisions\.md status decided|must enter current slice 关联项 as decided/,
+      },
+      {
+        name: 'D missing from current associations',
+        file: 'plan',
+        mutate: (value) => value.replace('\n| D2 | decided |', ''),
+        expected: /D2 must enter current slice 关联项 as decided/,
+      },
+      {
+        name: 'D belongs to another slice',
+        file: 'decisions',
+        mutate: (value) => value.replace(/(### D2：[\s\S]*?- 关联：)S1/, '$1S2'),
+        expected: /decision D2 must belong to current slice/,
+      },
+      {
+        name: 'D points at another audit',
+        file: 'decisions',
+        mutate: (value) => value.replace('- 证据：A2', '- 证据：A1'),
+        expected: /evidence must point to current audit A2/,
+      },
+      {
+        name: 'placeholder confirmation',
+        file: 'decisions',
+        mutate: (value) => value.replace(
+          '会话消息 user-msg-20260716-should-accept：接受当前 run 的这两项剩余 SHOULD。',
+          '<用户原话>',
+        ),
+        expected: /确认记录 must be non-placeholder/,
+      },
+      {
+        name: 'missing decision',
+        file: 'decisions',
+        mutate: (value) => value.replace(/\n### D2：[\s\S]*$/, '\n'),
+        expected: /missing decision D2|references missing decision D2/,
+      },
+      {
+        name: 'missing conclusion',
+        file: 'decisions',
+        mutate: (value) => value.replace(/(### D2：[\s\S]*?)\n- 结论：[^\n]*/, '$1'),
+        expected: /missing 结论|结论 must be non-placeholder/,
+      },
+      {
+        name: 'placeholder conclusion',
+        file: 'decisions',
+        mutate: (value) => value.replace(/(### D2：[\s\S]*?\n- 结论：)[^\n]*/, '$1<逐项结论>'),
+        expected: /结论 must be non-placeholder/,
+      },
+      {
+        name: 'stale acceptance hash',
+        file: 'decisions',
+        mutate: (value) => value.replace(rulesReview.shouldSetHash, `sha256:${'0'.repeat(64)}`),
+        expected: /SHOULD 接受 must be/,
+      },
+      {
+        name: 'old acceptance run token',
+        file: 'decisions',
+        mutate: (value) => value.replace(
+          `${rulesReview.runId}#A2#${rulesReview.shouldSetHash}`,
+          `${rulesReview.runId}-old#A2#${rulesReview.shouldSetHash}`,
+        ),
+        expected: /SHOULD 接受 must be/,
+      },
+      {
+        name: 'forged A projection',
+        file: 'audits',
+        mutate: (value) => value.replace(rulesReview.shouldSetHash, `sha256:${'1'.repeat(64)}`),
+        expected: /shouldSetHash must match/,
+      },
+      {
+        name: 'forged A runId',
+        file: 'audits',
+        mutate: (value) => value.replace(
+          `rulesReviewRunId: ${rulesReview.runId}`,
+          `rulesReviewRunId: ${rulesReview.runId}-old`,
+        ),
+        expected: /rulesReviewRunId must be/,
+      },
+      {
+        name: 'forged A recommendation',
+        file: 'audits',
+        mutate: (value) => value.replace(
+          'recommendation: should_review_before_merge',
+          'recommendation: ready_for_merge',
+        ),
+        expected: /recommendation must be should_review_before_merge/,
+      },
+      {
+        name: 'forged A issue count',
+        file: 'audits',
+        mutate: (value) => value.replace(
+          `shouldFix: ${rulesReview.shouldFix}`,
+          `shouldFix: ${rulesReview.shouldFix + 1}`,
+        ),
+        expected: /issueSummary\.shouldFix must be/,
+      },
+      {
+        name: 'missing A hash',
+        file: 'audits',
+        mutate: (value) => value.replace(`\n- shouldSetHash: ${rulesReview.shouldSetHash}`, ''),
+        expected: /shouldSetHash must match/,
+      },
+      {
+        name: 'open D',
+        file: 'decisions',
+        mutate: (value) => value.replace('- 状态：decided', '- 状态：open'),
+        expected: /must be decided|关联项状态与正文不一致|open decision/,
+      },
+      {
+        name: 'A missing from current associations',
+        file: 'plan',
+        mutate: (value) => value.replace('\n| A2 | done |', ''),
+        expected: /A2 must enter current slice 关联项 as done/,
+      },
+      {
+        name: 'A belongs to another slice',
+        file: 'audits',
+        mutate: (value) => value.replace(/(### A2：[\s\S]*?- 关联：)S1/, '$1S2'),
+        expected: /audit A2 must belong to current slice/,
+      },
+      {
+        name: 'old safe run selector',
+        file: 'plan',
+        mutate: (value) => value.replace(
+          `项目规则审查 runId：${rulesReview.runId}`,
+          `项目规则审查 runId：${rulesReview.runId}-old`,
+        ),
+        expected: /rules-review run directory missing/,
+      },
+      {
+        name: 'dot in run selector',
+        file: 'plan',
+        mutate: (value) => value.replace(rulesReview.runId, `${rulesReview.runId}.old`),
+        expected: /项目规则审查 runId selector is unsafe|safe current runId selector/,
+      },
+      {
+        name: 'unsafe run selector',
+        file: 'plan',
+        mutate: (value) => value.replace(rulesReview.runId, '../escape'),
+        expected: /项目规则审查 runId selector is unsafe|safe current runId selector/,
+      },
+    ];
+
+    for (const mutation of mutations) {
+      await Promise.all([
+        fs.writeFile(planPath, baseline.plan, 'utf8'),
+        fs.writeFile(path.join(planDir, 'audits.md'), baseline.audits, 'utf8'),
+        fs.writeFile(path.join(planDir, 'decisions.md'), baseline.decisions, 'utf8'),
+      ]);
+      const target = mutation.file === 'plan'
+        ? planPath
+        : path.join(planDir, `${mutation.file}.md`);
+      await fs.writeFile(target, mutation.mutate(baseline[mutation.file]), 'utf8');
+      const result = runCloseCheck();
+      assert.equal(result.status, 1, `${mutation.name}: ${result.stderr}`);
+      assert.match(result.stderr.toString(), mutation.expected, mutation.name);
+    }
+
+    await Promise.all([
+      fs.writeFile(planPath, baseline.plan, 'utf8'),
+      fs.writeFile(path.join(planDir, 'audits.md'), baseline.audits, 'utf8'),
+      fs.writeFile(path.join(planDir, 'decisions.md'), baseline.decisions, 'utf8'),
+    ]);
+    const runDir = path.join('.rules-review-tmp', rulesReview.runId);
+    const shardPath = path.join(runDir, 'shards/B001.json');
+    const shard = JSON.parse(await fs.readFile(shardPath, 'utf8'));
+    shard.results.find((result) => result.reviewItemId === 'RI002').evidence[0].summary = 'TYPE-001 replaced finding content';
+    await fs.writeFile(shardPath, `${JSON.stringify(shard, null, 2)}\n`, 'utf8');
+    const aggregate = spawnSync(process.execPath, [
+      rulesReviewValidator,
+      '--mode',
+      'aggregate-final',
+      '--dir',
+      runDir,
+      '--output',
+      path.join(runDir, 'finalReview.json'),
+    ]);
+    assert.equal(aggregate.status, 0, aggregate.stderr.toString());
+    const render = spawnSync(process.execPath, [
+      rulesReviewValidator,
+      '--mode',
+      'render-final',
+      '--input',
+      path.join(runDir, 'finalReview.json'),
+      '--dispatch',
+      path.join(runDir, 'dispatch.json'),
+      '--output',
+      path.join(runDir, 'final.md'),
+    ]);
+    assert.equal(render.status, 0, render.stderr.toString());
+    const changedRun = spawnSync(process.execPath, [rulesReviewValidator, '--mode', 'run', '--dir', runDir]);
+    assert.equal(changedRun.status, 0, changedRun.stderr.toString());
+    const changedGate = JSON.parse(changedRun.stdout).gate;
+    assert.equal(changedGate.issueSummary.shouldFix, rulesReview.shouldFix);
+    assert.notEqual(changedGate.shouldSetHash, rulesReview.shouldSetHash);
+    const replacedFinding = runCloseCheck();
+    assert.equal(replacedFinding.status, 1, replacedFinding.stderr.toString());
+    assert.match(replacedFinding.stderr.toString(), /shouldSetHash must match/);
+
+    await fs.rm(runDir, { recursive: true, force: true });
+    const restoredRulesReview = await prepareRulesReviewRunFixture({ shouldFix: true, multipleShouldFix: true });
+    assert.equal(restoredRulesReview.shouldSetHash, rulesReview.shouldSetHash);
+    const shardTarget = path.join('.rules-review-tmp', `${rulesReview.runId}-B001.json`);
+    await fs.copyFile(path.join(runDir, 'shards/B001.json'), shardTarget);
+    await fs.rm(path.join(runDir, 'shards/B001.json'));
+    await fs.symlink(path.resolve(shardTarget), path.join(runDir, 'shards/B001.json'), 'file');
+    const symlinkedArtifact = runCloseCheck();
+    assert.equal(symlinkedArtifact.status, 1, symlinkedArtifact.stderr.toString());
+    assert.match(
+      symlinkedArtifact.stderr.toString(),
+      /trusted rules-review validator failed[\s\S]*run tree must not contain symbolic links/,
+    );
+
+    const realRunDir = `${runDir}-real`;
+    await fs.rename(runDir, realRunDir);
+    await fs.symlink(path.resolve(realRunDir), runDir, 'dir');
+    const symlinkedRun = runCloseCheck();
+    assert.equal(symlinkedRun.status, 1, symlinkedRun.stderr.toString());
+    assert.match(symlinkedRun.stderr.toString(), /run directory must not be a symlink/);
+  });
+});
+
+test('CLI close-check does not borrow the SHOULD exception for must-fix runs', async () => {
+  await withTempRepo(async () => {
+    const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-must-fix');
+    await writeValidExecutingPlan(planDir);
+    const rulesReview = await prepareRulesReviewRunFixture({ mustFix: true });
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
+      'utf8',
+    );
+    await writeCloseCheckHandoffFixtures(planDir, 'S1', { rulesReview });
+    await appendProjectRuleReviewAudit(planDir, rulesReview);
+    initGitRepo();
+
+    const result = spawnSync('node', [script, 'close-check', planDir]);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /verdict must equal audit A2 raw verdict/);
   });
 });
 
@@ -4117,19 +4832,20 @@ test('CLI close-check rejects thin project rule review A* projection', async () 
     const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
     const planDir = path.join('dev-plans', '2026-06-10-close-check-rule-review-thin-audit');
     await writeValidExecutingPlan(planDir);
+    const rulesReview = await prepareRulesReviewRunFixture();
     let plan = withRequiredProjectRuleReview(await fs.readFile(path.join(planDir, 'plan.md'), 'utf8'));
     await fs.writeFile(path.join(planDir, 'plan.md'), plan, 'utf8');
-    await writeCloseCheckHandoffFixtures('dev-plans/2026-06-10-close-check-rule-review-thin-audit');
-    plan = withPassedRequiredProjectRuleReviewVerdict(
-      withClosedDoneSlice(await fs.readFile(path.join(planDir, 'plan.md'), 'utf8'), planDir),
+    await writeCloseCheckHandoffFixtures(
+      'dev-plans/2026-06-10-close-check-rule-review-thin-audit',
+      'S1',
+      { rulesReview },
     );
-    await fs.writeFile(path.join(planDir, 'plan.md'), plan, 'utf8');
-    await appendProjectRuleReviewAudit(planDir, { validation: null, severity: null });
+    await appendProjectRuleReviewAudit(planDir, { ...rulesReview, validation: null, severity: null });
     initGitRepo();
 
     const result = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-thin-audit']);
     assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /项目规则审查 audit A2 validation must be passed/);
+    assert.match(result.stderr.toString(), /项目规则审查 audit A2 validation must display the selected passed run/);
     assert.match(result.stderr.toString(), /项目规则审查 audit A2 must include valid severity/);
   });
 });

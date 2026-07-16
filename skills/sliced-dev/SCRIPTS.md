@@ -196,7 +196,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs rule-review-package dev-plans/Y
 
 规则包包含同一套 scope / diff / claims / task report / 硬门禁记录，并额外包含 `项目规则审查` 字段、selected rule IDs、resolved `规则获取` 命令和适用原因。规则包不内联 `get-rules` 输出、不复制规则正文、不包含 general reviewer 三 verdict；若切片正文已有旧 `#### AI Review 结论`，生成规则包时必须移除。Git inventory 命令或解析失败时规则包直接阻断，只有成功空 inventory 才生成空变更清单。controller 调用 `rules-review` 时，必须把 selectedRuleIds 映射为 `rules-review` 的 `selectedRuleRefs` 输入；controller 最终只消费 rule-reviewer fixed summary，不解析完整 rules-review 报告正文。
 
-fixed summary 还必须投影 `recommendation` 与 `issueSummary.mustFix / shouldFix / cannotVerify`。全局约束启用 `- 零已知缺陷收口：enabled` 时，`should_review_before_merge` 也必须返回失败 verdict 并进入有限修复，不能静默通过。
+fixed summary 必须投影同一当前 run 的 `rulesReviewRunId`、`recommendation` 与 `issueSummary.mustFix / shouldFix / cannotVerify`；仅 `should_review_before_merge` 还必须投影 validator 派生的 `shouldSetHash`。rule-reviewer 始终保留 raw verdict：`should_review_before_merge` 返回 `failed`，不能自行静默通过。controller 在 plan 的 `AI Review 结论` 写唯一安全的 `项目规则审查 runId`，并为每次重跑新建 A*；部分修复不得沿用旧 run / A*。全局约束启用 `- 零已知缺陷收口：enabled` 时必须进入有限修复，不能使用默认 SHOULD 接受例外。
 
 ## whole-review-package
 
@@ -302,7 +302,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/YYYY-MM-D
 - 每个 `done` slice 必须在 `#### 门禁记录` 中有 `diff-check` 结构化记录，`Status` 必须为 `passed`，`Command` 和 `Evidence` 必须非空、非占位。
 - 每个 `done` slice 必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确；最终 claim 状态必须是 `verified` 或 `waived`，不会从 task report 推断完成。
 - 每个 `done` 且 `AI Review：passed` 的 slice 必须存在非空 task brief、结论为 `ready-for-review` 的非空 task report、非空 review-package；JSON report 必须 schema valid；review-package 必须包含 Task Brief、Task Report、Claims、Git Diff 统计、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID；Git Diff 统计必须使用 `text` fence，Git Diff 必须使用 `diff` fence，允许无当前 dirty diff。
-- `AI Review：passed` 必须有四个固定 verdict；前三项不得为 `not-applicable`，各项必须满足 Status / Severity 固定组合；`项目规则审查：required` 时，第四 verdict 不能是 `not-applicable`，Evidence 必须引用存在的 A*，且 A* 至少包含 `selectedRuleIds`、`validation: <rules-review validate command> => passed`、`verdict`、`severity` 和 `summary`；启用 `零已知缺陷收口` 时，A* 还必须包含 `recommendation: ready_for_merge`，以及值均为 `0` 的 `issueSummary.mustFix / shouldFix / cannotVerify`；`项目规则审查：not-applicable` 时，第四 verdict 必须为 `not-applicable`，且上下文预检不得列出适用规则 ID；`项目规则审查：blocked` 时阻塞 `上下文预检：ready`、`AI Review：passed` 和 `状态：done`。
+- `AI Review：passed` 必须有四个固定 verdict；前三项不得为 `not-applicable`，各项必须满足 Status / Severity 固定组合。`项目规则审查：required` 时必须有唯一安全的 runId 选择器，第四 verdict Evidence 引用当前最终 A*；A* 投影 `selectedRuleIds`、`rulesReviewRunId`、展示用 validation、recommendation、三个 issueSummary 计数、条件性 `shouldSetHash`、raw verdict / severity 和 summary。`close-check` 不执行 A* validation，而是从当前 sliced-dev skill root 安全解析受信任 validator，对当前仓库 `.rules-review-tmp/<runId>` 重跑真实 `--mode run`，拒绝不安全、缺失、symlink / 逃逸路径、validator / finalReview 失败，并比较真实投影。默认 SHOULD 只有当前 `mustFix=0 / shouldFix>0 / cannotVerify=0` 且 A/D/Evidence/关联项/`<runId>#<A-id>#<shouldSetHash>`/非占位确认记录完整绑定时，第四 verdict 才可单独 `passed`；A* 保留 raw `failed`。启用 `零已知缺陷收口` 时只接受 `ready_for_merge` 且三个计数均为 `0`；其它 recommendation 不借用例外。`not-applicable` 时不得有选择器，第四 verdict 必须为 `not-applicable` 且不得列出适用规则 ID；`blocked` 阻塞收口。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。
 - 启用 `零已知缺陷收口` 时，所有执行型切片都必须完成 AI Review，A 类也不能使用 `AI Review：skipped`。
 - `整任务审查：passed` 或 `整任务审查：blocked` 时，`review-packages/whole-task.md` 必须存在、非空，且包含 `whole-review-package` 生成器承诺的顶层章节，包括 Reviewer Instructions、计划头、全局约束、切片概览、切片交接、Claims 概览、D/A 摘要与全文、切片 AI Review、Task Reports、变更文件、Git Diff 和整任务审查结论模板；`整任务审查：package-generated` 和 `整任务审查：blocked` 都阻塞 `close-check`。
@@ -383,6 +383,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - 若切片存在 `#### 切片交接`，必须包含 `输入`、`输出`，且每项必须显式写 `无` 或至少一条非占位内容；`无` 不得和真实条目混写。
 - `依赖` 不能声明当前切片自身；普通 `依赖：S*` 不强制触发 `#### 切片交接`。
 - 只要切片头部写 `AI Review：passed`，就必须有 `#### AI Review 结论`，且包含四个固定 verdict：`需求符合性`、`切片边界 / 交接一致性`、`代码质量 / AI 污染检查`、`项目规则审查`。
+- `项目规则审查：required` 且切片写 `AI Review：passed` / `状态：done` 时，`#### AI Review 结论` 必须且只能有一个安全的 `项目规则审查 runId`；`not-applicable` 时不得出现该选择器。
 - `#### AI Review 结论` 必须使用 `Verdict | Status | Severity | Evidence | Note` 五列格式；旧四列格式会被判为无效表格。
 - `AI Review：issues` / `AI Review：blocked` 必须有非占位头部原因，或在 `#### AI Review 结论` 中有 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位。
 - 前三个 verdict 的 `Status` 只允许 `passed` / `failed` / `cannot-verify-from-package`；第四项 `项目规则审查` 在预检不适用时额外允许 `not-applicable`；整任务五项额外允许 `blocked`，但不允许 `not-applicable`。`Severity` 只允许 `critical` / `major` / `minor` / `not-applicable`；`passed` / `not-applicable` 只能搭配 `Severity=not-applicable`，其余 Status 只能搭配 `critical` / `major` / `minor`。

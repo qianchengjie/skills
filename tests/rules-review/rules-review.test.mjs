@@ -1127,6 +1127,27 @@ fs.cpSync(path.join(fixtures, "run-pass-full-clean"), forbiddenRunScriptDir, { r
 fs.writeFileSync(path.join(forbiddenRunScriptDir, "generate.mjs"), "export {};\n");
 await assertRunDirFails(forbiddenRunScriptDir, /run directory must only contain rules-review protocol artifacts/);
 
+const symlinkedRunTarget = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-symlinked-run-target-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), symlinkedRunTarget, { recursive: true });
+const symlinkedRunDir = `${symlinkedRunTarget}-link`;
+fs.symlinkSync(symlinkedRunTarget, symlinkedRunDir, "dir");
+await assertRunDirFails(symlinkedRunDir, /run directory must not be a symbolic link/);
+
+const symlinkedShardDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-symlinked-shard-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), symlinkedShardDir, { recursive: true });
+const symlinkedShardTarget = path.join(path.dirname(symlinkedShardDir), `${path.basename(symlinkedShardDir)}-B001.json`);
+fs.writeFileSync(symlinkedShardTarget, "not JSON\n");
+fs.rmSync(path.join(symlinkedShardDir, "shards/B001.json"));
+fs.symlinkSync(symlinkedShardTarget, path.join(symlinkedShardDir, "shards/B001.json"), "file");
+await assertRunDirFails(symlinkedShardDir, /run tree must not contain symbolic links|symbolic link is forbidden/);
+
+const symlinkedArtifactsDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-symlinked-artifacts-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), symlinkedArtifactsDir, { recursive: true });
+const realShardsDir = `${symlinkedArtifactsDir}-shards`;
+fs.renameSync(path.join(symlinkedArtifactsDir, "shards"), realShardsDir);
+fs.symlinkSync(realShardsDir, path.join(symlinkedArtifactsDir, "shards"), "dir");
+await assertRunDirFails(symlinkedArtifactsDir, /run tree must not contain symbolic links|symbolic link is forbidden/);
+
 const shouldFixDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-should-fix-"));
 fs.cpSync(path.join(fixtures, "run-pass-full-clean"), shouldFixDir, { recursive: true });
 const shouldFixShardPath = path.join(shouldFixDir, "shards/B001.json");
@@ -1163,6 +1184,113 @@ const shouldFixPass = await runValidate(["--mode", "run", "--dir", shouldFixDir]
 const shouldFixOutput = JSON.parse(shouldFixPass.stdout);
 assert.deepEqual(shouldFixOutput.gate.issueSummary, issueSummary({ findings: 1, shouldFix: 1 }));
 assert.equal(shouldFixOutput.gate.recommendation, "should_review_before_merge");
+const expectedShouldSetHash = hashBytes(Buffer.from(JSON.stringify([{
+  evidence: [{ loc: "src/example.ts:12", summary: "TYPE-001 should finding" }],
+  findingId: "F001",
+  origin: "introduced_by_change",
+  priority: "should_fix",
+  reviewItemId: "RI002",
+  ruleLevel: "SHOULD",
+  ruleRef: "TYPE-001",
+  targetId: "T002",
+}])));
+assert.equal(shouldFixOutput.gate.shouldSetHash, expectedShouldSetHash);
+
+const reorderedShouldFixDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-should-fix-reordered-"));
+fs.cpSync(shouldFixDir, reorderedShouldFixDir, { recursive: true });
+const reorderedShouldFixPath = path.join(reorderedShouldFixDir, "finalReview.json");
+const reorderedShouldFix = readJson(reorderedShouldFixPath);
+reorderedShouldFix.findings[0] = {
+  targetId: "T002",
+  ruleRef: "TYPE-001",
+  evidence: [{ summary: "TYPE-001 should finding", loc: "src/example.ts:12" }],
+  priority: "should_fix",
+  origin: "introduced_by_change",
+  ruleLevel: "SHOULD",
+  reviewItemId: "RI002",
+  findingId: "F001",
+};
+writeJson(reorderedShouldFixPath, reorderedShouldFix);
+const reorderedShouldFixOutput = JSON.parse((await runValidate([
+  "--mode",
+  "run",
+  "--dir",
+  reorderedShouldFixDir,
+])).stdout);
+assert.equal(reorderedShouldFixOutput.gate.shouldSetHash, expectedShouldSetHash);
+
+const multipleShouldFixDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-multiple-should-fix-"));
+fs.cpSync(shouldFixDir, multipleShouldFixDir, { recursive: true });
+const multipleShouldFixShardPath = path.join(multipleShouldFixDir, "shards/B001.json");
+const multipleShouldFixShard = readJson(multipleShouldFixShardPath);
+multipleShouldFixShard.results[2] = {
+  reviewItemId: "RI003",
+  status: "finding",
+  origin: "introduced_by_change",
+  evidence: [{ loc: "src/example.ts:14", summary: "UI-001 second should finding" }],
+  upgradeReason: "UI regression is actionable in the current scope.",
+};
+writeJson(multipleShouldFixShardPath, multipleShouldFixShard);
+await runValidate([
+  "--mode",
+  "aggregate-final",
+  "--dir",
+  multipleShouldFixDir,
+  "--output",
+  path.join(multipleShouldFixDir, "finalReview.json"),
+]);
+await renderFinalInDir(multipleShouldFixDir);
+const multipleShouldFixOutput = JSON.parse((await runValidate([
+  "--mode",
+  "run",
+  "--dir",
+  multipleShouldFixDir,
+])).stdout);
+const expectedMultipleShouldSetHash = hashBytes(Buffer.from(JSON.stringify([
+  {
+    evidence: [{ loc: "src/example.ts:12", summary: "TYPE-001 should finding" }],
+    findingId: "F001",
+    origin: "introduced_by_change",
+    priority: "should_fix",
+    reviewItemId: "RI002",
+    ruleLevel: "SHOULD",
+    ruleRef: "TYPE-001",
+    targetId: "T002",
+  },
+  {
+    evidence: [{ loc: "src/example.ts:14", summary: "UI-001 second should finding" }],
+    findingId: "F002",
+    origin: "introduced_by_change",
+    priority: "should_fix",
+    reviewItemId: "RI003",
+    ruleLevel: "ADVISORY",
+    ruleRef: "UI-001",
+    targetId: "T002",
+    upgradeReason: "UI regression is actionable in the current scope.",
+  },
+])));
+assert.equal(multipleShouldFixOutput.gate.issueSummary.shouldFix, 2);
+assert.equal(multipleShouldFixOutput.gate.shouldSetHash, expectedMultipleShouldSetHash);
+
+multipleShouldFixShard.results[1].evidence[0].summary = "TYPE-001 changed should finding content";
+writeJson(multipleShouldFixShardPath, multipleShouldFixShard);
+await runValidate([
+  "--mode",
+  "aggregate-final",
+  "--dir",
+  multipleShouldFixDir,
+  "--output",
+  path.join(multipleShouldFixDir, "finalReview.json"),
+]);
+await renderFinalInDir(multipleShouldFixDir);
+const changedMultipleShouldFixOutput = JSON.parse((await runValidate([
+  "--mode",
+  "run",
+  "--dir",
+  multipleShouldFixDir,
+])).stdout);
+assert.equal(changedMultipleShouldFixOutput.gate.issueSummary.shouldFix, 2);
+assert.notEqual(changedMultipleShouldFixOutput.gate.shouldSetHash, expectedMultipleShouldSetHash);
 
 const shouldPriorityOverrideDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-should-priority-override-"));
 fs.cpSync(shouldFixDir, shouldPriorityOverrideDir, { recursive: true });
