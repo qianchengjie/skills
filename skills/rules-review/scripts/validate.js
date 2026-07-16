@@ -1002,8 +1002,9 @@ function validateExecutionPlan(executionPlan, dispatch, ruleSet, reviewItems, ar
     'humanOverride',
   ]);
 
-  if (!EXECUTION_MODES.includes(executionPlan.mode)) {
-    addViolation(result, 'D102', artifact, '/executionPlan/mode', 'executionPlan.mode must be valid', EXECUTION_MODES, executionPlan.mode);
+  const allowedModes = dispatch && dispatch.schemaVersion === 3 ? ['no_batch', ...EXECUTION_MODES] : EXECUTION_MODES;
+  if (!allowedModes.includes(executionPlan.mode)) {
+    addViolation(result, 'D102', artifact, '/executionPlan/mode', 'executionPlan.mode must be valid', allowedModes, executionPlan.mode);
   }
   if (!EXECUTION_SELECTED_BY.includes(executionPlan.selectedBy)) {
     addViolation(result, 'D103', artifact, '/executionPlan/selectedBy', 'executionPlan.selectedBy must be valid', EXECUTION_SELECTED_BY, executionPlan.selectedBy);
@@ -1013,6 +1014,20 @@ function validateExecutionPlan(executionPlan, dispatch, ruleSet, reviewItems, ar
   }
   if (!isNonEmptyString(executionPlan.reason)) {
     addViolation(result, 'D105', artifact, '/executionPlan/reason', 'executionPlan.reason must be non-empty string', 'non-empty reason', executionPlan.reason);
+  }
+  if (executionPlan.mode === 'no_batch') {
+    if (reviewItems.size !== 0) {
+      addViolation(result, 'D106', artifact, '/reviewItems', 'no_batch requires empty current reviewItems', [], asArray(dispatch && dispatch.reviewItems));
+    }
+    if (executionPlan.selectedBy !== 'ai') {
+      addViolation(result, 'D107', artifact, '/executionPlan/selectedBy', 'no_batch must be selected by ai', 'ai', executionPlan.selectedBy);
+    }
+    if (executionPlan.humanOverride !== null) {
+      addViolation(result, 'D108', artifact, '/executionPlan/humanOverride', 'no_batch forbids human override', null, executionPlan.humanOverride);
+    }
+    if (dispatch && Object.prototype.hasOwnProperty.call(dispatch, 'continuation')) {
+      addViolation(result, 'D109', artifact, '/continuation', 'internal no_batch dispatch must be full and forbid continuation', 'field absent', dispatch.continuation);
+    }
   }
 
   validateExecutionMetrics(executionPlan.metrics, dispatch, ruleSet, reviewItems, artifact, result);
@@ -1091,6 +1106,12 @@ function validateHumanOverride(executionPlan, artifact, result) {
 
 function validateExecutionModeAgainstPolicy(executionPlan, dispatch, artifact, result) {
   const batchCount = asArray(dispatch && dispatch.reviewBatches).length;
+  if (executionPlan.mode === 'no_batch') {
+    if (batchCount !== 0) {
+      addViolation(result, 'D139', artifact, '/reviewBatches', 'no_batch executionPlan requires zero reviewBatches', 0, batchCount);
+    }
+    return;
+  }
   if (executionPlan.mode === 'single_batch' && batchCount !== 1) {
     addViolation(result, 'D140', artifact, '/reviewBatches', 'single_batch executionPlan requires exactly one reviewBatch', 1, batchCount);
   }
@@ -1454,6 +1475,16 @@ function validateRunArtifacts(runDir, dispatch, result) {
   const results = [];
   const resultOwners = new Map();
 
+  if (dispatch.executionPlan && dispatch.executionPlan.mode === 'no_batch') {
+    const reviewerArtifacts = collectFiles(runDir)
+      .map((filePath) => rel(runDir, filePath))
+      .filter((relativePath) => /^(tasks|retries|shards)\/.+\.json$/.test(relativePath));
+    if (reviewerArtifacts.length > 0) {
+      addViolation(result, 'RUN009', rel(runDir, 'dispatch.json'), null, 'no_batch run must not contain reviewer JSON artifacts', [], reviewerArtifacts);
+    }
+    return { results, resultOwners };
+  }
+
   validateRetryArtifacts(runDir, dispatch, result);
 
   asArray(dispatch.reviewBatches).forEach((batch, batchIndex) => {
@@ -1804,6 +1835,13 @@ function buildTasksMode(args, result) {
 
   const outputDir = path.resolve(args.out);
   const tasks = buildTasks(dispatch);
+  if (dispatch.executionPlan && dispatch.executionPlan.mode === 'no_batch' && fs.existsSync(outputDir)) {
+    const existingTasks = collectFiles(outputDir).filter((filePath) => filePath.endsWith('.json'));
+    if (existingTasks.length > 0) {
+      addViolation(result, 'BT002', args.out, '/out', 'no_batch build-tasks requires an empty JSON output directory', [], existingTasks.map((filePath) => path.relative(outputDir, filePath)));
+      return;
+    }
+  }
   fs.mkdirSync(outputDir, { recursive: true });
   const written = [];
   const reviewItems = new Map(asArray(dispatch.reviewItems).map((item) => [item.reviewItemId, item]));

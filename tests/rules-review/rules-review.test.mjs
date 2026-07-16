@@ -147,7 +147,7 @@ function hashBytes(bytes) {
   return `sha256:${crypto.createHash("sha256").update(bytes).digest("hex")}`;
 }
 
-function createV3RunFixture({ changedFiles, inputRefs = ["src/example.js", "src/deleted.js"] } = {}) {
+function createV3RunFixture({ changedFiles, inputRefs = ["src/example.js", "src/deleted.js"], noBatch = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-v3-"));
   const runDir = path.join(root, ".rules-review-tmp", "run");
   fs.mkdirSync(path.dirname(runDir), { recursive: true });
@@ -175,6 +175,36 @@ function createV3RunFixture({ changedFiles, inputRefs = ["src/example.js", "src/
     target.inputRefs = inputRefs;
     target.contentHash = `sha256:${"f".repeat(64)}`;
   });
+  if (noBatch) {
+    Object.assign(dispatch.ruleSet, {
+      candidateRuleRefs: [],
+      selectedRuleRefs: [],
+      requiredRuleRefs: [],
+      excludedRuleRefs: [],
+      globallyNotApplicableRuleRefs: [],
+      ruleSources: [],
+    });
+    dispatch.applicabilityMatrix = [];
+    dispatch.reviewItems = [];
+    dispatch.executionPlan = {
+      mode: "no_batch",
+      selectedBy: "ai",
+      policyVersion: "review-execution-policy/v1",
+      metrics: {
+        changedUnits: dispatch.targets.changedUnits.length,
+        candidates: dispatch.targets.candidates.length,
+        targets: dispatch.targets.changedUnits.length + dispatch.targets.candidates.length,
+        requiredRuleRefs: 0,
+        reviewItems: 0,
+      },
+      signals: { userRequestedConcurrency: true },
+      reason: "No current review items",
+      humanOverride: null,
+    };
+    dispatch.reviewBatches = [];
+    ["tasks", "retries", "shards"].forEach((dir) => fs.rmSync(path.join(runDir, dir), { recursive: true, force: true }));
+    ["finalReview.json", "final.md", "response.md"].forEach((file) => fs.rmSync(path.join(runDir, file), { force: true }));
+  }
   writeJson(dispatchPath, dispatch);
 
   git(root, ["init", "-q"]);
@@ -334,6 +364,164 @@ function v3ConsumerCommands(runDir, dispatchPath) {
     fs.writeFileSync(path.join(runDir, "protocol-note.txt"), "excluded protocol artifact\n");
     await runValidate(["--mode", "seal-dispatch", "--input", dispatchPath]);
     assert.deepEqual(readJson(dispatchPath).changedFiles, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  const { root, runDir, dispatchPath } = createV3RunFixture({ noBatch: true });
+  const codePath = path.join(root, "src", "example.js");
+  try {
+    await runValidate(["--mode", "seal-dispatch", "--input", dispatchPath]);
+    const sealed = readJson(dispatchPath);
+    assert.equal(sealed.schemaVersion, 3);
+    assert.equal(sealed.executionPlan.mode, "no_batch");
+    assert.equal(sealed.executionPlan.selectedBy, "ai");
+    assert.equal(sealed.executionPlan.policyVersion, "review-execution-policy/v1");
+    assert.equal(sealed.executionPlan.signals.userRequestedConcurrency, true);
+    assert.equal(sealed.executionPlan.humanOverride, null);
+    assert.deepEqual(sealed.reviewItems, []);
+    assert.deepEqual(sealed.reviewBatches, []);
+
+    const invalidDispatches = [
+      {
+        pattern: /executionPlan\.mode must be valid/,
+        mutate: (dispatch) => { dispatch.schemaVersion = 2; },
+      },
+      {
+        pattern: /single_batch executionPlan requires exactly one reviewBatch/,
+        mutate: (dispatch) => { dispatch.executionPlan.mode = "single_batch"; },
+      },
+      {
+        pattern: /multi_batch executionPlan requires at least two reviewBatches/,
+        mutate: (dispatch) => { dispatch.executionPlan.mode = "multi_batch"; },
+      },
+      {
+        pattern: /no_batch must be selected by ai/,
+        mutate: (dispatch) => {
+          dispatch.executionPlan.selectedBy = "human_override";
+          dispatch.executionPlan.humanOverride = { requestedMode: "single_batch", risk: "Manual override" };
+        },
+      },
+      {
+        pattern: /humanOverride\.requestedMode must be valid/,
+        mutate: (dispatch) => {
+          dispatch.executionPlan.selectedBy = "human_override";
+          dispatch.executionPlan.humanOverride = { requestedMode: "no_batch", risk: "Manual override" };
+        },
+      },
+      {
+        pattern: /no_batch forbids human override/,
+        mutate: (dispatch) => {
+          dispatch.executionPlan.humanOverride = { requestedMode: "single_batch", risk: "Manual override" };
+        },
+      },
+      {
+        pattern: /internal no_batch dispatch must be full and forbid continuation/,
+        mutate: (dispatch) => { dispatch.continuation = { baseRunId: "R001" }; },
+      },
+    ];
+    for (const { mutate, pattern } of invalidDispatches) {
+      const invalid = JSON.parse(JSON.stringify(sealed));
+      mutate(invalid);
+      writeJson(dispatchPath, invalid);
+      await assertValidateFails(["--mode", "dispatch", "--input", dispatchPath], pattern);
+    }
+    writeJson(dispatchPath, sealed);
+
+    const dispatchResult = await runValidate(["--mode", "dispatch", "--input", dispatchPath]);
+    assert.equal(JSON.parse(dispatchResult.stdout).ok, true);
+
+    const tasksDir = path.join(runDir, "tasks");
+    const builtTasks = await runValidate(["--mode", "build-tasks", "--dispatch", dispatchPath, "--out", tasksDir]);
+    assert.deepEqual(JSON.parse(builtTasks.stdout).rendered, []);
+    assert.deepEqual(fs.readdirSync(tasksDir), []);
+
+    const staleTaskPath = path.join(tasksDir, "stale.json");
+    writeJson(staleTaskPath, {});
+    await assertValidateFails(
+      ["--mode", "build-tasks", "--dispatch", dispatchPath, "--out", tasksDir],
+      /no_batch build-tasks requires an empty JSON output directory/,
+    );
+    assert.equal(fs.existsSync(staleTaskPath), true);
+    fs.rmSync(staleTaskPath);
+
+    const finalReviewPath = path.join(runDir, "finalReview.json");
+    const aggregate = await runValidate(["--mode", "aggregate-final", "--dir", runDir, "--output", finalReviewPath]);
+    assert.equal(JSON.parse(aggregate.stdout).ok, true);
+    const finalReview = readJson(finalReviewPath);
+    assert.equal(finalReview.protocolGate, "passed");
+    assert.equal(finalReview.semanticVerdict, "clean");
+    assert.equal(finalReview.recommendation, "ready_for_merge");
+    assert.deepEqual(finalReview.findings, []);
+    assert.deepEqual(finalReview.observations, []);
+    assert.deepEqual(finalReview.issueSummary, issueSummary());
+
+    await renderFinalInDir(runDir);
+    const runResult = await runValidate(["--mode", "run", "--dir", runDir]);
+    assert.equal(JSON.parse(runResult.stdout).ok, true);
+    const responseResult = await runValidate(["--mode", "render-response", "--dir", runDir]);
+    assert.equal(JSON.parse(responseResult.stdout).ok, true);
+    const finalMarkdownResult = await runValidate([
+      "--mode", "final-md",
+      "--input", path.join(runDir, "final.md"),
+      "--final-review", finalReviewPath,
+      "--dispatch", dispatchPath,
+    ]);
+    assert.equal(JSON.parse(finalMarkdownResult.stdout).ok, true);
+    assert.match(fs.readFileSync(path.join(runDir, "final.md"), "utf8"), /mode：no_batch/);
+
+    for (const dir of ["tasks", "retries", "shards"]) {
+      const orphanPath = path.join(runDir, dir, "orphan.json");
+      fs.mkdirSync(path.dirname(orphanPath), { recursive: true });
+      writeJson(orphanPath, {});
+      await assertValidateFails(
+        ["--mode", "aggregate-final", "--dir", runDir, "--output", finalReviewPath],
+        /no_batch run must not contain reviewer JSON artifacts/,
+      );
+      await assertValidateFails(["--mode", "run", "--dir", runDir], /no_batch run must not contain reviewer JSON artifacts/);
+      await assertValidateFails(["--mode", "render-response", "--dir", runDir], /no_batch run must not contain reviewer JSON artifacts/);
+      fs.rmSync(orphanPath);
+      await runValidate(["--mode", "aggregate-final", "--dir", runDir, "--output", finalReviewPath]);
+      await renderFinalInDir(runDir);
+    }
+
+    fs.writeFileSync(codePath, "tampered code\n");
+    for (const command of v3ConsumerCommands(runDir, dispatchPath)) {
+      await assertValidateFails(command, /current Git worktree input verification failed closed/);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  const { root, dispatchPath } = createV3RunFixture();
+  try {
+    await runValidate(["--mode", "seal-dispatch", "--input", dispatchPath]);
+    const sealed = readJson(dispatchPath);
+
+    const nonEmptyNoBatch = JSON.parse(JSON.stringify(sealed));
+    nonEmptyNoBatch.executionPlan.mode = "no_batch";
+    nonEmptyNoBatch.reviewBatches = [];
+    writeJson(dispatchPath, nonEmptyNoBatch);
+    await assertValidateFails(["--mode", "dispatch", "--input", dispatchPath], /no_batch requires empty current reviewItems/);
+
+    const nonZeroNoBatch = JSON.parse(JSON.stringify(sealed));
+    nonZeroNoBatch.executionPlan.mode = "no_batch";
+    writeJson(dispatchPath, nonZeroNoBatch);
+    await assertValidateFails(["--mode", "dispatch", "--input", dispatchPath], /no_batch executionPlan requires zero reviewBatches/);
+
+    const multiNoBatch = JSON.parse(JSON.stringify(sealed));
+    const [firstItemId, ...remainingItemIds] = multiNoBatch.reviewBatches[0].reviewItemIds;
+    multiNoBatch.executionPlan.mode = "no_batch";
+    multiNoBatch.reviewBatches = [
+      { ...multiNoBatch.reviewBatches[0], reviewItemIds: [firstItemId] },
+      { ...multiNoBatch.reviewBatches[0], reviewBatchId: "B002", reviewItemIds: remainingItemIds, taskRef: "tasks/B002.json" },
+    ];
+    writeJson(dispatchPath, multiNoBatch);
+    await assertValidateFails(["--mode", "dispatch", "--input", dispatchPath], /no_batch executionPlan requires zero reviewBatches/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

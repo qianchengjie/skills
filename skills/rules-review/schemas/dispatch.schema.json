@@ -56,6 +56,55 @@
         "properties": { "schemaVersion": { "const": 3 } }
       },
       "then": { "required": ["changedFiles", "inputSnapshot"] }
+    },
+    {
+      "if": {
+        "required": ["executionPlan"],
+        "properties": {
+          "executionPlan": {
+            "required": ["mode"],
+            "properties": { "mode": { "const": "no_batch" } }
+          }
+        }
+      },
+      "then": {
+        "not": { "required": ["continuation"] },
+        "properties": {
+          "schemaVersion": { "const": 3 },
+          "reviewItems": { "maxItems": 0 },
+          "reviewBatches": { "maxItems": 0 },
+          "executionPlan": {
+            "properties": {
+              "selectedBy": { "const": "ai" },
+              "humanOverride": { "type": "null" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["executionPlan"],
+        "properties": {
+          "executionPlan": {
+            "required": ["mode"],
+            "properties": { "mode": { "const": "single_batch" } }
+          }
+        }
+      },
+      "then": { "properties": { "reviewBatches": { "minItems": 1, "maxItems": 1 } } }
+    },
+    {
+      "if": {
+        "required": ["executionPlan"],
+        "properties": {
+          "executionPlan": {
+            "required": ["mode"],
+            "properties": { "mode": { "const": "multi_batch" } }
+          }
+        }
+      },
+      "then": { "properties": { "reviewBatches": { "minItems": 2 } } }
     }
   ],
   "$defs": {
@@ -63,7 +112,7 @@
       "type": "object",
       "required": ["mode", "selectedBy", "policyVersion", "metrics", "signals", "reason", "humanOverride"],
       "properties": {
-        "mode": { "enum": ["single_batch", "multi_batch"] },
+        "mode": { "enum": ["no_batch", "single_batch", "multi_batch"] },
         "selectedBy": { "enum": ["ai", "human_override"] },
         "policyVersion": { "const": "review-execution-policy/v1" },
         "metrics": { "$ref": "#/$defs/executionMetrics" },
