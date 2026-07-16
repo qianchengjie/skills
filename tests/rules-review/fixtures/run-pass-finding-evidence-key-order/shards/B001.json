@@ -7,7 +7,6 @@
     {
       "reviewItemId": "RI001",
       "status": "finding",
-      "findingId": "F001",
       "evidence": [
         {
           "summary": "CORE-001 finding evidence",

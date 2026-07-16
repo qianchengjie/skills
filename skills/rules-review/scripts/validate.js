@@ -40,7 +40,7 @@ const EXECUTION_SELECTED_BY = ['ai', 'human_override'];
 const APPLICABILITY_STATUSES = ['applicable', 'not_applicable'];
 const FAILURE_CHECK_OUTCOMES = ['checked_no_violation', 'not_triggered'];
 const REVIEW_ITEM_RE = /^RI\d{3}$/;
-const FINDING_RE = /^F\d{3}$/;
+const FINDING_RE = /^F\d{3,}$/;
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
 
 const LABELS = {
@@ -1290,10 +1290,12 @@ function validateReviewResult(reviewResult, artifact, result, pointer, prefix, t
   if (reviewResult && Object.prototype.hasOwnProperty.call(reviewResult, 'acceptedRisk')) {
     addViolation(result, `${prefix}038`, artifact, `${pointer}/acceptedRisk`, 'acceptedRisk is not supported in rules-review results', 'field absent', reviewResult.acceptedRisk);
   }
+  if (reviewResult && Object.prototype.hasOwnProperty.call(reviewResult, 'findingId')) {
+    addViolation(result, `${prefix}039`, artifact, `${pointer}/findingId`, 'shard result must not contain findingId', 'field absent', reviewResult.findingId);
+  }
 
   if (reviewResult && reviewResult.status === 'finding') {
-    if (!FINDING_RE.test(reviewResult.findingId)) addViolation(result, `${prefix}013`, artifact, `${pointer}/findingId`, 'finding result requires findingId and evidence', 'Fxxx', reviewResult.findingId);
-    validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}014`, `${pointer}/evidence`, 'finding result requires findingId and evidence');
+    validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}014`, `${pointer}/evidence`, 'finding result requires evidence');
     validateReviewResultDisposition(reviewResult, taskContext, artifact, result, pointer, prefix);
   }
   if (reviewResult && reviewResult.status === 'observation') {
@@ -1753,13 +1755,12 @@ function ruleLevelForDispatchResult(reviewResult, dispatch) {
 function deriveFindingItems(results, dispatch) {
   const reviewItems = new Map(asArray(dispatch && dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
   const ruleSources = new Map(asArray(dispatch && dispatch.ruleSet && dispatch.ruleSet.ruleSources).map((source) => [source.ruleRef, source]));
-  return asArray(results)
+  const findings = asArray(results)
     .filter((reviewResult) => reviewResult && reviewResult.status === 'finding')
     .map((reviewResult) => {
       const item = reviewItems.get(reviewResult.reviewItemId) || {};
       const source = ruleSources.get(item.ruleRef) || {};
       const finding = {
-        findingId: reviewResult.findingId,
         reviewItemId: reviewResult.reviewItemId,
         ruleRef: item.ruleRef || 'unknown',
         targetId: item.targetId || 'unknown',
@@ -1771,12 +1772,15 @@ function deriveFindingItems(results, dispatch) {
       copyOptionalFields(reviewResult, finding, ['priorityReason', 'upgradeReason', 'originReason']);
       return finding;
     })
-    .sort(compareFindingItems);
+    .sort((left, right) => String(left.reviewItemId).localeCompare(String(right.reviewItemId)))
+    .map((finding, index) => ({ findingId: `F${String(index + 1).padStart(3, '0')}`, ...finding }));
+  return findings.sort(compareFindingItems);
 }
 
 function compareFindingItems(left, right) {
   return (FINDING_PRIORITIES.indexOf(left.priority) - FINDING_PRIORITIES.indexOf(right.priority))
-    || String(left.findingId).localeCompare(String(right.findingId))
+    || (left.findingId.length - right.findingId.length)
+    || left.findingId.localeCompare(right.findingId)
     || String(left.reviewItemId).localeCompare(String(right.reviewItemId))
     || String(left.ruleRef).localeCompare(String(right.ruleRef))
     || String(left.targetId).localeCompare(String(right.targetId));
@@ -1982,6 +1986,7 @@ function validateFinalReviewShape(finalReview, artifact, result) {
   if (finalReview.cannotVerifyItems !== undefined) validateCannotVerifyItems(finalReview.cannotVerifyItems, artifact, result);
   asArray(finalReview.findings).forEach((finding, index) => {
     requireFields(finding, artifact, result, 'FR012', `/findings/${index}`, ['findingId', 'reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin', 'priority', 'evidence']);
+    if (!FINDING_RE.test(finding && finding.findingId)) addViolation(result, 'FR074', artifact, `/findings/${index}/findingId`, 'final findingId must match F followed by at least three digits', 'Fxxx...', finding && finding.findingId);
     if (!RULE_LEVELS.includes(finding && finding.ruleLevel)) addViolation(result, 'FR059', artifact, `/findings/${index}/ruleLevel`, 'final finding ruleLevel must be valid', RULE_LEVELS, finding && finding.ruleLevel);
     if (!FINDING_ORIGINS.includes(finding && finding.origin)) addViolation(result, 'FR060', artifact, `/findings/${index}/origin`, 'final finding origin must be valid', FINDING_ORIGINS, finding && finding.origin);
     if (!FINDING_PRIORITIES.includes(finding && finding.priority)) addViolation(result, 'FR061', artifact, `/findings/${index}/priority`, 'final finding priority must be valid', FINDING_PRIORITIES, finding && finding.priority);
@@ -2420,7 +2425,10 @@ function validateObservationItemsAgainstComputed(finalReview, expectedItems, art
 }
 
 function findingItemsEqual(left, right) {
-  return unorderedItemsEqual(left, right, findingItemEqual);
+  return Array.isArray(left)
+    && Array.isArray(right)
+    && left.length === right.length
+    && left.every((item, index) => findingItemEqual(item, right[index]));
 }
 
 function observationItemsEqual(left, right) {

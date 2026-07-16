@@ -7,7 +7,6 @@
     {
       "reviewItemId": "RI001",
       "status": "finding",
-      "findingId": "F001",
       "evidence": [
         {
           "loc": "src/example.ts:10",

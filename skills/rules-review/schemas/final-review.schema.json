@@ -59,7 +59,7 @@
       "type": "object",
       "required": ["findingId", "reviewItemId", "ruleRef", "targetId", "ruleLevel", "origin", "priority", "evidence"],
       "properties": {
-        "findingId": { "type": "string", "pattern": "^F\\d{3}$" },
+        "findingId": { "type": "string", "pattern": "^F\\d{3,}$" },
         "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
         "ruleRef": { "type": "string", "minLength": 1 },
         "targetId": { "type": "string", "minLength": 1 },

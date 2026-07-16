@@ -18,7 +18,7 @@
       "properties": {
         "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
         "status": { "enum": ["passed", "finding", "observation", "not_applicable", "cannot_verify"] },
-        "findingId": { "type": "string", "pattern": "^F\\d{3}$" },
+        "findingId": false,
         "origin": { "enum": ["introduced_by_change", "worsened_by_change", "exposed_by_change", "pre_existing"] },
         "priority": { "enum": ["must_fix", "should_fix"] },
         "priorityReason": { "type": "string", "minLength": 1 },

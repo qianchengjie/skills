@@ -263,7 +263,7 @@ passed / finding / observation / not_applicable / cannot_verify
 
 字段门禁：
 
-- `finding` 必须有 `findingId`、`origin` 和非空 `evidence[]`。
+- `finding` 不得携带 `findingId`，必须有 `origin` 和非空 `evidence[]`；`findingId` 由 aggregator 从完整 finding 集合统一生成。
 - `observation` 必须有 `origin`，并包含 `reason` 或非空 `evidence[]`；MUST / SHOULD 规则以 `exposed_by_change` 或 `pre_existing` 返回 observation 时必须有非空 `evidence[]`。不再增加第二套 observation status/result。
 - `passed` 必须有非空 `evidence[]` 和非空 `failureChecks[]`。
 - `not_applicable` 仅允许用于 `required = false` 的 reviewItem，必须有 `reason`，可选 `evidence[]`。若 reviewer 认为 required reviewItem 的适用性判断有误，必须返回 `cannot_verify` 并说明依据。主 agent 能据此形成更可靠 dispatch 时，修正后重新生成 task；无法消除争议时，保留 `cannot_verify` 作为终态并按现有 `recommendation` 派生规则收口，不得改写为 `passed` 或 `not_applicable`。
@@ -325,7 +325,7 @@ SHOULD / ADVISORY => should_fix
 - `recommendation`
 - `validationResults[]`
 
-`findings[]` 必须按 `priority` 稳定排序：`must_fix` 在前，`should_fix` 在后；同一 `priority` 内按 `findingId` 升序。
+aggregator 先按 `reviewItemId` 升序为完整 finding 集合生成 `F001...F1000...`，再按 `priority` 稳定展示：`must_fix` 在前，`should_fix` 在后；同一 `priority` 内按 `findingId` 数值后缀升序。
 
 `coverageClaim` 只表示本轮 selected 范围内的协议覆盖：required reviewItems 是否都有合法 result，以及 scoped/full 范围声明是否闭合。它不表示 candidateRuleRefs 全量都已审查，也不表示所有结果都可实质验证；实质验证缺口必须通过 `issueSummary.cannotVerify` 和 `cannotVerifyItems[]` 展示。
 
@@ -434,7 +434,7 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 - `reviewItems > 30`、`targets > 20` 或 `signals.userRequestedConcurrency = true` 时，非 `human_override` 必须选择 `multi_batch`。
 - `selectedBy = "human_override"` 时必须记录 `humanOverride.requestedMode` 和 `humanOverride.risk`。
 - `ruleSet.ruleSources[].ruleLevel` 和 `task.rules[].ruleLevel` 必须存在，且 task 中的值必须匹配 dispatch 快照。
-- `finding` 必须有 `findingId`、`origin` 和 `evidence[]`。
+- shard 的 `finding` 不得携带 `findingId`，必须有 `origin` 和 `evidence[]`；finalReview 中的 `findingId` 由 aggregator 统一生成。
 - `observation` 必须有 `origin`，并包含 `reason` 或 `evidence[]`。
 - `finding / observation` 的 `status` 必须符合 `ruleLevel + origin` 默认映射；默认 `observation` 升级为 `finding` 必须有 `upgradeReason`，`pre_existing` 升级还必须有 `originReason`；MUST / SHOULD 的 `exposed_by_change` / `pre_existing` observation 必须有 `evidence[]`。
 - `MUST` finding 必须是 `must_fix`，且不得包含 `acceptedRisk`；`SHOULD / ADVISORY` finding 默认是 `should_fix`，覆盖 priority 必须有 `priorityReason`。

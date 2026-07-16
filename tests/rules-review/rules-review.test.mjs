@@ -608,7 +608,6 @@ const unsortedFindingsShard = readJson(unsortedFindingsShardPath);
 unsortedFindingsShard.results[0] = {
   reviewItemId: "RI002",
   status: "finding",
-  findingId: "F002",
   origin: "introduced_by_change",
   priority: "must_fix",
   priorityReason: "同组排序测试",
@@ -617,7 +616,6 @@ unsortedFindingsShard.results[0] = {
 unsortedFindingsShard.results[1] = {
   reviewItemId: "RI001",
   status: "finding",
-  findingId: "F001",
   origin: "introduced_by_change",
   evidence: [{ loc: "src/example.ts:10", summary: "CORE-001 finding evidence" }],
 };
@@ -633,7 +631,153 @@ const sortedFindingsFinal = await runValidate([
 ]);
 const sortedFindingsOutput = JSON.parse(sortedFindingsFinal.stdout);
 assert.equal(sortedFindingsOutput.ok, true);
-assert.deepEqual(readJson(sortedFindingsFinalPath).findings.map((finding) => finding.findingId), ["F001", "F002"]);
+const sortedFindings = readJson(sortedFindingsFinalPath).findings;
+assert.deepEqual(sortedFindings.map((finding) => finding.findingId), ["F001", "F002"]);
+
+assert.equal(readJson(path.join(repoRoot, "skills/rules-review/schemas/shard.schema.json")).$defs.result.properties.findingId, false);
+for (const resultIndex of [0, 1]) {
+  const shardFindingIdDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-shard-finding-id-"));
+  fs.cpSync(path.join(fixtures, "run-pass-finding-evidence-key-order"), shardFindingIdDir, { recursive: true });
+  const shardPath = path.join(shardFindingIdDir, "shards/B001.json");
+  const shard = readJson(shardPath);
+  shard.results[resultIndex].findingId = "F999";
+  writeJson(shardPath, shard);
+  await assertValidateFails([
+    "--mode",
+    "shard",
+    "--task",
+    path.join(shardFindingIdDir, "tasks/B001.json"),
+    "--input",
+    shardPath,
+  ], /shard result must not contain findingId/);
+}
+
+const reversedFindingsDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-reversed-findings-"));
+fs.cpSync(unsortedFindingsDir, reversedFindingsDir, { recursive: true });
+const reversedFindingsShardPath = path.join(reversedFindingsDir, "shards/B001.json");
+const reversedFindingsShard = readJson(reversedFindingsShardPath);
+reversedFindingsShard.results.reverse();
+writeJson(reversedFindingsShardPath, reversedFindingsShard);
+const reversedFindingsFinalPath = path.join(reversedFindingsDir, "finalReview.json");
+await runValidate(["--mode", "aggregate-final", "--dir", reversedFindingsDir, "--output", reversedFindingsFinalPath]);
+assert.deepEqual(readJson(reversedFindingsFinalPath).findings, sortedFindings);
+
+writeJson(path.join(unsortedFindingsDir, "finalReview.json"), readJson(sortedFindingsFinalPath));
+await renderFinalInDir(unsortedFindingsDir);
+const sharedIdResponse = await runValidate(["--mode", "render-response", "--dir", unsortedFindingsDir]);
+const expectedFindingIds = sortedFindings.map((finding) => finding.findingId);
+assert.deepEqual([...new Set(fs.readFileSync(path.join(unsortedFindingsDir, "final.md"), "utf8").match(/\bF\d{3,}\b/g))], expectedFindingIds);
+assert.deepEqual([...new Set(JSON.parse(sharedIdResponse.stdout).response.match(/\bF\d{3,}\b/g))], expectedFindingIds);
+
+for (const [name, mutate, pattern] of [
+  ["missing", (finalReview) => finalReview.findings.pop(), /finalReview findings must include every derived finding and no extras/],
+  ["duplicate", (finalReview) => { finalReview.findings[1].findingId = finalReview.findings[0].findingId; }, /finalReview findings must equal validator result/],
+  ["renumbered", (finalReview) => { finalReview.findings[1].findingId = "F003"; }, /finalReview findings must equal validator result/],
+  ["reordered", (finalReview) => finalReview.findings.reverse(), /finalReview findings must equal validator result/],
+  ["bad-shape", (finalReview) => { finalReview.findings[0].findingId = "F01"; }, /final findingId must match F followed by at least three digits/],
+]) {
+  const tamperedDir = fs.mkdtempSync(path.join(os.tmpdir(), `rules-review-final-${name}-`));
+  fs.cpSync(unsortedFindingsDir, tamperedDir, { recursive: true });
+  const finalReviewPath = path.join(tamperedDir, "finalReview.json");
+  const finalReview = readJson(finalReviewPath);
+  mutate(finalReview);
+  writeJson(finalReviewPath, finalReview);
+  await assertRunDirFails(tamperedDir, pattern);
+}
+
+const thousandFindingsDir = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-thousand-findings-"));
+fs.cpSync(path.join(fixtures, "run-pass-full-clean"), thousandFindingsDir, { recursive: true });
+const thousandDispatchPath = path.join(thousandFindingsDir, "dispatch.json");
+const thousandDispatch = readJson(thousandDispatchPath);
+const coreRule = thousandDispatch.ruleSet.ruleSources.find((rule) => rule.ruleRef === "CORE-001");
+const thousandItems = Array.from({ length: 1000 }, (_, index) => {
+  const suffix = String(index).padStart(3, "0");
+  return {
+    reviewItemId: `RI${suffix}`,
+    targetId: `T${suffix}`,
+    loc: `src/example.ts:${index + 1}`,
+  };
+});
+Object.assign(thousandDispatch.ruleSet, {
+  candidateRuleRefs: ["CORE-001"],
+  selectedRuleRefs: ["CORE-001"],
+  requiredRuleRefs: ["CORE-001"],
+  excludedRuleRefs: [],
+  globallyNotApplicableRuleRefs: [],
+  ruleSources: [coreRule],
+});
+thousandDispatch.targets = {
+  changedUnits: thousandItems.map((item) => ({
+    targetId: item.targetId,
+    targetKind: "changed_unit",
+    loc: item.loc,
+    summary: `Finding target ${item.targetId}`,
+  })),
+  candidates: [],
+  contextExpansions: [],
+};
+thousandDispatch.reviewItems = thousandItems.map((item) => ({
+  reviewItemId: item.reviewItemId,
+  ruleRef: "CORE-001",
+  targetKind: "changed_unit",
+  targetId: item.targetId,
+  required: true,
+}));
+thousandDispatch.applicabilityMatrix = thousandItems.map((item) => ({
+  ruleRef: "CORE-001",
+  targetId: item.targetId,
+  targetKind: "changed_unit",
+  applicability: "applicable",
+  reviewItemId: item.reviewItemId,
+  evidence: [{ summary: `CORE-001 applies to ${item.targetId}`, loc: item.loc }],
+}));
+thousandDispatch.reviewBatches = [thousandItems.slice(0, 500), thousandItems.slice(500)].map((items, index) => {
+  const reviewBatchId = `B00${index + 1}`;
+  return {
+    reviewBatchId,
+    ruleSetId: thousandDispatch.ruleSet.ruleSetId,
+    reviewItemIds: items.map((item) => item.reviewItemId),
+    taskRef: `tasks/${reviewBatchId}.json`,
+    shardRef: `shards/${reviewBatchId}.json`,
+    returnStatus: "returned",
+    aggregateStatus: "aggregated",
+    unaggregatedReason: null,
+  };
+});
+thousandDispatch.executionPlan = {
+  mode: "multi_batch",
+  selectedBy: "ai",
+  policyVersion: "review-execution-policy/v1",
+  metrics: { changedUnits: 1000, candidates: 0, targets: 1000, requiredRuleRefs: 1, reviewItems: 1000 },
+  signals: { userRequestedConcurrency: false },
+  reason: "F1000 aggregation regression",
+  humanOverride: null,
+};
+writeJson(thousandDispatchPath, thousandDispatch);
+fs.rmSync(path.join(thousandFindingsDir, "tasks"), { recursive: true, force: true });
+fs.rmSync(path.join(thousandFindingsDir, "shards"), { recursive: true, force: true });
+await runValidate(["--mode", "build-tasks", "--dispatch", thousandDispatchPath, "--out", path.join(thousandFindingsDir, "tasks")]);
+fs.mkdirSync(path.join(thousandFindingsDir, "shards"), { recursive: true });
+for (const batch of thousandDispatch.reviewBatches) {
+  writeJson(path.join(thousandFindingsDir, batch.shardRef), {
+    kind: "rules-review-shard",
+    schemaVersion: 2,
+    runId: thousandDispatch.runId,
+    reviewBatchId: batch.reviewBatchId,
+    results: [...batch.reviewItemIds].reverse().map((reviewItemId) => ({
+      reviewItemId,
+      status: "finding",
+      origin: "introduced_by_change",
+      evidence: [{ summary: `Finding evidence ${reviewItemId}`, source: "generated regression" }],
+    })),
+  });
+}
+const thousandFinalPath = path.join(thousandFindingsDir, "finalReview.json");
+await runValidate(["--mode", "aggregate-final", "--dir", thousandFindingsDir, "--output", thousandFinalPath]);
+const thousandFindings = readJson(thousandFinalPath).findings;
+assert.equal(thousandFindings.length, 1000);
+assert.equal(thousandFindings[0].findingId, "F001");
+assert.equal(thousandFindings.at(-1).findingId, "F1000");
 
 const responsePath = "/tmp/rules-review-response-test.md";
 const response = await runValidate([
@@ -991,7 +1135,6 @@ const shouldFixEvidence = [{ loc: "src/example.ts:12", summary: "TYPE-001 should
 shouldFixShard.results[1] = {
   reviewItemId: "RI002",
   status: "finding",
-  findingId: "F001",
   origin: "introduced_by_change",
   evidence: shouldFixEvidence,
 };
@@ -1076,7 +1219,6 @@ const advisoryEvidence = [{ loc: "src/example.ts:12", summary: "UI-001 advisory 
 advisoryUpgradeShard.results[2] = {
   reviewItemId: "RI003",
   status: "finding",
-  findingId: "F001",
   origin: "introduced_by_change",
   evidence: advisoryEvidence,
 };
@@ -1155,7 +1297,6 @@ const preExistingUpgradeShard = readJson(preExistingUpgradeShardPath);
 preExistingUpgradeShard.results[1] = {
   reviewItemId: "RI002",
   status: "finding",
-  findingId: "F001",
   origin: "pre_existing",
   evidence: shouldFixEvidence,
 };
@@ -1198,7 +1339,6 @@ const acceptedRisk = {
 mustDowngradeShard.results[0] = {
   reviewItemId: "RI001",
   status: "finding",
-  findingId: "F001",
   origin: "introduced_by_change",
   priority: "should_fix",
   acceptedRisk,
@@ -1276,7 +1416,7 @@ await assertRunDirFails(finalObservationTamperDir, /finalReview observations mus
 await assertRunFails("run-fail-missing-result", /required reviewItem must have exactly one result/);
 await assertRunFails("run-fail-unassigned-result", /result must reference assigned reviewItemId/);
 await assertRunFails("run-fail-duplicate-result", /reviewItem has duplicate results/);
-await assertRunFails("run-fail-finding-no-evidence", /finding result requires findingId and evidence/);
+await assertRunFails("run-fail-finding-no-evidence", /finding result requires evidence/);
 await assertRunFails("run-fail-finding-no-evidence", /incomplete or blocked semanticVerdict must be unknown/);
 await assertRunFails("run-fail-passed-no-evidence", /passed result requires evidence/);
 await assertRunFails("run-fail-not-applicable-no-reason", /not_applicable result requires reason/);
