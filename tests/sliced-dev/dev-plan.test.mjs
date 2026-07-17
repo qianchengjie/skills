@@ -33,6 +33,9 @@ test('subagent 文档使用当前共享工作区契约', async () => {
   assert.match(implementer, /subagent 记忆不是真源/);
   assert.match(implementer, /task-brief[\s\S]*task-report-template[\s\S]*派发 subagent/);
   assert.match(implementer, /同一工作区同一时间只允许一个 implementer/);
+  assert.match(implementer, /`必读上下文` 是最低读取集合，不是读取 allowlist/);
+  assert.match(implementer, /只为核对当前 Claims、追踪直接调用链或定位 focused 验证失败时[\s\S]*focused Read \/ `rg`/);
+  assert.doesNotMatch(implementer, /只允许读取 task brief 及 task brief 中列出的必读上下文/);
   assert.match(reviewer, /"task_name": "review_s1_a1"/);
   assert.match(reviewer, /"fork_turns": "none"/);
   assert.match(reviewer, /followup_task/);

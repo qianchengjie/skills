@@ -4,9 +4,9 @@
 
 ## 控制器流程
 
-控制器负责分叉、拷问、上下文预检、执行确认、生成 task brief、接收门禁、硬门禁、review-package、用户验收和提交。implementer subagent 只负责在共享工作区实现当前切片；运行时不提供独立 workspace，改动会立即对控制器和其他 agent 可见。控制器在 implementer 运行期间不得修改业务文件；subagent 返回后，控制器直接检查当前 diff 和 task report，再运行接收门禁和验证，不做“集成”。task brief 是注意力收束视图，不是真源；若 brief 不足以判断实现、边界或验证，implementer 必须 blocked 回控制器，不得自行扩大上下文。
+控制器负责分叉、拷问、上下文预检、执行确认、生成 task brief、接收门禁、硬门禁、review-package、用户验收和提交。implementer subagent 只负责在共享工作区实现当前切片；运行时不提供独立 workspace，改动会立即对控制器和其他 agent 可见。控制器在 implementer 运行期间不得修改业务文件；subagent 返回后，控制器直接检查当前 diff 和 task report，再运行接收门禁和验证，不做“集成”。task brief 是注意力收束视图，不是真源；局部事实缺口先按下文做 focused 只读查证，仍不足以判断实现、边界或验证，或查证后需要扩大任务范围时，implementer 才 blocked 回控制器。
 
-同一工作区同一时间只允许一个 implementer 写业务文件。若已有其他写入型 agent 正在运行或修改范围可能重叠，控制器必须等待或停止派发。task brief 的读取和修改范围是 implementer 必须遵守的行为边界，不是文件权限沙盒。
+同一工作区同一时间只允许一个 implementer 写业务文件。若已有其他写入型 agent 正在运行或修改范围可能重叠，控制器必须等待或停止派发。task brief 的 `允许修改` / `禁止修改` 是写入边界，`必读上下文` 是最低读取集合，不是读取 allowlist；这些仍是行为边界，不是文件权限沙盒。
 
 派发前必须满足：
 
@@ -75,8 +75,8 @@ Task brief：<dev-plans/.../task-briefs/<S-id>.md>
 - 每次被派发都重新读取路径指向的最新 task brief；最新 task brief 覆盖旧上下文和此前读取内容，不依赖上轮记忆继续实现。
 - 你在与控制器共享的工作区修改文件，改动会立即可见；最终列出改动文件，交由控制器检查。
 - 不要为本流程创建 Git worktree；若任务必须依赖 workspace 隔离，blocked 回控制器。
-- 只允许读取 task brief 及 task brief 中列出的必读上下文。
-- 禁止读取完整 plan.md、其他切片、未关联 D/A、与 task brief 无关的仓库区域。
+- task brief 和其中的必读上下文是默认注意力入口。只为核对当前 Claims、追踪直接调用链或定位 focused 验证失败时，才可做最小的 focused Read / `rg`。
+- focused 只读查证不得扩大任务目标或写入范围；禁止读取完整 plan.md、其他切片、未关联 D/A、与当前切片无关的仓库区域。
 - 禁止直接询问用户；任何需要用户确认的问题都 blocked 回控制器。
 - 禁止修改 plan.md、decisions.md、audits.md、claims/S*.json 或切片状态。
 - 禁止提交 commit。
@@ -85,7 +85,7 @@ Task brief：<dev-plans/.../task-briefs/<S-id>.md>
 实现前先复核：
 - task brief 存在且切片号一致。
 - task brief 内没有阻塞本片的 open D。
-- 必读上下文足够支持实现。
+- 已读取必读上下文；若仍有局部事实缺口，只需按硬规则做 focused 只读查证即可解决。
 - 已按 task brief 的 `项目规则审查` 中 selectedRuleIds 和 `规则获取` 命令理解本片规则；若命令失败、规则冲突或无法满足则 blocked。不要运行 `rules-review`，也不要判断最终规则审查是否 passed。
 - 已理解 task brief 中的 Claims；每条 claim 都能映射到实现、验证、blocked 或风险说明。
 - 预计改动不会越过 task brief 的允许修改范围，也不会命中禁止修改。

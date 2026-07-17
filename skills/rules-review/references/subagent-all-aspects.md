@@ -16,8 +16,8 @@
 工具约束：
 
 - agent-to-agent 交互一律使用 strict JSON；不得用 prose、Markdown 分片、代码围栏或前后解释文本替代。
-- `fork_context=true` 只允许传递背景说明（cwd、目标范围口径、只读边界）；不得用于传递 `reviewItem`、规则快照、目标边界或授权审查范围。
-- 使用 `spawn_agent` 且 `fork_context=true` 时，不要显式传 `agent_type`、`model`、`reasoning_effort`。
+- `spawn_agent` 固定使用 `fork_turns: "none"`；任务消息使用 strict JSON，只携带 cwd、`task.json` 路径、只读边界和输出路径；`reviewItem`、规则快照、目标边界和授权审查范围只以 `task.json` 为准。
+- 不要传当前 `spawn_agent` schema 未定义的字段。
 
 ## task.json
 

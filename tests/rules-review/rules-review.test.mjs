@@ -15,10 +15,13 @@ const nativeTmp = os.tmpdir();
 let fixtures;
 
 const manualEntryContract = fs.readFileSync(path.join(repoRoot, "skills/rules-review/SKILL.md"), "utf8");
+const subagentContract = fs.readFileSync(path.join(repoRoot, "skills/rules-review/references/subagent-all-aspects.md"), "utf8");
 assert.match(manualEntryContract, /同一会话只接受 controller 已知且未发生分叉的直接上一轮 runId/);
 assert.match(manualEntryContract, /跨会话只接受用户或外层调用方显式提供的 runId/);
 assert.match(manualEntryContract, /不扫描目录猜测 latest run/);
 assert.match(manualEntryContract, /显式 scope \/ source \/ base 非法或无法验证时必须 blocked，不得静默降级为 full/);
+assert.match(subagentContract, /`spawn_agent` 固定使用 `fork_turns: "none"`/);
+assert.doesNotMatch(subagentContract, /\bfork_context\b|\bagent_type\b|\breasoning_effort\b/);
 
 async function runValidate(args) {
   return execFileAsync(process.execPath, [script, ...args], { cwd: repoRoot });
