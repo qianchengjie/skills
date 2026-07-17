@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 `rules-review` 是项目规则驱动的规范审查 skill。它不维护 `.agents/rules/`，不发明规则分类，不替代 `AGENTS.md`、OpenSpec、共享能力文档或代码证据；它只负责消费已有 active 规则、建立目标边界、分派审查原子、回收结果并输出可校验结论。
 
-迁移边界：S4 新增的 `shouldSetHash` 与 sliced-dev 消费绑定只用于内部迁移和回归验证；S5 统一升级其余 schema / validator 常量并闭合首条安全 `full → incremental` 链前，实际执行入口不得使用该 v3 中间态。
+当前执行协议统一为 `schemaVersion = 3`。v3 支持 `full`，以及只引用一个安全 sibling v3 full base 的单步 `incremental`；v2 工件不迁移，也不能作为 incremental base。多轮递归、incremental base 和消失项分层留待后续协议扩展，当前 validator 必须 fail closed。
 
 项目规则入口是 `.agents/rules/index.md`。最小消费前提：
 
@@ -18,7 +18,7 @@ disable-model-invocation: true
 
 JSON 协议中的 enum 一律使用英文；最终 Markdown 和聊天回复继续渲染中文文案。
 
-`protocolGate = "passed"` 只表示审查协议闭合：required reviewItems 都有且只有一个合法 result，validator gate 通过。它不表示代码没有问题；代码层结论必须同时看 `semanticVerdict`、`issueSummary` 和 `recommendation`。
+`protocolGate = "passed"` 只表示审查协议闭合：全部 current reviewItems 在运行时 effectiveResults 中都有且只有一个合法 result，validator gate 通过。它不表示代码没有问题；代码层结论必须同时看 `semanticVerdict`、`issueSummary` 和 `recommendation`。
 
 ---
 
@@ -55,7 +55,7 @@ ruleSet -> targets -> applicabilityMatrix -> reviewItems -> executionPlan -> rev
 
 `candidateRuleRefs` 是可见候选池，不是覆盖声明真源；`selectedRuleRefs` 是本轮审查范围真源。用户明确只要求审查 A、B 时，C 可以留在 candidate 中但不进入 selected；最终覆盖声明只对 selected 范围负责，不表示 candidate 全量都已处理。
 
-不要把 namespace 或 ruleRef 本身当完成门禁。完成门禁只看本轮 selected 范围内的结构协议是否闭合：每个 required rule 对每个 target 都有适用性判断；`applicable` 行都有对应 required `reviewItem`；`required: true` 的 `reviewItems` 都有且只有一个合法 `result`。
+不要把 namespace 或 ruleRef 本身当完成门禁。完成门禁只看本轮 selected 范围内的结构协议是否闭合：每个 required rule 对每个 target 都有适用性判断；`applicable` 行都有对应 required `reviewItem`；全部 current `reviewItems` 都有且只有一个当前 shard 或合法 base 复用 `result`。
 
 最小审查原子是：
 
@@ -96,7 +96,7 @@ ruleRef x targetId = reviewItem
 - `dispatch.json` 是主 agent 的计划判断产物，可以由主 agent 写入；它记录规则、目标、适用性、reviewItems 和 batch 计划，不得包含审查结论。
 - `tasks/*.json` 是 `dispatch.json` 的机械投影，必须由 `validate.js --mode build-tasks` 生成；主 agent 不得手写或用临时脚本生成。
 - `shards/*.json` 是 reviewer 的审查判断产物，是唯一产生 `passed / finding / cannot_verify` 的位置；不得由生成器根据 `dispatch.json` 批量制造。
-- `finalReview.json` 是 `dispatch.json + shards/*.json` 的机械聚合，必须由 `validate.js --mode aggregate-final` 生成；主 agent 不得手写。
+- `finalReview.json` 是 `dispatch.json + 当前 shards/*.json + validator 解析的合法单步 base results` 的机械聚合，必须由 `validate.js --mode aggregate-final` 生成；主 agent 不得手写。
 - `final.md` 和最终回复是展示层，必须由 `validate.js --mode render-final` / `render-response` 渲染。
 
 只允许使用 rules-review 内置 `validate.js` 做投影、校验、聚合和渲染；不得创建或运行本次 review 专用的临时生成脚本来批量制造 `dispatch.json`、`tasks/*.json`、`shards/*.json` 或 `finalReview.json`。
@@ -106,8 +106,10 @@ ruleRef x targetId = reviewItem
 `dispatch.json` 是主 agent 的计划、分派和聚合台账，至少包含：
 
 - `kind = "rules-review-dispatch"`
-- `schemaVersion = 2`
+- `schemaVersion = 3`
 - `runId`
+- `changedFiles[]`
+- `inputSnapshot.files[]`
 - `ruleSet`
 - `targets`
 - `applicabilityMatrix`
@@ -170,11 +172,22 @@ ruleRef x targetId = reviewItem
 - `targetId`
 - `required`
 
-禁止把其它 review 的结论产物作为输入。建立目标边界、分派、审查和聚合时，不得自动读取或引用既有 `.rules-review-tmp/*/final.md`、`finalReview.json`、旧 `shards/*.json`、旧 `tasks/*.json`、其它 review 报告、MR 评论里的旧审查结论，或任何由“上一次 review 结果”派生的 finding / discrepancy。旧 review 结果不能作为 evidence、context、target、rule 解释或 cannot_verify 来源；如果用户明确粘贴旧结论，只能把它当用户陈述的线索，必须回到规则、diff 和代码证据重新验证。
+每轮都必须从当前 Git worktree、当前累计 diff、当前规则仓和当前代码重新建立完整 `ruleSet`、`targets`、`applicabilityMatrix` 与 `reviewItems`。`targets.changedUnits[]` 和被 reviewItem 引用的 candidate 必须声明文件级 `inputRefs[]`；`inputSnapshot.files[]` 必须与全部 inputRefs 的去重集合精确一致。`changedFiles[]`、代码原始字节 SHA-256、`.agents/rules/index.md` 与规则源 SHA-256 由 `seal-dispatch` 从当前 worktree 生成，所有当前 run 消费命令都会重新校验。
+
+review mode 不持久化额外字段：省略 `continuation` 表示 full，存在 `continuation.baseRunId` 表示 incremental。
+
+- full 必须省略 `continuation` 并记录非空 `fullReason`。current reviewItems 非空时全部分派；为空时使用 `executionPlan.mode = "no_batch"` 与 `reviewBatches = []`。
+- incremental 必须省略 `fullReason`，且 `continuation` 只能包含安全 token `baseRunId`。当前实现只接受 `.rules-review-tmp/` 下一个不同的真实 sibling v3 full run；base 必须重新校验为协议闭合且 `protocolGate = "passed"`，v2、损坏、路径逃逸、自引用或带 continuation 的 base 全部阻塞。
+- incremental 必须至少复用一个 base 的 `passed / observation / reviewer not_applicable` 结果，并把 current reviewItems 的真子集分派给 reviewer。若全部项目都需重审，应改为 full；若全部项目可复用，使用 `no_batch`。
+- 同一单步链内，既有 `targetId` 必须保留，既有 `reviewItemId` 必须保持同一 `ruleRef x targetId` tuple；新 ID 必须大于 base 中对应最大编号。当前实现不接受 base target 或 reviewItem 消失。
+
+机器 mandatory recheck 下界包含：base 中的 `finding / cannot_verify`、任一 inputRef 内容或状态变化以及 inputRefs 集合变化所影响 target 的全部 current reviewItems、新 target、新 reviewItem、规则索引变化影响的全部项目，以及规则源文件/hash/level/结构变化影响的同 ruleRef 项目。主 agent 可以按语义风险保守扩大重审集合，但不能缩小该下界。
+
+禁止把其它 review 的结论产物当作当前 scope、evidence、context、target、规则解释或 cannot_verify 来源。唯一允许的历史引用是 `continuation.baseRunId`；base 的解析与结果复用只能由 validator 完成，主 agent 和 reviewer 不得直接读取旧 `final.md`、`finalReview.json`、task 或 shard 来重建当前 scope。如果用户明确粘贴旧结论，只能把它当用户陈述的线索，必须回到当前规则、diff 和代码证据重新验证。
 
 `executionPlan` 必须在 `ruleSet` 已闭合、`targets`、`applicabilityMatrix` 和 `reviewItems` 已形成后生成。它只记录执行模式选择，不证明选择最优：
 
-- `mode`: `single_batch / multi_batch`
+- `mode`: `no_batch / single_batch / multi_batch`
 - `selectedBy`: `ai / human_override`
 - `policyVersion = "review-execution-policy/v1"`
 - `metrics.changedUnits`
@@ -188,8 +201,9 @@ ruleRef x targetId = reviewItem
 
 执行策略：
 
-- `reviewItems <= 12`、`targets <= 8`、`requiredRuleRefs <= 4`，且用户未要求并发时，默认 `single_batch`。
-- `reviewItems > 30`、`targets > 20`，或用户明确要求并发时，非人工覆盖必须 `multi_batch`。
+- 派发集合为空时必须是 `no_batch`，同时 `selectedBy = "ai"`、`humanOverride = null`、`reviewBatches = []`；人工覆盖不能强制 `no_batch`。
+- 当前完整 scope 的 `reviewItems <= 12`、`targets <= 8`，且用户未要求并发时，默认 `single_batch`。
+- 当前完整 scope 的 `reviewItems > 30`、`targets > 20`，或用户明确要求并发时，非人工覆盖必须 `multi_batch`。按实际派发集合选择 single/multi 留待后续多轮协议实现。
 - 中间区间由 AI 判断，但必须记录非空 `reason`。
 - 用户强制 single agent 时允许 `selectedBy = "human_override"`，但必须记录 `humanOverride.risk`。
 - validator 只复算指标和硬阈值，不判断 `reason` 是否语义正确，也不判断拆分是否最优。
@@ -204,6 +218,8 @@ ruleRef x targetId = reviewItem
 - `returnStatus`
 - `aggregateStatus`
 
+`reviewBatchId` 必须是安全 token；`taskRef` 必须精确等于 `tasks/<reviewBatchId>.json`。`shardRef` 只能为 `null` 或精确等于 `shards/<reviewBatchId>.json`，`returnStatus = "returned"` 时必须使用后者。不得使用绝对路径、`.` / `..`、反斜杠、跨目录类别或其它 batch 名。
+
 状态 enum：
 
 ```text
@@ -211,14 +227,14 @@ returnStatus: not_started / started / returned / not_returned / format_invalid /
 aggregateStatus: aggregated / not_aggregated
 ```
 
-每个 `reviewBatch` 必须包含至少一个 `reviewItemId`。每个 `reviewItemId` 必须且只能分派给一个 `reviewBatch`；最终完成门禁仍只看结构协议是否闭合，不证明 reviewer 的业务判断正确。
+每个 `reviewBatch` 必须包含至少一个 `reviewItemId`，同一 ID 不得重复分派。full 的 batches 必须覆盖全部 current reviewItems；incremental 的 batches 必须是 current reviewItems 真子集，未分派项只能由 validator 从合法 base 结果复用。最终完成门禁要求全部 current reviewItems（包括 `required = false`）在运行时 effectiveResults 中恰有一个结果，但不证明 reviewer 的业务判断正确。
 
 ### task.json
 
 `task.json` 是 batch 输入包，只能由 `validate.js --mode build-tasks --dispatch dispatch.json --out tasks/` 从 `dispatch.json` 投影生成；它只能包含当前 `reviewBatchId` 所需内容：
 
 - `kind = "rules-review-task"`
-- `schemaVersion = 2`
+- `schemaVersion = 3`
 - `runId`
 - `reviewBatchId`
 - `ruleSetId`
@@ -248,7 +264,7 @@ aggregateStatus: aggregated / not_aggregated
 `shard.json` 是 reviewer 返回结果：
 
 - `kind = "rules-review-shard"`
-- `schemaVersion = 2`
+- `schemaVersion = 3`
 - `runId`
 - `reviewBatchId`
 - `results[]`
@@ -311,10 +327,10 @@ SHOULD / ADVISORY => should_fix
 
 ### finalReview.json
 
-`finalReview.json` 是最终聚合产物，只能由 `validate.js --mode aggregate-final --dir .rules-review-tmp/<run-id> --output finalReview.json` 从 `dispatch.json + shards/*.json` 生成；其 gate 字段必须由 validator 重新计算并校验后才可信。它至少包含：
+`finalReview.json` 是最终聚合产物，只能由 `validate.js --mode aggregate-final --dir .rules-review-tmp/<run-id> --output finalReview.json` 从当前 dispatch、当前 shards 与 validator 解析的合法单步 base results 生成；其 gate 字段必须由 validator 重新计算并校验后才可信。它至少包含：
 
 - `kind = "rules-review-final-review"`
-- `schemaVersion = 2`
+- `schemaVersion = 3`
 - `runId`
 - `protocolGate`: `passed / incomplete / blocked`
 - `scopeMode`: `full / scoped`
@@ -329,7 +345,7 @@ SHOULD / ADVISORY => should_fix
 
 aggregator 先按 `reviewItemId` 升序为完整 finding 集合生成 `F001...F1000...`，再按 `priority` 稳定展示：`must_fix` 在前，`should_fix` 在后；同一 `priority` 内按 `findingId` 数值后缀升序。
 
-`coverageClaim` 只表示本轮 selected 范围内的协议覆盖：required reviewItems 是否都有合法 result，以及 scoped/full 范围声明是否闭合。它不表示 candidateRuleRefs 全量都已审查，也不表示所有结果都可实质验证；实质验证缺口必须通过 `issueSummary.cannotVerify` 和 `cannotVerifyItems[]` 展示。
+`coverageClaim` 只表示本轮 selected 范围内的协议覆盖：全部 current reviewItems 是否都有合法 effective result，以及 scoped/full 范围声明是否闭合。它不表示 candidateRuleRefs 全量都已审查，也不表示所有结果都可实质验证；实质验证缺口必须通过 `issueSummary.cannotVerify` 和 `cannotVerifyItems[]` 展示。
 
 `issueSummary` 至少包含：
 
@@ -373,7 +389,7 @@ ready_for_merge / must_fix_before_merge / should_review_before_merge / manual_ve
 
 validator 必须复算并校验 `validationResults[mode=run]` 与当前 run 结果一致；不一致时进入 `blocked`。
 
-`finalReview.json` 中已有字段只是被校验对象，不能作为事实源。validator 必须从 `dispatch.json`、`task.json`、`shard.json` 重新计算 `protocolGate`、`coverageClaim`、`semanticVerdict`、`issueSummary`、`recommendation`、`cannotVerifyItems[]` 和 `validationResults[mode=run]`；声明值与计算值不一致时，`protocolGate = blocked`。`finalReview.findings[]` 必须与 shard result 和 dispatch reviewItem 派生事实一致：`findingId`、`reviewItemId`、`ruleRef`、`targetId`、`ruleLevel`、`origin`、`priority` 和 `evidence` 不得伪造、改写或额外添加；`finalReview.observations[]` 必须与 `status = "observation"` 的 result 派生事实一致；`evidence` 按 `summary`、`loc`、`source` 结构比较，不依赖 JSON key 顺序。
+`finalReview.json` 中已有字段只是被校验对象，不能作为事实源。validator 必须从当前 shards 与合法单步 base 结果运行时推导完整 effectiveResults，再重新计算 `protocolGate`、`coverageClaim`、`semanticVerdict`、`issueSummary`、`recommendation`、`cannotVerifyItems[]` 和 `validationResults[mode=run]`；effectiveResults 不写入任何工件。声明值与计算值不一致时，`protocolGate = blocked`。`finalReview.findings[]` 必须与完整 effectiveResults 和 dispatch reviewItem 派生事实一致：`findingId`、`reviewItemId`、`ruleRef`、`targetId`、`ruleLevel`、`origin`、`priority` 和 `evidence` 不得伪造、改写或额外添加；`finalReview.observations[]` 必须与 `status = "observation"` 的 effective result 派生事实一致；`evidence` 按 `summary`、`loc`、`source` 结构比较，不依赖 JSON key 顺序。
 
 ---
 
@@ -402,6 +418,7 @@ scripts/validate.js
 支持模式：
 
 ```text
+validate.js --mode seal-dispatch --input dispatch.json
 validate.js --mode dispatch --input dispatch.json
 validate.js --mode task --input tasks/<reviewBatchId>.json
 validate.js --mode retry-task --input retries/<reviewBatchId>-retry-<n>.json
@@ -417,7 +434,11 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 
 硬门禁：
 
-- 每个 `required: true` 的 `reviewItem` 必须有且只有一个 result。
+- dispatch、task、retry-task、shard、validation output 与 finalReview 必须统一使用 `schemaVersion = 3`；v2 不进入当前运行协议，也不能作为 incremental base。
+- `runId` / `baseRunId` 必须是安全 token；incremental base 只能解析为当前 Git worktree `.rules-review-tmp/` 下的不同真实 sibling。
+- `reviewBatchId` 必须是安全 token；每个 batch 的 `taskRef` / `shardRef` 必须精确绑定当前 run 的 `tasks/<reviewBatchId>.json` / `shards/<reviewBatchId>.json`，不得跨目录或跨 batch 引用。
+- 当前 `changedFiles[]`、`inputRefs[]`、`inputSnapshot.files[]` 与 Git worktree inventory 必须结构闭合；当前代码、规则索引与规则源的原始字节 SHA-256 必须与 dispatch 一致。
+- 全部 current `reviewItem`（包括 `required = false`）必须在运行时 effectiveResults 中有且只有一个 result。
 - `selectedRuleRefs[]` 必须是 `candidateRuleRefs[]` 的子集。
 - 每个 `selectedRuleRefs[]` 中的规则必须分类到 `requiredRuleRefs[]`、`excludedRuleRefs[]` 或 `globallyNotApplicableRuleRefs[]`。
 - `selectedRuleRefs = requiredRuleRefs ∪ excludedRuleRefs ∪ globallyNotApplicableRuleRefs`，三组分类不闭合时不得进入可信执行计划。
@@ -428,14 +449,18 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 - `contextExpansions[].reason` 必须是非空字符串。
 - 规则快照声明 `requiredContext[]` 时，`contextExpansions[].requiredContextRefs[]` 必须承接对应 `contextId`。
 - 带 `requiredContextRefs[]` 的 `contextExpansions[]` 必须包含非空 `addedTargetIds[]`。
-- `dispatch.json` 不得包含 `priorReviewCheck`，也不得引用既有 `.rules-review-tmp/` review 产物；出现即 `blocked`。
+- `dispatch.json` 不得包含 `priorReviewCheck`，也不得直接引用既有 `.rules-review-tmp/` review 产物；唯一历史入口是只含 `baseRunId` 的 `continuation`，由 validator 安全解析。
 - result 必须引用已分派的 `reviewItemId`。
 - 同一 `reviewItemId` 多个 result => `blocked`。
 - 同一 `reviewItemId` 不得跨 `reviewBatch` 重复分派。
-- 每个 `reviewItemId` 必须且只能被分派到一个 `reviewBatch`。
+- full 必须省略 `continuation`、包含非空 `fullReason`，并在 current reviewItems 非空时分派全部项目。
+- incremental 必须省略 `fullReason`、至少复用一个合法 base 结果，且 batches 只能覆盖 current reviewItems 真子集；无复用或全量重审仍声称 incremental => `blocked`。
+- incremental 必须覆盖机器 mandatory recheck 下界；base `finding / cannot_verify`、变化 target、新 target/item 和变化规则的受影响项不得漏派。
+- 既有 target/reviewItem 身份和 `ruleRef x targetId` tuple 必须跨 base 稳定；新 T/RI 编号必须大于 base 最大编号。当前单步实现遇到消失项或带 continuation 的 base 时 `blocked`。
 - `executionPlan` 必须存在，且 `metrics` 必须等于 `dispatch` 中的可复算事实。
-- `mode = "single_batch"` 时 `reviewBatches.length` 必须等于 1；`mode = "multi_batch"` 时 `reviewBatches.length` 必须大于等于 2。
-- `reviewItems > 30`、`targets > 20` 或 `signals.userRequestedConcurrency = true` 时，非 `human_override` 必须选择 `multi_batch`。
+- `mode = "no_batch"` 时 `reviewBatches.length` 必须等于 0；`mode = "single_batch"` 时必须等于 1；`mode = "multi_batch"` 时必须大于等于 2。
+- 当前完整 scope 的 `reviewItems > 30`、`targets > 20` 或 `signals.userRequestedConcurrency = true` 时，非 `human_override` 必须选择 `multi_batch`；当前单步协议不按实际派发集合放宽该门禁。
+- `no_batch` 必须由 AI 选择且禁止 human override；full 只在 current reviewItems 为空时使用，incremental 只在全部项目可复用时使用。
 - `selectedBy = "human_override"` 时必须记录 `humanOverride.requestedMode` 和 `humanOverride.risk`。
 - `ruleSet.ruleSources[].ruleLevel` 和 `task.rules[].ruleLevel` 必须存在，且 task 中的值必须匹配 dispatch 快照。
 - shard 的 `finding` 不得携带 `findingId`，必须有 `origin` 和 `evidence[]`；finalReview 中的 `findingId` 由 aggregator 统一生成。
@@ -464,6 +489,8 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 - `validate.js --mode run` 在读取任一 run artifact 前确定性检查整棵 run tree；run 根或任意嵌套目录 / 文件为 symlink、任一 realpath 逃出 run 根或出现非普通文件时立即 `blocked`，且不继续读取该树中的 artifact。
 - `retries/*.json` 必须只包含 retry schema 的固定字段，通过 `retry-task` 校验，并且 `runId`、`originalTaskRef` 分别匹配当前 dispatch 和其中一个 task。
 
+validator 只校验可确定、可复现的结构、路径、hash、引用、状态和运行时结果闭合。机器不证明 target 的语义身份、current scope / inputRefs 的语义完整性、`baseRunId` 是时间上的真正直接前驱，也不判断主 agent 的语义扩审是否充分；这些仍是主 agent、调用方与 reviewer 的人工责任，不得用关键词启发式或静默回退 full 伪装为已验证。
+
 `semanticVerdict` 派生规则：
 
 - 任意合法 result `status = "finding"` => `issues`
@@ -483,7 +510,7 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 2：用法 / IO / JSON parse / schema 文件缺失等执行错误
 ```
 
-stdout 一律输出 strict JSON。
+stdout 一律输出 strict JSON，并包含 `schemaVersion = 3`。
 
 ---
 

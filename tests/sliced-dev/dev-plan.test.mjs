@@ -817,17 +817,58 @@ function initGitRepo() {
   execFileSync('git', ['config', 'user.name', 'Test User']);
 }
 
+async function materializeRulesReviewV3RunFixture() {
+  await ensureGitRepoFixture();
+  await fs.mkdir(path.join('.agents', 'rules'), { recursive: true });
+  await fs.mkdir('rules-review-input', { recursive: true });
+  await Promise.all([
+    fs.writeFile(path.join('.agents', 'rules', 'index.md'), '# Rules\n', 'utf8'),
+    fs.writeFile(path.join('.agents', 'rules', 'core.md'), '# CORE-001\n', 'utf8'),
+    fs.writeFile(path.join('.agents', 'rules', 'type.md'), '# TYPE-001\n', 'utf8'),
+    fs.writeFile(path.join('.agents', 'rules', 'ui.md'), '# UI-001\n', 'utf8'),
+    fs.writeFile(path.join('rules-review-input', 'example.ts'), 'export const fixture = true;\n', 'utf8'),
+  ]);
+
+  const dispatch = JSON.parse(await fs.readFile(path.join(cleanRulesReviewFixture, 'dispatch.json'), 'utf8'));
+  const runId = dispatch.runId;
+  const runDir = path.join('.rules-review-tmp', runId);
+  await fs.rm(runDir, { recursive: true, force: true });
+  await fs.mkdir(path.dirname(runDir), { recursive: true });
+  await fs.cp(cleanRulesReviewFixture, runDir, { recursive: true });
+  dispatch.schemaVersion = 3;
+  dispatch.fullReason = 'sliced-dev close-check v3 fixture';
+  dispatch.changedFiles = [];
+  dispatch.inputSnapshot = { files: [] };
+  [...dispatch.targets.changedUnits, ...dispatch.targets.candidates].forEach((target) => {
+    target.inputRefs = ['rules-review-input/example.ts'];
+  });
+  await fs.writeFile(path.join(runDir, 'dispatch.json'), `${JSON.stringify(dispatch, null, 2)}\n`, 'utf8');
+
+  const shardPath = path.join(runDir, 'shards/B001.json');
+  const shard = JSON.parse(await fs.readFile(shardPath, 'utf8'));
+  shard.schemaVersion = 3;
+  await fs.writeFile(shardPath, `${JSON.stringify(shard, null, 2)}\n`, 'utf8');
+  await fs.rm(path.join(runDir, 'tasks'), { recursive: true, force: true });
+
+  for (const args of [
+    ['--mode', 'seal-dispatch', '--input', path.join(runDir, 'dispatch.json')],
+    ['--mode', 'build-tasks', '--dispatch', path.join(runDir, 'dispatch.json'), '--out', path.join(runDir, 'tasks')],
+    ['--mode', 'aggregate-final', '--dir', runDir, '--output', path.join(runDir, 'finalReview.json')],
+    ['--mode', 'render-final', '--input', path.join(runDir, 'finalReview.json'), '--dispatch', path.join(runDir, 'dispatch.json'), '--output', path.join(runDir, 'final.md')],
+  ]) {
+    const result = spawnSync(process.execPath, [rulesReviewValidator, ...args]);
+    assert.equal(result.status, 0, result.stderr.toString());
+  }
+  return { runId, runDir };
+}
+
 async function prepareRulesReviewRunFixture({
   shouldFix = false,
   multipleShouldFix = false,
   mustFix = false,
   cannotVerify = false,
 } = {}) {
-  const dispatch = JSON.parse(await fs.readFile(path.join(cleanRulesReviewFixture, 'dispatch.json'), 'utf8'));
-  const runId = dispatch.runId;
-  const runDir = path.join('.rules-review-tmp', runId);
-  await fs.mkdir(path.dirname(runDir), { recursive: true });
-  await fs.cp(cleanRulesReviewFixture, runDir, { recursive: true });
+  const { runId, runDir } = await materializeRulesReviewV3RunFixture();
 
   if (shouldFix || mustFix || cannotVerify) {
     const shardPath = path.join(runDir, 'shards/B001.json');
@@ -910,11 +951,7 @@ async function prepareRulesReviewRunFixture({
 }
 
 async function prepareNonPassingRulesReviewRunFixture(recommendation) {
-  const dispatch = JSON.parse(await fs.readFile(path.join(cleanRulesReviewFixture, 'dispatch.json'), 'utf8'));
-  const runId = dispatch.runId;
-  const runDir = path.join('.rules-review-tmp', runId);
-  await fs.mkdir(path.dirname(runDir), { recursive: true });
-  await fs.cp(cleanRulesReviewFixture, runDir, { recursive: true });
+  const { runId, runDir } = await materializeRulesReviewV3RunFixture();
   const currentDispatch = JSON.parse(await fs.readFile(path.join(runDir, 'dispatch.json'), 'utf8'));
   const blocked = recommendation === 'review_blocked';
   currentDispatch.reviewBatches[0].returnStatus = blocked ? 'format_invalid' : 'not_returned';
@@ -950,7 +987,7 @@ async function prepareNonPassingRulesReviewRunFixture(recommendation) {
     '--output',
     path.join(runDir, 'final.md'),
   ]);
-  assert.equal(render.status, 0, render.stderr.toString());
+  assert.equal(render.status, 1, render.stderr.toString());
   const result = spawnSync(process.execPath, [rulesReviewValidator, '--mode', 'run', '--dir', runDir]);
   assert.equal(result.status, 1, result.stderr.toString());
   const gate = JSON.parse(result.stdout).gate;
@@ -4498,7 +4535,7 @@ test('CLI close-check blocks should-fix findings under zero-known-defects closur
 
     const runDir = path.join('.rules-review-tmp', rulesReview.runId);
     await fs.rm(runDir, { recursive: true, force: true });
-    await fs.cp(cleanRulesReviewFixture, runDir, { recursive: true });
+    await materializeRulesReviewV3RunFixture();
     const auditsPath = path.join(planDir, 'audits.md');
     const audits = await fs.readFile(auditsPath, 'utf8');
     await fs.writeFile(

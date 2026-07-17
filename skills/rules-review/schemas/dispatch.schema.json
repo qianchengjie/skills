@@ -3,11 +3,20 @@
   "$id": "https://agents.local/rules-review/dispatch.schema.json",
   "title": "rules-review dispatch",
   "type": "object",
-  "required": ["kind", "schemaVersion", "runId", "ruleSet", "targets", "applicabilityMatrix", "reviewItems", "executionPlan", "reviewBatches"],
+  "required": ["kind", "schemaVersion", "runId", "ruleSet", "targets", "applicabilityMatrix", "reviewItems", "executionPlan", "reviewBatches", "changedFiles", "inputSnapshot"],
   "properties": {
     "kind": { "const": "rules-review-dispatch" },
-    "schemaVersion": { "enum": [2, 3] },
-    "runId": { "type": "string", "minLength": 1 },
+    "schemaVersion": { "const": 3 },
+    "runId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+    "fullReason": { "type": "string", "minLength": 1 },
+    "continuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseRunId"],
+      "properties": {
+        "baseRunId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" }
+      }
+    },
     "ruleSet": {
       "type": "object",
       "required": ["ruleSetId", "sourceIndexHash", "candidateRuleRefs", "selectedRuleRefs", "requiredRuleRefs", "excludedRuleRefs", "globallyNotApplicableRuleRefs", "ruleSources"],
@@ -49,14 +58,18 @@
     },
     "priorReviewCheck": false
   },
-  "allOf": [
+  "oneOf": [
     {
-      "if": {
-        "required": ["schemaVersion"],
-        "properties": { "schemaVersion": { "const": 3 } }
-      },
-      "then": { "required": ["changedFiles", "inputSnapshot"] }
+      "required": ["fullReason"],
+      "not": { "required": ["continuation"] }
     },
+    {
+      "required": ["continuation"],
+      "not": { "required": ["fullReason"] },
+      "properties": { "reviewItems": { "minItems": 1 } }
+    }
+  ],
+  "allOf": [
     {
       "if": {
         "required": ["executionPlan"],
@@ -68,10 +81,7 @@
         }
       },
       "then": {
-        "not": { "required": ["continuation"] },
         "properties": {
-          "schemaVersion": { "const": 3 },
-          "reviewItems": { "maxItems": 0 },
           "reviewBatches": { "maxItems": 0 },
           "executionPlan": {
             "properties": {
@@ -203,7 +213,7 @@
       "type": "object",
       "required": ["targetId", "targetKind"],
       "properties": {
-        "targetId": { "type": "string", "minLength": 1 },
+        "targetId": { "type": "string", "pattern": "^T\\d{3,}$" },
         "targetKind": { "type": "string", "minLength": 1 },
         "inputRefs": {
           "type": "array",
@@ -220,10 +230,10 @@
       "required": ["ruleRef", "targetId", "targetKind", "applicability", "evidence"],
       "properties": {
         "ruleRef": { "type": "string", "minLength": 1 },
-        "targetId": { "type": "string", "minLength": 1 },
+        "targetId": { "type": "string", "pattern": "^T\\d{3,}$" },
         "targetKind": { "type": "string", "minLength": 1 },
         "applicability": { "enum": ["applicable", "not_applicable"] },
-        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
+        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3,}$" },
         "reason": { "type": "string", "minLength": 1 },
         "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } }
       }
@@ -232,22 +242,22 @@
       "type": "object",
       "required": ["reviewItemId", "ruleRef", "targetKind", "targetId", "required"],
       "properties": {
-        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
+        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3,}$" },
         "ruleRef": { "type": "string", "minLength": 1 },
         "targetKind": { "type": "string", "minLength": 1 },
-        "targetId": { "type": "string", "minLength": 1 },
+        "targetId": { "type": "string", "pattern": "^T\\d{3,}$" },
         "required": { "type": "boolean" }
       }
     },
     "reviewBatch": {
       "type": "object",
-      "required": ["reviewBatchId", "ruleSetId", "reviewItemIds", "taskRef", "returnStatus", "aggregateStatus"],
+      "required": ["reviewBatchId", "ruleSetId", "reviewItemIds", "taskRef", "shardRef", "returnStatus", "aggregateStatus"],
       "properties": {
-        "reviewBatchId": { "type": "string", "minLength": 1 },
+        "reviewBatchId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
         "ruleSetId": { "type": "string", "minLength": 1 },
         "reviewItemIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-        "taskRef": { "type": "string", "minLength": 1 },
-        "shardRef": { "type": ["string", "null"] },
+        "taskRef": { "type": "string", "pattern": "^tasks/[A-Za-z0-9][A-Za-z0-9_-]*\\.json$" },
+        "shardRef": { "type": ["string", "null"], "pattern": "^shards/[A-Za-z0-9][A-Za-z0-9_-]*\\.json$" },
         "returnStatus": { "enum": ["not_started", "started", "returned", "not_returned", "format_invalid", "untrusted"] },
         "aggregateStatus": { "enum": ["aggregated", "not_aggregated"] },
         "unaggregatedReason": { "type": ["string", "null"] }

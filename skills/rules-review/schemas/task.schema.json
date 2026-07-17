@@ -6,9 +6,9 @@
   "required": ["kind", "schemaVersion", "runId", "reviewBatchId", "ruleSetId", "reviewItems", "rules", "targets", "applicabilityMatrix", "outputContract"],
   "properties": {
     "kind": { "const": "rules-review-task" },
-    "schemaVersion": { "const": 2 },
-    "runId": { "type": "string", "minLength": 1 },
-    "reviewBatchId": { "type": "string", "minLength": 1 },
+    "schemaVersion": { "const": 3 },
+    "runId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+    "reviewBatchId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "ruleSetId": { "type": "string", "minLength": 1 },
     "reviewItems": { "type": "array", "items": { "$ref": "dispatch.schema.json#/$defs/reviewItem" } },
     "rules": { "type": "array", "items": { "$ref": "dispatch.schema.json#/$defs/ruleSource" } },

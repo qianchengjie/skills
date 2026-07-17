@@ -3,8 +3,9 @@
   "$id": "https://agents.local/rules-review/validation.schema.json",
   "title": "rules-review validation result",
   "type": "object",
-  "required": ["ok", "mode", "artifact", "violations", "skipped"],
+  "required": ["schemaVersion", "ok", "mode", "artifact", "violations", "skipped"],
   "properties": {
+    "schemaVersion": { "const": 3 },
     "ok": { "type": "boolean" },
     "mode": { "type": "string" },
     "artifact": { "type": ["string", "null"] },

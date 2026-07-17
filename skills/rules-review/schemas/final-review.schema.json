@@ -6,8 +6,8 @@
   "required": ["kind", "schemaVersion", "runId", "protocolGate", "scopeMode", "coverageClaim", "semanticVerdict", "excludedRuleRefs", "findings", "observations", "issueSummary", "recommendation", "validationResults"],
   "properties": {
     "kind": { "const": "rules-review-final-review" },
-    "schemaVersion": { "const": 2 },
-    "runId": { "type": "string", "minLength": 1 },
+    "schemaVersion": { "const": 3 },
+    "runId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "protocolGate": { "enum": ["passed", "incomplete", "blocked"] },
     "scopeMode": { "enum": ["full", "scoped"] },
     "coverageClaim": { "enum": ["full_complete", "scoped_complete", "incomplete", "blocked"] },
@@ -37,9 +37,9 @@
       "type": "object",
       "required": ["reviewItemId", "ruleRef", "targetId", "reason"],
       "properties": {
-        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
+        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3,}$" },
         "ruleRef": { "type": "string", "minLength": 1 },
-        "targetId": { "type": "string", "minLength": 1 },
+        "targetId": { "type": "string", "pattern": "^T\\d{3,}$" },
         "reason": { "type": "string", "minLength": 1 }
       }
     },
@@ -60,9 +60,9 @@
       "required": ["findingId", "reviewItemId", "ruleRef", "targetId", "ruleLevel", "origin", "priority", "evidence"],
       "properties": {
         "findingId": { "type": "string", "pattern": "^F\\d{3,}$" },
-        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
+        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3,}$" },
         "ruleRef": { "type": "string", "minLength": 1 },
-        "targetId": { "type": "string", "minLength": 1 },
+        "targetId": { "type": "string", "pattern": "^T\\d{3,}$" },
         "ruleLevel": { "enum": ["MUST", "SHOULD", "ADVISORY"] },
         "origin": { "enum": ["introduced_by_change", "worsened_by_change", "exposed_by_change", "pre_existing"] },
         "priority": { "enum": ["must_fix", "should_fix"] },
@@ -81,9 +81,9 @@
         { "required": ["evidence"] }
       ],
       "properties": {
-        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3}$" },
+        "reviewItemId": { "type": "string", "pattern": "^RI\\d{3,}$" },
         "ruleRef": { "type": "string", "minLength": 1 },
-        "targetId": { "type": "string", "minLength": 1 },
+        "targetId": { "type": "string", "pattern": "^T\\d{3,}$" },
         "ruleLevel": { "enum": ["MUST", "SHOULD", "ADVISORY"] },
         "origin": { "enum": ["introduced_by_change", "worsened_by_change", "exposed_by_change", "pre_existing"] },
         "reason": { "type": "string", "minLength": 1 },
