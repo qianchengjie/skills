@@ -4,7 +4,7 @@
 
 ## 控制器流程
 
-控制器负责生成 review-package、派发 general reviewer subagent、必要时派发 rule-reviewer subagent，并把四 verdict 一次性写回 `plan.md` / D/A。review package 是注意力收束视图，不是真源；reviewer subagent 不修改业务文件或 sliced-dev 真源。
+控制器负责生成 review-package、派发 general reviewer subagent、必要时派发 rule-reviewer subagent，并把四 verdict 一次性写回 `plan.md` / D/A。review package 是注意力收束视图，不是真源；reviewer subagent 不修改业务文件或 sliced-dev 真源。general reviewer 首轮做 full review，修复后只做基于直接上一轮 A* 的 incremental re-review。
 
 当前运行时只提供上下文隔离，不提供独立 workspace 或 reviewer 权限沙盒。reviewer 与控制器共享工作区；下述只读边界由 reviewer 遵守，控制器仍以 final summary 和实际 diff 做接收检查。
 
@@ -15,7 +15,7 @@
 - 已运行 `review-package` 命令，生成 `review-packages/<S-id>.md`。
 - review-package 包含当前片 Claims 概览和 evidence 明细。
 
-派发时必须使用 `spawn_agent`，参数固定：
+首轮 general reviewer 和每轮 rule-reviewer 使用 `spawn_agent`。首轮 general reviewer 参数固定：
 
 ```json
 {
@@ -27,6 +27,17 @@
 
 `task_name` 使用小写字母、数字和下划线，并包含切片号与本轮尝试号；general reviewer 例如 `review_s1_a1`，rule-reviewer 例如 `rule_review_s1_a1`。`attempt` 只区分 reviewer 派发轮次，不等于切片 `修复次数`；是否计次由控制器按有限修复规则判断。不要添加当前 `spawn_agent` schema 未定义的字段。
 
+后续 general re-review 必须优先对原 reviewer 调用 `followup_task`，传入新生成的 incremental package：
+
+```json
+{
+  "target": "review_s1_a1",
+  "message": "<使用下方任务包模板，指向本轮 incremental package>"
+}
+```
+
+只有原 reviewer 不可用、已丢失句柄或运行时拒绝 follow-up 时，才能新建 reviewer。新 reviewer 必须从同一 incremental package 和其内嵌基线 A* 恢复上下文，不得以“我不是原 reviewer”为由改成 full review；controller 在当前切片 `#### 门禁记录` 记录 fallback 原因和消费的 A*。subagent 记忆只是便利条件，package + A* 才是恢复真源。
+
 ## General Reviewer 任务包模板
 
 ```text
@@ -34,6 +45,8 @@
 
 当前切片：<S-id>
 Review package：<dev-plans/.../review-packages/<S-id>.md>
+General Review 模式：<full / incremental>
+直接基线：<无 / A*>
 
 主输入：
 - 以 review package 为主输入。
@@ -42,6 +55,8 @@ Review package：<dev-plans/.../review-packages/<S-id>.md>
 - review 时先看 `Claims`，再用 `Task Report` 定位 implementer handoff，最后看 diff。
 - task report 只提供交付索引，不等于 claim 证据真源。
 - 本包不包含 `项目规则审查`；项目规则由独立 rule-reviewer 处理，general reviewer 不读取规则仓、不读取规则 ID、不运行 `get-rules`。
+- `full` 只用于首轮或 package 明示记录 Full reason 的重建基线；`incremental` 不得重新扫描整个任务。
+- `incremental` 只复核基线中 `open / blocked` 的 G*、本轮修复索引所指文件 / 符号 / 验证、受影响 Claims，以及被 delta 直接影响的旧 passed verdict；其它 passed 结论沿用基线。
 
 允许：
 - 读取 review package。
@@ -52,6 +67,7 @@ Review package：<dev-plans/.../review-packages/<S-id>.md>
 - 禁止修改任何文件。
 - 禁止运行 git diff / git log / git status 重新构造审查范围。
 - 禁止读取完整 plan.md 或其他切片来扩大审查范围。
+- incremental 时禁止把累计 Git Diff 当成重新扫描整个任务的授权。
 - 禁止直接询问用户。
 
 证据不足：
@@ -81,7 +97,12 @@ Status / Severity 只能是 passed + not-applicable，或 failed / cannot-verify
 
 `没有新增依赖` 等判断说明写入 Note，不得写入 Evidence。
 
-final summary 只输出三 verdict 表、Claims 证据缺口和必要的 open questions / residual risk，不写回文件。
+final summary 只输出三 verdict 表、Findings 表、Claims 证据缺口和必要的 open questions / residual risk，不写回文件。Findings 表固定为 `Finding | Verdict | Severity | Origin | Disposition | Evidence | Summary`；无 finding 也保留空表。
+
+- `Finding` 使用当前切片稳定的 `G1 / G2 / ...`；incremental 快照必须保留基线所有 G*，不得重编号或静默删除。
+- `Origin` 只能是 `initial / repair-delta / late-discovered`；`Disposition` 只能是 `open / resolved / parked / blocked`。
+- 修复 delta 直接引入的新 finding 用 `repair-delta + open`，进入当前有限修复循环。其它新 finding 用 `late-discovered`：`critical / major` 用 `blocked` 并停止，`minor` 用 `parked` 并作为残余风险。
+- 启用 `零已知缺陷收口` 时，当前切片引入或加重的 finding 不得 parked。
 ```
 
 ## Rule Reviewer 任务包模板

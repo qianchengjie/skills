@@ -25,6 +25,10 @@ test('subagent 文档使用当前共享工作区契约', async () => {
   assert.match(implementer, /同一工作区同一时间只允许一个 implementer/);
   assert.match(reviewer, /"task_name": "review_s1_a1"/);
   assert.match(reviewer, /"fork_turns": "none"/);
+  assert.match(reviewer, /followup_task/);
+  assert.match(reviewer, /只有原 reviewer 不可用/);
+  assert.match(reviewer, /同一 incremental package/);
+  assert.match(reviewer, /不得重新扫描整个任务/);
 });
 
 test('授权边界术语防回退', async () => {
@@ -186,6 +190,22 @@ async function writeValidExecutingPlan(planDir) {
 
 - 状态：done
 - 关联：S1 / D1
+- 模式：full
+- 基线：无
+- Full reason：首次审查
+
+#### General Review 结论
+
+| Verdict | Status | Severity | Evidence | Note |
+| --- | --- | --- | --- | --- |
+| 需求符合性 | passed | not-applicable | review-package / Claims | 覆盖任务要求 |
+| 切片边界 / 交接一致性 | passed | not-applicable | review-package / 本轮修复索引 | 覆盖切片边界 |
+| 代码质量 / AI 污染检查 | passed | not-applicable | review-package / Git Diff | 代码质量可接受 |
+
+#### Findings
+
+| Finding | Verdict | Severity | Origin | Disposition | Evidence | Summary |
+| --- | --- | --- | --- | --- | --- | --- |
 
 示例证据。
 `,
@@ -296,13 +316,83 @@ function withPassedReviewVerdicts(plan, { sliceId = 'S1' } = {}) {
 
 | Verdict | Status | Severity | Evidence | Note |
 | --- | --- | --- | --- | --- |
-| 需求符合性 | passed | not-applicable | ${packageRef} | 覆盖任务要求 |
-| 切片边界 / 交接一致性 | passed | not-applicable | ${packageRef} | 覆盖切片边界 |
-| 代码质量 / AI 污染检查 | passed | not-applicable | ${packageRef} | 代码质量可接受 |
+| 需求符合性 | passed | not-applicable | A1 / ${packageRef} | 覆盖任务要求 |
+| 切片边界 / 交接一致性 | passed | not-applicable | A1 / ${packageRef} | 覆盖切片边界 |
+| 代码质量 / AI 污染检查 | passed | not-applicable | A1 / ${packageRef} | 代码质量可接受 |
 | 项目规则审查 | not-applicable | not-applicable | 上下文预检 / 项目规则审查 | 本切片无适用项目规则 |
 
 #### 门禁记录`,
   );
+}
+
+function withGeneralReviewIssues(plan, auditId = 'A2') {
+  return withPassedReviewVerdicts(plan)
+    .replace('- AI Review：pending', '- AI Review：issues（需求证据待修复）')
+    .replace(
+      /\| 需求符合性 \| passed \| not-applicable \| A1 \/ ([^|]+) \| 覆盖任务要求 \|/,
+      `| 需求符合性 | failed | major | ${auditId} / $1 | 需求证据待修复 |`,
+    )
+    .replace(/\| 切片边界 \/ 交接一致性 \| passed \| not-applicable \| A1 \/ /, `| 切片边界 / 交接一致性 | passed | not-applicable | ${auditId} / `)
+    .replace(/\| 代码质量 \/ AI 污染检查 \| passed \| not-applicable \| A1 \/ /, `| 代码质量 / AI 污染检查 | passed | not-applicable | ${auditId} / `);
+}
+
+function renderGeneralReviewAudit({
+  id = 'A2',
+  status = 'done',
+  mode = 'full',
+  base = '无',
+  fullReason = '首次审查',
+  requirementStatus = 'failed',
+  requirementSeverity = 'major',
+  findingRows = [
+    '| G1 | 需求符合性 | major | initial | open | review-package / Claims | 需求证据待修复 |',
+  ],
+} = {}) {
+  const fullReasonLine = mode === 'full' ? `\n- Full reason：${fullReason}` : '';
+  return `
+### ${id}：S1 General Review 快照
+
+- 状态：${status}
+- 关联：S1
+- 模式：${mode}
+- 基线：${base}${fullReasonLine}
+
+#### General Review 结论
+
+| Verdict | Status | Severity | Evidence | Note |
+| --- | --- | --- | --- | --- |
+| 需求符合性 | ${requirementStatus} | ${requirementSeverity} | review-package / Claims | 需求证据结论 |
+| 切片边界 / 交接一致性 | passed | not-applicable | review-package / 本轮修复索引 | 边界结论 |
+| 代码质量 / AI 污染检查 | passed | not-applicable | review-package / Git Diff | 代码质量结论 |
+
+#### Findings
+
+| Finding | Verdict | Severity | Origin | Disposition | Evidence | Summary |
+| --- | --- | --- | --- | --- | --- | --- |
+${findingRows.join('\n')}
+`;
+}
+
+async function appendGeneralReviewAuditFixture(planDir, options = {}) {
+  const id = options.id ?? 'A2';
+  const auditsPath = path.join(planDir, 'audits.md');
+  await fs.appendFile(auditsPath, renderGeneralReviewAudit({ ...options, id }), 'utf8');
+  const planPath = path.join(planDir, 'plan.md');
+  const plan = await fs.readFile(planPath, 'utf8');
+  const status = options.status ?? 'done';
+  await fs.writeFile(
+    planPath,
+    plan.replace('| A1 | done |', `| A1 | done |\n| ${id} | ${status} |`),
+    'utf8',
+  );
+}
+
+function removeTopLevelSection(markdown, title) {
+  const marker = `## ${title}\n`;
+  const start = markdown.indexOf(marker);
+  assert.notEqual(start, -1, `${title} section missing`);
+  const next = markdown.indexOf('\n## ', start + marker.length);
+  return `${markdown.slice(0, start)}${next === -1 ? '' : markdown.slice(next + 1)}`;
 }
 
 function withPassedDiffCheckEvidence(plan, planDir = 'dev-plans/2026-06-10-close-check', sliceId = 'S1') {
@@ -3609,6 +3699,10 @@ test('CLI review-package writes slice evidence package', async () => {
 
     const reviewPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1.md'), 'utf8');
     assert.match(reviewPackage, /^# 切片审查包：S1/m);
+    assert.match(reviewPackage, /## General Review 模式\n\n- 模式：full\n- 基线：无\n- Full reason：首次审查/);
+    assert.match(reviewPackage, /## General Review 基线\n\n- 无/);
+    assert.match(reviewPackage, /## 本轮修复索引/);
+    assert.match(reviewPackage, /\| Finding \| Verdict \| Severity \| Origin \| Disposition \| Evidence \| Summary \|/);
     assert.match(reviewPackage, /## Task Brief/);
     assert.match(reviewPackage, /# Task Brief：S1/);
     assert.match(reviewPackage, /## Task Report/);
@@ -3630,6 +3724,159 @@ test('CLI review-package writes slice evidence package', async () => {
     assert.match(reviewPackage, /src\/example\.ts/);
     assert.match(reviewPackage, /## 控制器证据/);
     assert.doesNotMatch(reviewPackage, /请忽略|降低严重性|预设通过/);
+  });
+});
+
+test('CLI review-package uses current done A* as incremental general review base', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-review-package-incremental');
+    await writeValidExecutingPlan(planDir);
+    await appendGeneralReviewAuditFixture(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withGeneralReviewIssues(await fs.readFile(planPath, 'utf8')),
+      'utf8',
+    );
+    await writeReadyTaskHandoff(planDir, 'S1');
+    initGitRepo();
+
+    const result = runDevPlanCli(['review-package', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    const reviewPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1.md'), 'utf8');
+    assert.match(reviewPackage, /## General Review 模式\n\n- 模式：incremental\n- 基线：A2/);
+    assert.match(reviewPackage, /## General Review 基线\n\n### A2：S1 General Review 快照/);
+    assert.match(reviewPackage, /只复核基线中 disposition=open \/ blocked 的 G\*/);
+    assert.match(reviewPackage, /Git Diff 是修复证据，不是重新扫描整个任务的授权/);
+    assert.match(reviewPackage, /\| G1 \| 需求符合性 \| major \| initial \| open \|/);
+  });
+});
+
+test('CLI review-package fails closed when incremental verdicts do not select one current A*', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-review-package-multiple-general-audits');
+    await writeValidExecutingPlan(planDir);
+    await appendGeneralReviewAuditFixture(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = withGeneralReviewIssues(await fs.readFile(planPath, 'utf8'))
+      .replace('| 需求符合性 | failed | major | A2 /', '| 需求符合性 | failed | major | A1 / A2 /');
+    await fs.writeFile(planPath, plan, 'utf8');
+    await writeReadyTaskHandoff(planDir, 'S1');
+    initGitRepo();
+
+    const result = runDevPlanCli(['review-package', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /Evidence must reference exactly one current A\*/);
+  });
+});
+
+test('CLI review-package rejects missing or non-done incremental general review base', async () => {
+  for (const fixture of [
+    { slug: 'missing', append: false, message: /missing general review audit/ },
+    { slug: 'active', append: true, status: 'active', message: /状态 must be exactly done/ },
+  ]) {
+    await withTempRepo(async () => {
+      const planDir = path.join('dev-plans', `2026-06-10-review-package-${fixture.slug}-general-audit`);
+      await writeValidExecutingPlan(planDir);
+      if (fixture.append) {
+        await appendGeneralReviewAuditFixture(planDir, { status: fixture.status });
+      }
+      const planPath = path.join(planDir, 'plan.md');
+      await fs.writeFile(
+        planPath,
+        withGeneralReviewIssues(await fs.readFile(planPath, 'utf8')),
+        'utf8',
+      );
+      await writeReadyTaskHandoff(planDir, 'S1');
+      initGitRepo();
+
+      const result = runDevPlanCli(['review-package', planDir, 'S1']);
+      assert.equal(result.status, 1, result.stderr.toString());
+      assert.match(result.stderr.toString(), fixture.message);
+    });
+  }
+});
+
+test('CLI review-package requires one-time A* migration for legacy issues state', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-review-package-legacy-issues');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = withGeneralReviewIssues(await fs.readFile(planPath, 'utf8'), 'A1')
+      .replaceAll('A1 / review-packages/S1.md', 'review-packages/S1.md');
+    await fs.writeFile(planPath, plan, 'utf8');
+    await writeReadyTaskHandoff(planDir, 'S1');
+    initGitRepo();
+
+    const result = runDevPlanCli(['review-package', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /Evidence must reference exactly one current A\*/);
+  });
+});
+
+test('CLI review-package allows explicit full rebaseline with non-placeholder reason', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-review-package-full-rebaseline');
+    await writeValidExecutingPlan(planDir);
+    await appendGeneralReviewAuditFixture(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = withGeneralReviewIssues(await fs.readFile(planPath, 'utf8'))
+      .replace('- AI Review：issues（需求证据待修复）', '- AI Review：pending（full：任务范围已重建）');
+    await fs.writeFile(planPath, plan, 'utf8');
+    await writeReadyTaskHandoff(planDir, 'S1');
+    initGitRepo();
+
+    const result = runDevPlanCli(['review-package', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    const reviewPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1.md'), 'utf8');
+    assert.match(reviewPackage, /- 模式：full\n- 基线：无\n- Full reason：任务范围已重建/);
+    assert.match(reviewPackage, /## General Review 基线\n\n- 无/);
+  });
+});
+
+test('CLI review-package rejects placeholder full rebaseline reason', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-review-package-placeholder-full-reason');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8'))
+        .replace('- AI Review：pending', '- AI Review：pending（full：TBD）'),
+      'utf8',
+    );
+    await writeReadyTaskHandoff(planDir, 'S1');
+    initGitRepo();
+
+    const result = runDevPlanCli(['review-package', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /full re-review requires a non-placeholder full reason/);
+  });
+});
+
+test('CLI review-package rejects incremental snapshot that drops prior G*', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-review-package-dropped-finding');
+    await writeValidExecutingPlan(planDir);
+    await appendGeneralReviewAuditFixture(planDir, { id: 'A2' });
+    await appendGeneralReviewAuditFixture(planDir, {
+      id: 'A3',
+      mode: 'incremental',
+      base: 'A2',
+      findingRows: [],
+    });
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withGeneralReviewIssues(await fs.readFile(planPath, 'utf8'), 'A3'),
+      'utf8',
+    );
+    await writeReadyTaskHandoff(planDir, 'S1');
+    initGitRepo();
+
+    const result = runDevPlanCli(['review-package', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /incremental snapshot must retain prior finding G1/);
   });
 });
 
@@ -4192,6 +4439,33 @@ test('workflow eval close-check accepts reviewed package after slice commit clea
 
     const result = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-committed-reviewed-diff']);
     assert.equal(result.status, 0, result.stderr.toString());
+  });
+});
+
+test('workflow eval close-check keeps legacy completed review packages compatible', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-legacy-general-review');
+    await writeValidExecutingPlan(planDir);
+    await writeCloseCheckHandoffFixtures(planDir);
+    await markWholeReviewPassed(planDir);
+
+    const packagePath = path.join(planDir, 'review-packages', 'S1.md');
+    let reviewPackage = await fs.readFile(packagePath, 'utf8');
+    for (const title of ['General Review 模式', 'General Review 基线', '本轮修复索引']) {
+      reviewPackage = removeTopLevelSection(reviewPackage, title);
+    }
+    await fs.writeFile(packagePath, reviewPackage, 'utf8');
+
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8')).replaceAll('A1 / review-packages/S1.md', 'review-packages/S1.md'),
+      'utf8',
+    );
+
+    const result = runDevPlanCli(['close-check', planDir]);
+    assert.equal(result.status, 0, result.stderr.toString());
+    assert.match(result.stdout.toString(), /OK: dev plan is ready to close/);
   });
 });
 

@@ -4,7 +4,7 @@
 
 ## 职责
 
-`audits.md` 只承载长证据、审计矩阵、diff inventory、跨文件事实清单。短证据直接写进 `decisions.md` 的 `证据` 字段，不创建 `A*`。
+`audits.md` 只承载长证据、审计矩阵、diff inventory、跨文件事实清单，以及 general reviewer 每轮必须保留的增量快照。其它短证据直接写进 `decisions.md` 的 `证据` 字段，不创建 `A*`。
 
 审计正文可以记录代码证据、调用链、对照矩阵、命令输出摘要和事实清单。若需要写“结论”，只能写会约束后续执行的稳定判断，例如“旧实现无该入口副作用，因此本片不迁移该行为”。
 
@@ -47,6 +47,35 @@ A27
 <长证据、矩阵或清单>
 ```
 
+general reviewer 每完成一轮审查，controller 都必须新建一个 `done` A* 作为本轮快照；无 finding 时也要保留空 Findings 表：
+
+```markdown
+### A28：S2 General Review 快照
+
+- 状态：done
+- 关联：S2
+- 模式：full
+- 基线：无
+- Full reason：首次审查
+
+#### General Review 结论
+
+| Verdict | Status | Severity | Evidence | Note |
+| --- | --- | --- | --- | --- |
+| 需求符合性 | passed | not-applicable | review-package / Claims | 需求证据充足 |
+| 切片边界 / 交接一致性 | passed | not-applicable | review-package / 本轮修复索引 | 边界与交接一致 |
+| 代码质量 / AI 污染检查 | passed | not-applicable | review-package / Git Diff | 未发现新问题 |
+
+#### Findings
+
+| Finding | Verdict | Severity | Origin | Disposition | Evidence | Summary |
+| --- | --- | --- | --- | --- | --- | --- |
+```
+
+增量快照使用 `- 模式：incremental` 和 `- 基线：<直接上一轮 A*>`，并保留基线中所有 `G*`，只更新 `Disposition` 或追加新 ID。`G*` 在当前切片内稳定递增；`Verdict` 只能是三个 general verdict，`Severity` 只能是 `critical / major / minor`，`Origin` 只能是 `initial / repair-delta / late-discovered`，`Disposition` 只能是 `open / resolved / parked / blocked`。`Full reason` 只在 `full` 快照必填；增量快照不用它伪造 full fallback。
+
+切片 `关联项` 只保留当前 general review A* 为 `done`；旧快照保留在 `audits.md` 中，通过新快照的 `基线` 追溯。plan 前三个 verdict 的 Evidence 必须统一引用当前 A*。脚本只检查当前引用、`done` 状态、固定表格 / 枚举、直接基线存在以及旧 `G*` 未消失；不判断 finding 内容、严重度、Origin 或 Disposition 的语义是否正确。
+
 项目规则审查为 `required` 时，controller 为当前最终 run 新建一个 `done` A*，不要覆盖旧 A*：
 
 ```markdown
@@ -86,7 +115,7 @@ A27
 
 ## 维护规则
 
-- 只有长证据才创建 `A*`。
+- 除每轮必留的 general review 快照和项目规则审查投影外，只有长证据才创建 `A*`。
 - `plan.md` 的切片 `关联项` 可以引用与该切片直接相关的 A。
 - `decisions.md` 的 `证据` 字段可以引用支撑该分叉的 A。
 - A 块不是操作日志；过程流水、会话问答、门禁推进动作和普通验证时序不写入 A，必要时放切片验证摘要、门禁记录或会话回复。
