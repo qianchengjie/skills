@@ -3,6 +3,7 @@
   "$id": "https://agents.local/rules-review/final-review.schema.json",
   "title": "rules-review final review",
   "type": "object",
+  "additionalProperties": false,
   "required": ["kind", "schemaVersion", "runId", "protocolGate", "scopeMode", "coverageClaim", "semanticVerdict", "excludedRuleRefs", "findings", "observations", "issueSummary", "recommendation", "validationResults"],
   "properties": {
     "kind": { "const": "rules-review-final-review" },

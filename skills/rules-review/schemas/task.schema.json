@@ -3,6 +3,7 @@
   "$id": "https://agents.local/rules-review/task.schema.json",
   "title": "rules-review reviewBatch task",
   "type": "object",
+  "additionalProperties": false,
   "required": ["kind", "schemaVersion", "runId", "reviewBatchId", "ruleSetId", "reviewItems", "rules", "targets", "applicabilityMatrix", "outputContract"],
   "properties": {
     "kind": { "const": "rules-review-task" },
@@ -12,7 +13,13 @@
     "ruleSetId": { "type": "string", "minLength": 1 },
     "reviewItems": { "type": "array", "items": { "$ref": "dispatch.schema.json#/$defs/reviewItem" } },
     "rules": { "type": "array", "items": { "$ref": "dispatch.schema.json#/$defs/ruleSource" } },
-    "targets": { "type": "array", "items": { "$ref": "dispatch.schema.json#/$defs/target" } },
+    "targets": {
+      "type": "array",
+      "items": {
+        "$ref": "dispatch.schema.json#/$defs/target",
+        "properties": { "contentHash": false }
+      }
+    },
     "applicabilityMatrix": { "type": "array", "items": { "$ref": "dispatch.schema.json#/$defs/applicabilityEntry" } },
     "outputContract": {
       "type": "object",

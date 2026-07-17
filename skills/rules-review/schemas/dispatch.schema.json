@@ -3,6 +3,7 @@
   "$id": "https://agents.local/rules-review/dispatch.schema.json",
   "title": "rules-review dispatch",
   "type": "object",
+  "additionalProperties": false,
   "required": ["kind", "schemaVersion", "runId", "ruleSet", "targets", "applicabilityMatrix", "reviewItems", "executionPlan", "reviewBatches", "changedFiles", "inputSnapshot"],
   "properties": {
     "kind": { "const": "rules-review-dispatch" },

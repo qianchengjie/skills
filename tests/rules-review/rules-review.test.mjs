@@ -648,6 +648,20 @@ fixtures = materializeV3Fixtures();
     }
   }
 
+  const unsupportedFieldCases = [
+    ["dispatch-reviewMode", "dispatch", sourceDispatchPath, (artifact) => { artifact.reviewMode = "full"; }, /dispatch contains unsupported field/],
+    ["task-inputSnapshot", "task", sourceTaskPath, (artifact) => { artifact.inputSnapshot = { files: [] }; }, /task contains unsupported field/],
+    ["task-target-contentHash", "task", sourceTaskPath, (artifact) => { artifact.targets[0].contentHash = `sha256:${"0".repeat(64)}`; }, /task target contains unsupported field/],
+    ["final-effectiveResults", "final-review", sourceFinalPath, (artifact) => { artifact.effectiveResults = []; }, /finalReview contains unsupported field/],
+  ];
+  for (const [caseName, mode, sourcePath, mutate, pattern] of unsupportedFieldCases) {
+    const inputPath = path.join(dir, `${caseName}.json`);
+    const artifact = readJson(sourcePath);
+    mutate(artifact);
+    writeJson(inputPath, artifact);
+    await assertValidateFails(["--mode", mode, "--input", inputPath], pattern);
+  }
+
   const unsafeRunTaskPath = path.join(dir, "unsafe-run-task.json");
   const unsafeRunTask = readJson(sourceTaskPath);
   unsafeRunTask.runId = "../run";
@@ -2244,6 +2258,41 @@ await assertRunDirFails(finalObservationTamperDir, /finalReview observations mus
     dispatch.fullReason = "不能同时声明 full 与 incremental";
     writeJson(fixture.currentDispatchPath, dispatch);
     await assertValidateFails(["--mode", "dispatch", "--input", fixture.currentDispatchPath], /incremental dispatch forbids fullReason/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture({ recheckIds: ["RI002"] });
+  try {
+    const baseDispatchPath = path.join(fixture.baseDir, "dispatch.json");
+    const baseTaskPath = path.join(fixture.baseDir, "tasks/B001.json");
+    const baseDispatch = readJson(baseDispatchPath);
+    const baseTask = readJson(baseTaskPath);
+    const currentDispatch = readJson(fixture.currentDispatchPath);
+    const sharedSourceFile = ".agents/rules/core.md";
+    const oldHash = baseDispatch.ruleSet.ruleSources.find((source) => source.ruleRef === "CORE-001").sourceHash;
+
+    const baseType = baseDispatch.ruleSet.ruleSources.find((source) => source.ruleRef === "TYPE-001");
+    Object.assign(baseType, { sourceFile: sharedSourceFile, sourceHash: oldHash });
+    const baseTaskType = baseTask.rules.find((source) => source.ruleRef === "TYPE-001");
+    Object.assign(baseTaskType, { sourceFile: sharedSourceFile, sourceHash: oldHash });
+    currentDispatch.ruleSet.ruleSources.find((source) => source.ruleRef === "TYPE-001").sourceFile = sharedSourceFile;
+
+    fs.writeFileSync(path.join(fixture.root, sharedSourceFile), "# shared rules changed\n");
+    refreshDispatchInputs(currentDispatch, fixture.root);
+    const newHash = currentDispatch.ruleSet.ruleSources.find((source) => source.ruleRef === "CORE-001").sourceHash;
+    baseDispatch.ruleSet.ruleSources.find((source) => source.ruleRef === "CORE-001").sourceHash = newHash;
+    baseTask.rules.find((source) => source.ruleRef === "CORE-001").sourceHash = newHash;
+
+    writeJson(baseDispatchPath, baseDispatch);
+    writeJson(baseTaskPath, baseTask);
+    writeJson(fixture.currentDispatchPath, currentDispatch);
+    await assertValidateFails(
+      ["--mode", "dispatch", "--input", fixture.currentDispatchPath],
+      /same sourceFile must use the same sourceHash/,
+    );
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }

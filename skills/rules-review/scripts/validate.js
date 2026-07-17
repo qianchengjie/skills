@@ -541,6 +541,7 @@ function validateCurrentInputShape(dispatch, reviewItems, artifact, result) {
   });
 
   if (!SHA256_RE.test((dispatch.ruleSet && dispatch.ruleSet.sourceIndexHash) || '')) addViolation(result, 'D214', artifact, '/ruleSet/sourceIndexHash', 'sourceIndexHash must use sha256:<64hex>', 'sha256:<64hex>', dispatch.ruleSet && dispatch.ruleSet.sourceIndexHash);
+  const sourceHashes = new Map();
   asArray(dispatch.ruleSet && dispatch.ruleSet.ruleSources).forEach((source, index) => {
     try {
       assertSafeRepoRelativePath(source && source.sourceFile);
@@ -548,6 +549,13 @@ function validateCurrentInputShape(dispatch, reviewItems, artifact, result) {
       addViolation(result, 'D215', artifact, `/ruleSet/ruleSources/${index}/sourceFile`, error.message, 'safe repository-relative POSIX path', source && source.sourceFile);
     }
     if (!SHA256_RE.test((source && source.sourceHash) || '')) addViolation(result, 'D216', artifact, `/ruleSet/ruleSources/${index}/sourceHash`, 'sourceHash must use sha256:<64hex>', 'sha256:<64hex>', source && source.sourceHash);
+    if (isNonEmptyString(source && source.sourceFile)) {
+      if (!sourceHashes.has(source.sourceFile)) {
+        sourceHashes.set(source.sourceFile, source.sourceHash);
+      } else if (sourceHashes.get(source.sourceFile) !== source.sourceHash) {
+        addViolation(result, 'D218', artifact, `/ruleSet/ruleSources/${index}/sourceHash`, 'ruleSources with the same sourceFile must use the same sourceHash', sourceHashes.get(source.sourceFile), source.sourceHash);
+      }
+    }
   });
 }
 
@@ -621,6 +629,7 @@ function validateDispatch(dispatch, artifact, result, currentInputPath = artifac
   validateDispatchSchemaVersion(dispatch, artifact, result);
   const requiredFields = ['kind', 'schemaVersion', 'runId', 'ruleSet', 'targets', 'applicabilityMatrix', 'reviewItems', 'executionPlan', 'reviewBatches', 'changedFiles', 'inputSnapshot'];
   requireFields(dispatch, artifact, result, 'D004', '', requiredFields);
+  rejectUnsupportedFields(dispatch, artifact, result, 'D006', '', [...requiredFields, 'fullReason', 'continuation', 'priorReviewCheck'], 'dispatch');
   if (!isSafeToken(dispatch && dispatch.runId)) addViolation(result, 'D005', artifact, '/runId', 'runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', dispatch && dispatch.runId);
   validateNoPriorReviewInputs(dispatch, artifact, result);
 
@@ -1190,7 +1199,9 @@ function validateExecutionModeAgainstPolicy(executionPlan, dispatch, artifact, r
 function validateTask(task, artifact, result) {
   expectKind(task, artifact, result, 'T002', 'rules-review-task');
   validateSchemaVersion(task, artifact, result, 'T003');
-  requireFields(task, artifact, result, 'T004', '', ['kind', 'schemaVersion', 'runId', 'reviewBatchId', 'ruleSetId', 'reviewItems', 'rules', 'targets', 'applicabilityMatrix', 'outputContract']);
+  const requiredFields = ['kind', 'schemaVersion', 'runId', 'reviewBatchId', 'ruleSetId', 'reviewItems', 'rules', 'targets', 'applicabilityMatrix', 'outputContract'];
+  requireFields(task, artifact, result, 'T004', '', requiredFields);
+  rejectUnsupportedFields(task, artifact, result, 'T042', '', requiredFields, 'task');
   if (!isSafeToken(task && task.runId)) addViolation(result, 'T022', artifact, '/runId', 'task runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', task && task.runId);
   if (!isSafeToken(task && task.reviewBatchId)) addViolation(result, 'T025', artifact, '/reviewBatchId', 'task reviewBatchId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', task && task.reviewBatchId);
   if (!Array.isArray(task.reviewItems)) addViolation(result, 'T005', artifact, '/reviewItems', 'reviewItems must be array', 'array', task.reviewItems);
@@ -1216,6 +1227,7 @@ function validateTask(task, artifact, result) {
   asArray(task.targets).forEach((target, index) => {
     const pointer = `/targets/${index}`;
     requireFields(target, artifact, result, 'T012', pointer, ['targetId', 'targetKind']);
+    rejectUnsupportedFields(target, artifact, result, 'T043', pointer, ['targetId', 'targetKind', 'inputRefs', 'loc', 'source', 'summary'], 'task target');
     if (!TARGET_RE.test((target && target.targetId) || '')) addViolation(result, 'T024', artifact, `${pointer}/targetId`, 'task targetId must match T followed by at least three digits', 'Txxx...', target && target.targetId);
     if (target && target.inputRefs !== undefined) validateRepoPathArray(target.inputRefs, artifact, result, 'T021', `${pointer}/inputRefs`);
   });
@@ -2393,7 +2405,7 @@ function buildFinalReview(dispatch, results, gate) {
 function validateFinalReviewShape(finalReview, artifact, result) {
   expectKind(finalReview, artifact, result, 'FR002', 'rules-review-final-review');
   validateSchemaVersion(finalReview, artifact, result, 'FR003');
-  requireFields(finalReview, artifact, result, 'FR004', '', [
+  const requiredFields = [
     'kind',
     'schemaVersion',
     'runId',
@@ -2407,7 +2419,9 @@ function validateFinalReviewShape(finalReview, artifact, result) {
     'issueSummary',
     'recommendation',
     'validationResults',
-  ]);
+  ];
+  requireFields(finalReview, artifact, result, 'FR004', '', requiredFields);
+  rejectUnsupportedFields(finalReview, artifact, result, 'FR078', '', [...requiredFields, 'cannotVerifyItems', 'summary'], 'finalReview');
   if (!isSafeToken(finalReview && finalReview.runId)) addViolation(result, 'FR075', artifact, '/runId', 'finalReview runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', finalReview && finalReview.runId);
   if (!PROTOCOL_GATES.includes(finalReview.protocolGate)) addViolation(result, 'FR005', artifact, '/protocolGate', 'protocolGate must be valid', PROTOCOL_GATES, finalReview.protocolGate);
   if (!SCOPE_MODES.includes(finalReview.scopeMode)) addViolation(result, 'FR006', artifact, '/scopeMode', 'scopeMode must be valid', SCOPE_MODES, finalReview.scopeMode);
@@ -2757,6 +2771,16 @@ function requireFields(obj, artifact, result, code, pointer, fields) {
   }
   fields.forEach((field) => {
     if (!(field in obj)) addViolation(result, code, artifact, pointer ? `${pointer}/${field}` : `/${field}`, 'required field is missing', field, null);
+  });
+}
+
+function rejectUnsupportedFields(obj, artifact, result, code, pointer, fields, labelText) {
+  if (!isObject(obj)) return;
+  const allowedFields = new Set(fields);
+  Object.keys(obj).forEach((field) => {
+    if (!allowedFields.has(field)) {
+      addViolation(result, code, artifact, pointer ? `${pointer}/${field}` : `/${field}`, `${labelText} contains unsupported field`, fields, field);
+    }
   });
 }
 
