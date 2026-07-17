@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -282,6 +283,10 @@ function getArgValue(args, name) {
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function sha256(value) {
+  return `sha256:${createHash('sha256').update(value).digest('hex')}`;
 }
 
 function getFenceDelimiter(line) {
@@ -2038,23 +2043,7 @@ function renderFencedCodeBlock(language, content) {
   return `${fence}${info}\n${content}\n${fence}`;
 }
 
-function renderAssociatedBlocks(sliceBody, decisions, audits) {
-  const association = parseAssociationItems(sliceBody);
-  if (association.items.length === 0) return '- 无';
-  return association.items
-    .map((item) => {
-      if (DECISION_ID_RE.test(item.id)) {
-        return decisions.get(item.id)?.body.trimEnd() ?? `### ${item.id}\n\n未找到。`;
-      }
-      if (AUDIT_ID_RE.test(item.id)) {
-        return audits.get(item.id)?.body.trimEnd() ?? `### ${item.id}\n\n未找到。`;
-      }
-      return `${item.id}：无法识别。`;
-    })
-    .join('\n\n');
-}
-
-function renderRuleReviewAssociatedBlocks(sliceBody, decisions, audits) {
+function renderAssociatedBlocksWithoutGeneralReview(sliceBody, decisions, audits) {
   const association = parseAssociationItems(sliceBody);
   const blocks = association.items.flatMap((item) => {
     if (DECISION_ID_RE.test(item.id)) {
@@ -2848,6 +2837,7 @@ function readGeneralReviewAuditSnapshot(auditId, audits, { validateBase = true }
   const mode = parseSingleTopLevelField(audit.body, '模式');
   const base = parseSingleTopLevelField(audit.body, '基线');
   const fullReason = parseSingleTopLevelField(audit.body, 'Full reason');
+  const reviewPackageHash = parseSingleTopLevelField(audit.body, 'reviewPackageHash');
   if (status.values.length !== 1 || status.value !== 'done') {
     errors.push(`audits.md:${auditId}: general review audit 状态 must be exactly done`);
   }
@@ -2859,6 +2849,11 @@ function readGeneralReviewAuditSnapshot(auditId, audits, { validateBase = true }
   }
   if (fullReason.values.length > 1) {
     errors.push(`audits.md:${auditId}: Full reason must appear at most once`);
+  }
+  if (reviewPackageHash.values.length > 1) {
+    errors.push(`audits.md:${auditId}: reviewPackageHash must appear at most once`);
+  } else if (reviewPackageHash.value && !SHA256_RE.test(reviewPackageHash.value)) {
+    errors.push(`audits.md:${auditId}: reviewPackageHash must be sha256:<64 lowercase hex>`);
   }
 
   const verdicts = parseVerdictTable(audit.body, GENERAL_REVIEW_AUDIT_VERDICTS_SECTION);
@@ -2905,6 +2900,7 @@ function readGeneralReviewAuditSnapshot(auditId, audits, { validateBase = true }
       mode: mode.value,
       base: base.value,
       fullReason: fullReason.value,
+      reviewPackageHash: reviewPackageHash.value,
       verdicts,
       findings,
     },
@@ -3001,6 +2997,11 @@ function resolveGeneralReviewPackageContext(sliceId, sliceBody, audits) {
 
   const current = resolveCurrentGeneralReviewAudit(sliceId, sliceBody, audits);
   if (current.errors.length > 0) return { errors: current.errors };
+  if (!current.snapshot.reviewPackageHash) {
+    return {
+      errors: [`plan.md:${sliceId}: incremental general review base ${current.auditId} requires reviewPackageHash; use explicit full re-review`],
+    };
+  }
   return {
     errors: [],
     mode: 'incremental',
@@ -3058,6 +3059,13 @@ function validateCurrentGeneralReviewAuditForClose(sliceId, sliceBody, audits, r
   const current = resolveCurrentGeneralReviewAudit(sliceId, sliceBody, audits);
   const errors = [...packageMode.errors, ...current.errors];
   if (errors.length > 0 || !current.snapshot) return errors;
+
+  const packageHash = sha256(reviewPackage);
+  if (!current.snapshot.reviewPackageHash) {
+    errors.push(`close-check:${sliceId}: current audit ${current.auditId} requires reviewPackageHash`);
+  } else if (current.snapshot.reviewPackageHash !== packageHash) {
+    errors.push(`close-check:${sliceId}: current audit ${current.auditId} reviewPackageHash must match current review package`);
+  }
 
   if (current.snapshot.mode !== packageMode.context.mode) {
     errors.push(`close-check:${sliceId}: current audit ${current.auditId} 模式 must match review package`);
@@ -3619,8 +3627,16 @@ async function buildSliceReviewPackage(planDir, sliceId, { taskBrief, taskReport
   const globalConstraints = getSection(plan, PLAN_GLOBAL_CONSTRAINTS_SECTION);
   const handoff = getSubsection(slice.body, SLICE_HANDOFF_SECTION);
   const claimsResult = await readRequiredSliceClaims(planDir, sliceId, 'review-package');
-  const generalTaskBrief = removeMarkdownHeadingSection(taskBrief.trimEnd(), 3, PROJECT_RULE_REVIEW_FIELD);
-  const generalSliceBody = removeNestedListField(slice.body.trimEnd(), PROJECT_RULE_REVIEW_FIELD);
+  const generalTaskBrief = removeMarkdownHeadingSection(
+    removeMarkdownHeadingSection(taskBrief.trimEnd(), 3, PROJECT_RULE_REVIEW_FIELD),
+    2,
+    '关联 Audits',
+  );
+  const generalSliceBody = removeMarkdownHeadingSection(
+    removeNestedListField(slice.body.trimEnd(), PROJECT_RULE_REVIEW_FIELD),
+    4,
+    SLICE_AI_REVIEW_VERDICTS_SECTION,
+  );
   const generalReviewMode = generalReview.mode === 'full'
     ? `- 模式：full\n- 基线：无\n- Full reason：${generalReview.fullReason}`
     : `- 模式：incremental\n- 基线：${generalReview.base}`;
@@ -3682,7 +3698,7 @@ ${renderMarkdownBlock(handoff)}
 
 ## 关联分叉与审计
 
-${renderAssociatedBlocks(slice.body, decisions, audits)}
+${renderAssociatedBlocksWithoutGeneralReview(slice.body, decisions, audits)}
 
 ## 变更文件
 
@@ -3793,7 +3809,7 @@ ${renderMarkdownBlock(handoff)}
 
 ## 关联分叉与审计
 
-${renderRuleReviewAssociatedBlocks(slice.body, decisions, audits)}
+${renderAssociatedBlocksWithoutGeneralReview(slice.body, decisions, audits)}
 
 ## 变更文件
 
@@ -4772,10 +4788,16 @@ async function buildReviewPrompt(planDir, sliceId) {
   if (packageErrors.length > 0) {
     throw gateError(`review-prompt: ${packageErrors.join('; ')}`);
   }
+  const reviewPackageHash = sha256(reviewPackage);
 
   return `只读取以下 review-package 文件，不要自行查找 git diff、plan、decisions、audits 或仓库其他文件：
 
 ${reviewPackagePath}
+
+本轮输入绑定：
+- reviewPackageHash: ${reviewPackageHash}
+
+final summary 必须原样返回上述 reviewPackageHash；它只绑定本轮输入文件，不代表审查通过。
 
 先审 Claims：逐条判断 behavior / scope / validation / risk claim 是否被 review-package 中的 diff、测试、门禁或说明支撑；证据不足时对应 verdict 不得 passed。
 Evidence 填写 review-package 内的章节名、文件路径或固定不适用标记。自然语言说明只写 Note。缺证据时输出 cannot-verify-from-package，不得 passed。
@@ -4812,6 +4834,8 @@ Status / Severity 只能是 passed + not-applicable，或 failed / cannot-verify
 - Critical、failed 或 unresolved cannot-verify-from-package 都会阻塞 slice done。
 
 输出格式：
+- reviewPackageHash: ${reviewPackageHash}
+
 | Verdict | Status | Severity | Evidence | Note |
 | --- | --- | --- | --- | --- |
 | 需求符合性 | ... | ... | ... | ... |

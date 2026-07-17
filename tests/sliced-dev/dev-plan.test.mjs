@@ -365,6 +365,7 @@ function renderGeneralReviewAudit({
   mode = 'full',
   base = '无',
   fullReason = '首次审查',
+  reviewPackageHash = `sha256:${'1'.repeat(64)}`,
   requirementStatus = 'failed',
   requirementSeverity = 'major',
   findingRows = [
@@ -372,13 +373,14 @@ function renderGeneralReviewAudit({
   ],
 } = {}) {
   const fullReasonLine = mode === 'full' ? `\n- Full reason：${fullReason}` : '';
+  const reviewPackageHashLine = reviewPackageHash ? `\n- reviewPackageHash: ${reviewPackageHash}` : '';
   return `
 ### ${id}：S1 General Review 快照
 
 - 状态：${status}
 - 关联：S1
 - 模式：${mode}
-- 基线：${base}${fullReasonLine}
+- 基线：${base}${fullReasonLine}${reviewPackageHashLine}
 
 #### General Review 结论
 
@@ -750,6 +752,25 @@ async function writeGeneratedReviewPackageFixture(planDir, sliceId = 'S1') {
   await ensureGitRepoFixture();
   const result = runDevPlanCli(['review-package', planDir, sliceId]);
   assert.equal(result.status, 0, result.stderr.toString());
+  const prompt = runDevPlanCli(['review-prompt', planDir, sliceId]);
+  assert.equal(prompt.status, 0, prompt.stderr.toString());
+  const hash = /- reviewPackageHash: (sha256:[0-9a-f]{64})/.exec(prompt.stdout.toString())?.[1];
+  assert.ok(hash, 'review-prompt must output reviewPackageHash');
+
+  const auditsPath = path.join(planDir, 'audits.md');
+  const audits = await fs.readFile(auditsPath, 'utf8');
+  const auditStart = audits.indexOf('### A1：');
+  const auditEnd = audits.indexOf('\n### ', auditStart + 1);
+  assert.notEqual(auditStart, -1, 'A1 fixture missing');
+  const audit = audits.slice(auditStart, auditEnd === -1 ? undefined : auditEnd);
+  const verdictMarker = '\n\n#### General Review 结论';
+  assert.match(audit, /#### General Review 结论/);
+  const updatedAudit = audit.replace(verdictMarker, `\n- reviewPackageHash: ${hash}${verdictMarker}`);
+  await fs.writeFile(
+    auditsPath,
+    `${audits.slice(0, auditStart)}${updatedAudit}${auditEnd === -1 ? '' : audits.slice(auditEnd)}`,
+    'utf8',
+  );
 }
 
 async function writeWholeReviewPackageFixture(planDir) {
@@ -3813,6 +3834,7 @@ test('CLI review-package uses current done A* as incremental general review base
     assert.match(reviewPackage, /只围绕基线中 disposition=open \/ blocked 的 G\* 和本轮 fix diff 做 scoped re-review/);
     assert.match(reviewPackage, /Git Diff 只是证据，不是重新扫描整个任务的授权/);
     assert.match(reviewPackage, /\| G1 \| 需求符合性 \| major \| initial \| open \|/);
+    assert.equal(reviewPackage.match(/### A2：S1 General Review 快照/g)?.length, 1);
   });
 });
 
@@ -3838,12 +3860,16 @@ test('CLI review-package rejects missing or non-done incremental general review 
   for (const fixture of [
     { slug: 'missing', append: false, message: /missing general review audit/ },
     { slug: 'active', append: true, status: 'active', message: /状态 must be exactly done/ },
+    { slug: 'unbound', append: true, reviewPackageHash: null, message: /requires reviewPackageHash/ },
   ]) {
     await withTempRepo(async () => {
       const planDir = path.join('dev-plans', `2026-06-10-review-package-${fixture.slug}-general-audit`);
       await writeValidExecutingPlan(planDir);
       if (fixture.append) {
-        await appendGeneralReviewAuditFixture(planDir, { status: fixture.status });
+        await appendGeneralReviewAuditFixture(planDir, {
+          status: fixture.status,
+          reviewPackageHash: fixture.reviewPackageHash,
+        });
       }
       const planPath = path.join(planDir, 'plan.md');
       await fs.writeFile(
@@ -3895,6 +3921,8 @@ test('CLI review-package allows explicit full rebaseline with non-placeholder re
     const reviewPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1.md'), 'utf8');
     assert.match(reviewPackage, /- 模式：full\n- 基线：无\n- Full reason：任务范围已重建/);
     assert.match(reviewPackage, /## General Review 基线\n\n- 无/);
+    assert.doesNotMatch(reviewPackage, /### A2：S1 General Review 快照/);
+    assert.doesNotMatch(reviewPackage, /需求证据待修复/);
   });
 });
 
@@ -3986,6 +4014,7 @@ test('CLI rule-review-package excludes protocol inputs and only rolls the select
     await fs.writeFile(
       planPath,
       withPassedReviewVerdicts(withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')))
+        .replace('- AI Review：pending', '- AI Review：pending（full：验证 General Review 包含规则审查产物）')
         .replace('\n#### 门禁记录', '\n- 项目规则审查 runId：R0\n\n#### 门禁记录'),
       'utf8',
     );
@@ -4079,7 +4108,8 @@ test('all review package inventories fail closed outside a Git worktree', async 
     const planPath = path.join(planDir, 'plan.md');
     await fs.writeFile(
       planPath,
-      withPassedReviewVerdicts(withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8'))),
+      withPassedReviewVerdicts(withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')))
+        .replace('- AI Review：pending', '- AI Review：pending（full：验证非 Git 工作区门禁）'),
       'utf8',
     );
     await writeReadyTaskHandoff(planDir, 'S1');
@@ -4272,6 +4302,8 @@ test('CLI review-prompt only points reviewer to review-package path', async () =
     assert.match(stdout, /先审 Claims/);
     assert.match(stdout, /证据不足时对应 verdict 不得 passed/);
     assert.match(stdout, /Evidence 填写 review-package 内的章节名、文件路径或固定不适用标记/);
+    assert.match(stdout, /- reviewPackageHash: sha256:[0-9a-f]{64}/);
+    assert.match(stdout, /final summary 必须原样返回上述 reviewPackageHash/);
     assert.match(stdout, /\| Verdict \| Status \| Severity \| Evidence \| Note \|/);
     assert.match(stdout, /Status \/ Severity 只能是 passed \+ not-applicable/);
     assert.match(stdout, /cannot-verify-from-package/);
@@ -5347,6 +5379,23 @@ test('CLI close-check rejects unfinished plans and accepts closed plans with pas
     const closed = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check']);
     assert.equal(closed.status, 0, closed.stderr.toString());
     assert.match(closed.stdout.toString(), /OK: dev plan is ready to close/);
+  });
+});
+
+test('CLI close-check rejects a general review A* bound to stale review-package content', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-review-package-hash');
+    await writeValidExecutingPlan(planDir);
+    await writeCloseCheckHandoffFixtures(planDir);
+    await fs.appendFile(
+      path.join(planDir, 'review-packages', 'S1.md'),
+      '\n<!-- package changed after review -->\n',
+      'utf8',
+    );
+
+    const result = runDevPlanCli(['close-check', planDir]);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /reviewPackageHash must match current review package/);
   });
 });
 

@@ -346,11 +346,11 @@ Evidence 字段规则：
 
 ## AI Review 结论
 
-`#### AI Review 结论` 是 AI Review 的结构化状态真源。执行前可省略；general reviewer 和必要的 rule-reviewer 都完成后，controller 一次性写回。`AI Review` 头部字段仍是真源状态：有可修问题写 `issues`，无法判断写 `blocked`，四项 verdict 收口后才写 `passed`；一旦头部写 `AI Review：passed`，本表必须存在且四项 verdict 完整。`AI Review：issues` / `AI Review：blocked` 必须在头部写非占位摘要 / 原因；若头部未写原因，本表必须提供对应 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位的说明。general reviewer 每轮返回后，controller 新建当前 `done` A* 保存三 verdict 和 Findings，再让 plan 前三个 verdict 的 Evidence 统一引用该 A*；A* 只是审计证据，不取代本表真源。自然语言说明写 Note。
+`#### AI Review 结论` 是 AI Review 的结构化状态真源。执行前可省略；general reviewer 和必要的 rule-reviewer 都完成后，controller 一次性写回。`AI Review` 头部字段仍是真源状态：有可修问题写 `issues`，无法判断写 `blocked`，四项 verdict 收口后才写 `passed`；一旦头部写 `AI Review：passed`，本表必须存在且四项 verdict 完整。`AI Review：issues` / `AI Review：blocked` 必须在头部写非占位摘要 / 原因；若头部未写原因，本表必须提供对应 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位的说明。general reviewer 每轮返回后，controller 新建当前 `done` A* 保存 `reviewPackageHash`、三 verdict 和 Findings，再让 plan 前三个 verdict 的 Evidence 统一引用该 A*；A* 只是审计证据，不取代本表真源。自然语言说明写 Note。
 
-首轮 general review 是 `full`。后续每轮都新建 reviewer；未命中重新 full 条件时，以前三个 verdict Evidence 共同引用的唯一当前 A* 为直接基线，只围绕开放 Findings 和本轮 fix diff 做 scoped re-review。只有被 fix diff 直接影响的 Claims 和旧 passed verdict 才重新判断；累计 Git Diff 只是证据，不授权 reviewer 每轮重新扫描整个任务。基线缺失、多个 A* 候选、A* 非 `done` 或快照结构损坏时 fail-closed，不得静默回退 full。旧计划已处于 `issues / blocked` 但没有当前 general review A* 时，必须先一次性补建当前快照，才能生成下一轮 package。
+首轮 general review 是 `full`。后续每轮都新建 reviewer；未命中重新 full 条件时，以前三个 verdict Evidence 共同引用的唯一当前 A* 为直接基线，只围绕开放 Findings 和本轮 fix diff 做 scoped re-review。只有被 fix diff 直接影响的 Claims 和旧 passed verdict 才重新判断；累计 Git Diff 只是证据，不授权 reviewer 每轮重新扫描整个任务。当前 A* 仅缺少 `reviewPackageHash` 时不得伪造回填，必须显式重新 full；基线缺失、多个 A* 候选、A* 非 `done` 或存在其它快照结构损坏时 fail-closed，不得静默回退 full。旧计划已处于 `issues / blocked` 但没有当前 general review A* 时，必须先一次性补建当前快照，才能生成下一轮 package。
 
-满足以下任一类条件时，controller 必须显式写 `AI Review：pending（full：<非占位原因>）` 重新 full：审查契约发生实质变化，包括切片目标或验收口径、全局约束 / 非目标、审查范围边界、P0/P1 Claim 的要求或接口契约发生变化；或原 full review 不再能作为可信增量基线，包括实际改动超出已审范围、修复无法与 fix diff 清晰隔离、风险等级上升、原审查存在未解决的 `cannot-verify-from-package`，以及无法证明当前代码由已审基线加连续 fix diff 推导而来。新建 reviewer、已审范围内且可隔离的修复文件增加、新测试或新证据本身不是 full reason。基线结构损坏仍先 fail-closed 修复协议状态；协议闭合后无法证明可信演进链时再重新 full。
+满足以下任一类条件时，controller 必须显式写 `AI Review：pending（full：<非占位原因>）` 重新 full：审查契约发生实质变化，包括切片目标或验收口径、全局约束 / 非目标、审查范围边界、P0/P1 Claim 的要求或接口契约发生变化；或原 full review 不再能作为可信增量基线，包括当前 A* 缺少 `reviewPackageHash`、实际改动超出已审范围、修复无法与 fix diff 清晰隔离、风险等级上升、原审查存在未解决的 `cannot-verify-from-package`，以及无法证明当前代码由已审基线加连续 fix diff 推导而来。新建 reviewer、已审范围内且可隔离的修复文件增加、新测试或新证据本身不是 full reason。除仅缺少 `reviewPackageHash` 外的基线结构损坏仍先 fail-closed 修复协议状态；协议闭合后无法证明可信演进链时再重新 full。
 
 `项目规则审查：required` 时，本节还必须在表外写且只写一个当前选择器：
 

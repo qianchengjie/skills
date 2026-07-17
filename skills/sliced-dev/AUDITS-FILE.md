@@ -57,6 +57,7 @@ general reviewer 每完成一轮审查，controller 都必须新建一个 `done`
 - 模式：full
 - 基线：无
 - Full reason：首次审查
+- reviewPackageHash: sha256:<review-prompt 输出的 64 位小写十六进制摘要>
 
 #### General Review 结论
 
@@ -72,9 +73,9 @@ general reviewer 每完成一轮审查，controller 都必须新建一个 `done`
 | --- | --- | --- | --- | --- | --- | --- |
 ```
 
-增量快照使用 `- 模式：incremental` 和 `- 基线：<直接上一轮 A*>`，并保留基线中所有 `G*`，只更新 `Disposition` 或追加新 ID。`G*` 在当前切片内稳定递增；`Verdict` 只能是三个 general verdict，`Severity` 只能是 `critical / major / minor`，`Origin` 只能是 `initial / repair-delta / late-discovered`，`Disposition` 只能是 `open / resolved / parked / blocked`。`Full reason` 只在 `full` 快照必填；增量快照不用它伪造 full fallback。
+增量快照使用 `- 模式：incremental` 和 `- 基线：<直接上一轮 A*>`，并保留基线中所有 `G*`，只更新 `Disposition` 或追加新 ID。每轮快照都必须记录 reviewer final summary 原样返回的 `reviewPackageHash`。`G*` 在当前切片内稳定递增；`Verdict` 只能是三个 general verdict，`Severity` 只能是 `critical / major / minor`，`Origin` 只能是 `initial / repair-delta / late-discovered`，`Disposition` 只能是 `open / resolved / parked / blocked`。`Full reason` 只在 `full` 快照必填；增量快照不用它伪造 full fallback。
 
-切片 `关联项` 只保留当前 general review A* 为 `done`；旧快照保留在 `audits.md` 中，通过新快照的 `基线` 追溯。plan 前三个 verdict 的 Evidence 必须统一引用当前 A*。脚本只检查当前引用、`done` 状态、固定表格 / 枚举、直接基线存在以及旧 `G*` 未消失；不判断 finding 内容、严重度、Origin 或 Disposition 的语义是否正确。
+切片 `关联项` 只保留当前 general review A* 为 `done`；旧快照保留在 `audits.md` 中，通过新快照的 `基线` 追溯。plan 前三个 verdict 的 Evidence 必须统一引用当前 A*。`close-check` 重新计算当前 package 的 SHA-256 并与 `reviewPackageHash` 比较；脚本只检查输入绑定、当前引用、`done` 状态、固定表格 / 枚举、直接基线存在以及旧 `G*` 未消失，不判断 finding 内容、严重度、Origin 或 Disposition 的语义是否正确。
 
 项目规则审查为 `required` 时，controller 为当前最终 run 新建一个 `done` A*，不要覆盖旧 A*：
 

@@ -13,6 +13,7 @@
 - 已运行硬门禁，且结果已记录到当前切片。
 - `task-reports/<S-id>.json` 存在，且 `conclusion: ready-for-review`。
 - 已运行 `review-package` 命令，生成 `review-packages/<S-id>.md`。
+- 已运行 `review-prompt` 命令，取得当前 package 的 `reviewPackageHash`。
 - review-package 包含当前片 Claims 概览和 evidence 明细。
 
 每轮 general reviewer 和每轮 rule-reviewer 都使用 `spawn_agent`。首轮 general reviewer 参数固定：
@@ -37,14 +38,14 @@
 }
 ```
 
-每轮 reviewer 只消费本轮 review package，不继承上一 reviewer 的会话记忆。新建 reviewer 本身不构成 full reason；package 的显式模式、直接基线 A* 和本轮 fix diff 才是本轮审查输入。
+每轮 reviewer 只消费本轮 review package，不继承上一 reviewer 的会话记忆。新建 reviewer 本身不构成 full reason；package 的显式模式、直接基线 A* 和本轮 fix diff 才是本轮审查输入。package 从 Task Brief、切片正文和关联审计投影中移除旧 General Review 结论：full 不带旧快照，incremental 只在 `General Review 基线` 中带一次直接基线。
 
 满足以下任一类条件时，controller 重新生成 full package：
 
 - 审查契约发生实质变化：切片目标或验收口径、全局约束 / 非目标、审查范围边界、P0/P1 Claim 的要求或接口契约发生变化。
-- 原 full review 不再能作为可信增量基线：实际改动超出已审范围、修复无法与 fix diff 清晰隔离、风险等级上升、原审查存在未解决的 `cannot-verify-from-package`，或无法证明当前代码由已审基线加连续 fix diff 推导而来。
+- 原 full review 不再能作为可信增量基线：当前 A* 缺少 `reviewPackageHash`、实际改动超出已审范围、修复无法与 fix diff 清晰隔离、风险等级上升、原审查存在未解决的 `cannot-verify-from-package`，或无法证明当前代码由已审基线加连续 fix diff 推导而来。
 
-除此之外，只对开放 Findings 和本轮 fix diff 做 scoped re-review。基线 A* 缺失、多义、非 `done` 或结构损坏时先 fail-closed 修复协议状态，不得用 full 绕过；协议闭合后仍无法证明可信演进链时再重新 full。full 判断属于 controller / reviewer 的语义责任，脚本只检查显式模式、非占位 Full reason 和快照结构。
+除此之外，只对开放 Findings 和本轮 fix diff 做 scoped re-review。当前 A* 仅缺少 `reviewPackageHash` 时不得伪造回填，按上条显式重新 full；基线 A* 缺失、多义、非 `done` 或存在其它结构损坏时先 fail-closed 修复协议状态，不得用 full 绕过。协议闭合后仍无法证明可信演进链时再重新 full。full 判断属于 controller / reviewer 的语义责任，脚本只检查输入绑定、显式模式、非占位 Full reason 和快照结构。
 
 ## General Reviewer 任务包模板
 
@@ -53,6 +54,7 @@
 
 当前切片：<S-id>
 Review package：<dev-plans/.../review-packages/<S-id>.md>
+reviewPackageHash：<review-prompt 输出的 sha256:...>
 General Review 模式：<full / incremental>
 直接基线：<无 / A*>
 
@@ -105,7 +107,7 @@ Status / Severity 只能是 passed + not-applicable，或 failed / cannot-verify
 
 `没有新增依赖` 等判断说明写入 Note，不得写入 Evidence。
 
-final summary 只输出三 verdict 表、Findings 表、Claims 证据缺口和必要的 open questions / residual risk，不写回文件。Findings 表固定为 `Finding | Verdict | Severity | Origin | Disposition | Evidence | Summary`；无 finding 也保留空表。
+final summary 先原样输出 `reviewPackageHash`，再输出三 verdict 表、Findings 表、Claims 证据缺口和必要的 open questions / residual risk，不写回文件。该 hash 只绑定本轮输入，不代表审查通过。Findings 表固定为 `Finding | Verdict | Severity | Origin | Disposition | Evidence | Summary`；无 finding 也保留空表。
 
 - `Finding` 使用当前切片稳定的 `G1 / G2 / ...`；incremental 快照必须保留基线所有 G*，不得重编号或静默删除。
 - `Origin` 只能是 `initial / repair-delta / late-discovered`；`Disposition` 只能是 `open / resolved / parked / blocked`。
