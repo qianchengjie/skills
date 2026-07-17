@@ -40,8 +40,14 @@ test('subagent 文档使用当前共享工作区契约', async () => {
   assert.match(reviewer, /"task_name": "review_s1_a2"/);
   assert.match(reviewer, /"fork_turns": "none"/);
   assert.match(reviewer, /每轮 general reviewer 和每轮 rule-reviewer 都使用 `spawn_agent`/);
-  assert.match(reviewer, /禁止对 general reviewer 使用 `followup_task`/);
+  assert.match(reviewer, /禁止对 general reviewer 或 rule-reviewer 使用 `followup_task`/);
   assert.match(reviewer, /每轮 reviewer 只消费本轮 review package/);
+  assert.match(reviewer, /负结论进入修复或阻塞，禁止通过重派 reviewer 洗掉/);
+  assert.match(reviewer, /同一输入最多 fresh 重派一次/);
+  assert.match(reviewer, /仍失败则写 `AI Review：blocked/);
+  assert.match(reviewer, /package 不携带旧项目规则 A\* 或旧 SHOULD 接受 D\*/);
+  assert.match(reviewer, /rulesReviewReport: <recommendation 非 ready_for_merge 时必须为/);
+  assert.match(implementer, /项目规则审查 A\*（含 `rulesReviewReport`）/);
   assert.match(reviewer, /不得重新扫描整个任务/);
   assert.match(executionRules, /审查契约发生实质变化/);
   assert.match(executionRules, /原 full review 不再能作为可信增量基线/);
@@ -465,7 +471,14 @@ function withFilledContextPreflight(plan) {
     .replace('- 必读上下文：待执行前补充。', '- 必读上下文：src/example.ts 与 test/example.test.ts。');
 }
 
-function withRequiredProjectRuleReview(plan) {
+function withRequiredProjectRuleReview(plan, {
+  ruleIds = ['CORE-001', 'TYPE-001', 'UI-001'],
+} = {}) {
+  const reasons = {
+    'CORE-001': '当前切片修改核心流程。',
+    'TYPE-001': '当前切片修改 TypeScript 类型相关代码。',
+    'UI-001': '当前切片需要确认 UI 规则是否适用。',
+  };
   return plan.replace(`- 项目规则审查:
   - 状态：not-applicable
   - rules-review：not-checked
@@ -474,10 +487,10 @@ function withRequiredProjectRuleReview(plan) {
   - 适用规则：无`, `- 项目规则审查:
   - 状态：required
   - rules-review：available
-  - 规则获取：node .agents/skills/rule-steward/scripts/get-rules.mjs CORE-001
+  - 规则获取：node .agents/skills/rule-steward/scripts/get-rules.mjs ${ruleIds.join(' ')}
   - 规则校验：passed
   - 适用规则：
-    - CORE-001：适用原因：当前切片修改核心流程。`);
+${ruleIds.map((ruleId) => `    - ${ruleId}：适用原因：${reasons[ruleId]}`).join('\n')}`);
 }
 
 function withZeroKnownDefectsClosure(plan) {
@@ -799,6 +812,7 @@ async function markWholeReviewPassed(planDir) {
 
 async function appendProjectRuleReviewAudit(planDir, {
   runId,
+  selectedRuleRefs = ['CORE-001', 'TYPE-001', 'UI-001'],
   validation = `node .agents/skills/rules-review/scripts/validate.js --mode run --dir .rules-review-tmp/${runId} => passed`,
   verdict = 'passed',
   severity = 'not-applicable',
@@ -807,6 +821,7 @@ async function appendProjectRuleReviewAudit(planDir, {
   shouldFix = 0,
   cannotVerify = 0,
   shouldSetHash,
+  rulesReviewReport,
   summary = 'rules-review clean',
 } = {}) {
   const auditsPath = path.join(planDir, 'audits.md');
@@ -815,7 +830,7 @@ async function appendProjectRuleReviewAudit(planDir, {
     '- 状态：done',
     '- 关联：S1',
     '',
-    '- selectedRuleIds: CORE-001',
+    `- selectedRuleIds: ${selectedRuleRefs.join(', ')}`,
     `- rulesReviewRunId: ${runId}`,
   ];
   if (validation !== null) lines.push(`- validation: ${validation}`);
@@ -823,6 +838,10 @@ async function appendProjectRuleReviewAudit(planDir, {
   if (severity !== null) lines.push(`- severity: ${severity}`);
   if (recommendation !== null) lines.push(`- recommendation: ${recommendation}`);
   if (shouldSetHash !== undefined) lines.push(`- shouldSetHash: ${shouldSetHash}`);
+  const report = rulesReviewReport === undefined && recommendation !== 'ready_for_merge'
+    ? `.rules-review-tmp/${runId}/response.md`
+    : rulesReviewReport;
+  if (report !== undefined && report !== null) lines.push(`- rulesReviewReport: ${report}`);
   if (mustFix !== null || shouldFix !== null || cannotVerify !== null) {
     lines.push('- issueSummary:');
     if (mustFix !== null) lines.push(`  - mustFix: ${mustFix}`);
@@ -910,9 +929,15 @@ async function ensureGitRepoFixture() {
 async function prepareReviewableSliceDiffFixture() {
   await ensureGitRepoFixture();
   await fs.mkdir('src', { recursive: true });
-  await fs.writeFile('src/example.ts', 'export const value = 1;\n', 'utf8');
-  execFileSync('git', ['add', 'src/example.ts']);
-  execFileSync('git', ['commit', '-m', 'baseline']);
+  const tracked = spawnSync('git', ['ls-files', '--error-unmatch', 'src/example.ts']);
+  if (tracked.status !== 0) {
+    await Promise.all([
+      fs.writeFile('src/example.ts', 'export const value = 1;\n', 'utf8'),
+      fs.writeFile('src/context.ts', 'export const context = true;\n', 'utf8'),
+    ]);
+    execFileSync('git', ['add', 'src/example.ts', 'src/context.ts']);
+    execFileSync('git', ['commit', '-m', 'baseline']);
+  }
   await fs.writeFile('src/example.ts', 'export const value = 2;\n', 'utf8');
 }
 
@@ -932,6 +957,10 @@ async function writeCloseCheckHandoffFixtures(planDir, sliceId = 'S1', { rulesRe
   await writeReadyTaskHandoff(planDir, sliceId);
   await prepareReviewableSliceDiffFixture();
   await writeGeneratedReviewPackageFixture(planDir, sliceId);
+  if (rulesReview) {
+    const result = runDevPlanCli(['rule-review-package', planDir, sliceId]);
+    assert.equal(result.status, 0, result.stderr.toString());
+  }
   await markSliceDone(planDir, sliceId);
   if (rulesReview) {
     const planPath = path.join(planDir, 'plan.md');
@@ -951,16 +980,14 @@ function initGitRepo() {
   execFileSync('git', ['config', 'user.name', 'Test User']);
 }
 
-async function materializeRulesReviewV3RunFixture() {
-  await ensureGitRepoFixture();
+async function materializeRulesReviewV3RunFixture({ reviewedInput = 'src/example.ts' } = {}) {
+  await prepareReviewableSliceDiffFixture();
   await fs.mkdir(path.join('.agents', 'rules'), { recursive: true });
-  await fs.mkdir('rules-review-input', { recursive: true });
   await Promise.all([
     fs.writeFile(path.join('.agents', 'rules', 'index.md'), '# Rules\n', 'utf8'),
     fs.writeFile(path.join('.agents', 'rules', 'core.md'), '# CORE-001\n', 'utf8'),
     fs.writeFile(path.join('.agents', 'rules', 'type.md'), '# TYPE-001\n', 'utf8'),
     fs.writeFile(path.join('.agents', 'rules', 'ui.md'), '# UI-001\n', 'utf8'),
-    fs.writeFile(path.join('rules-review-input', 'example.ts'), 'export const fixture = true;\n', 'utf8'),
   ]);
 
   const dispatch = JSON.parse(await fs.readFile(path.join(cleanRulesReviewFixture, 'dispatch.json'), 'utf8'));
@@ -974,7 +1001,7 @@ async function materializeRulesReviewV3RunFixture() {
   dispatch.changedFiles = [];
   dispatch.inputSnapshot = { files: [] };
   [...dispatch.targets.changedUnits, ...dispatch.targets.candidates].forEach((target) => {
-    target.inputRefs = ['rules-review-input/example.ts'];
+    target.inputRefs = [reviewedInput];
   });
   await fs.writeFile(path.join(runDir, 'dispatch.json'), `${JSON.stringify(dispatch, null, 2)}\n`, 'utf8');
 
@@ -989,11 +1016,12 @@ async function materializeRulesReviewV3RunFixture() {
     ['--mode', 'build-tasks', '--dispatch', path.join(runDir, 'dispatch.json'), '--out', path.join(runDir, 'tasks')],
     ['--mode', 'aggregate-final', '--dir', runDir, '--output', path.join(runDir, 'finalReview.json')],
     ['--mode', 'render-final', '--input', path.join(runDir, 'finalReview.json'), '--dispatch', path.join(runDir, 'dispatch.json'), '--output', path.join(runDir, 'final.md')],
+    ['--mode', 'render-response', '--dir', runDir],
   ]) {
     const result = spawnSync(process.execPath, [rulesReviewValidator, ...args]);
     assert.equal(result.status, 0, result.stderr.toString());
   }
-  return { runId, runDir };
+  return { runId, runDir, selectedRuleRefs: dispatch.ruleSet.selectedRuleRefs };
 }
 
 async function prepareRulesReviewRunFixture({
@@ -1001,8 +1029,9 @@ async function prepareRulesReviewRunFixture({
   multipleShouldFix = false,
   mustFix = false,
   cannotVerify = false,
+  reviewedInput = 'src/example.ts',
 } = {}) {
-  const { runId, runDir } = await materializeRulesReviewV3RunFixture();
+  const { runId, runDir, selectedRuleRefs } = await materializeRulesReviewV3RunFixture({ reviewedInput });
 
   if (shouldFix || mustFix || cannotVerify) {
     const shardPath = path.join(runDir, 'shards/B001.json');
@@ -1060,6 +1089,14 @@ async function prepareRulesReviewRunFixture({
       path.join(runDir, 'final.md'),
     ]);
     assert.equal(render.status, 0, render.stderr.toString());
+    const response = spawnSync(process.execPath, [
+      rulesReviewValidator,
+      '--mode',
+      'render-response',
+      '--dir',
+      runDir,
+    ]);
+    assert.equal(response.status, 0, response.stderr.toString());
   }
 
   const result = spawnSync(process.execPath, [rulesReviewValidator, '--mode', 'run', '--dir', runDir]);
@@ -1081,11 +1118,12 @@ async function prepareRulesReviewRunFixture({
     shouldFix: gate.issueSummary.shouldFix,
     cannotVerify: gate.issueSummary.cannotVerify,
     shouldSetHash: gate.shouldSetHash,
+    selectedRuleRefs,
   };
 }
 
 async function prepareNonPassingRulesReviewRunFixture(recommendation) {
-  const { runId, runDir } = await materializeRulesReviewV3RunFixture();
+  const { runId, runDir, selectedRuleRefs } = await materializeRulesReviewV3RunFixture();
   const currentDispatch = JSON.parse(await fs.readFile(path.join(runDir, 'dispatch.json'), 'utf8'));
   const blocked = recommendation === 'review_blocked';
   currentDispatch.reviewBatches[0].returnStatus = blocked ? 'format_invalid' : 'not_returned';
@@ -1134,6 +1172,7 @@ async function prepareNonPassingRulesReviewRunFixture(recommendation) {
     mustFix: gate.issueSummary.mustFix,
     shouldFix: gate.issueSummary.shouldFix,
     cannotVerify: gate.issueSummary.cannotVerify,
+    selectedRuleRefs,
   };
 }
 
@@ -2762,7 +2801,7 @@ test('validate rejects required 项目规则审查 without available rules-revie
     const planPath = path.join(planDir, 'plan.md');
     const plan = withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8'))
       .replace('- rules-review：available', '- rules-review：unavailable')
-      .replace('- 规则获取：node .agents/skills/rule-steward/scripts/get-rules.mjs CORE-001', '- 规则获取：不适用')
+      .replace('- 规则获取：node .agents/skills/rule-steward/scripts/get-rules.mjs CORE-001 TYPE-001 UI-001', '- 规则获取：不适用')
       .replace('- 规则校验：passed', '- 规则校验：skipped');
     await fs.writeFile(planPath, plan, 'utf8');
 
@@ -3470,6 +3509,52 @@ test('CLI task-brief refresh includes current General Review repair evidence', a
   });
 });
 
+test('CLI task-brief binds project rule review report into repair input', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-brief-rule-repair');
+    await writeValidExecutingPlan(planDir);
+    const rulesReview = await prepareRulesReviewRunFixture({ shouldFix: true });
+    const planPath = path.join(planDir, 'plan.md');
+    let plan = withPassedReviewVerdicts(
+      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
+    )
+      .replace('- AI Review：pending', '- AI Review：issues（项目规则 finding 待修复）')
+      .replace(
+        '| 项目规则审查 | not-applicable | not-applicable | 上下文预检 / 项目规则审查 | 本切片无适用项目规则 |',
+        '| 项目规则审查 | failed | minor | A2 | 当前规则 finding 待修复 |',
+      )
+      .replace('\n#### 门禁记录', `\n- 项目规则审查 runId：${rulesReview.runId}\n\n#### 门禁记录`);
+    await fs.writeFile(planPath, plan, 'utf8');
+    await appendProjectRuleReviewAudit(planDir, rulesReview);
+    await writeVerifiedClaimsFixture(planDir, 'S1');
+
+    const success = runDevPlanCli(['task-brief', planDir, 'S1']);
+    assert.equal(success.status, 0, success.stderr.toString());
+    const brief = await fs.readFile(path.join(planDir, 'task-briefs', 'S1.md'), 'utf8');
+    assert.match(brief, new RegExp(`rulesReviewReport: \\.rules-review-tmp/${rulesReview.runId}/response\\.md`));
+
+    const auditsPath = path.join(planDir, 'audits.md');
+    const audits = await fs.readFile(auditsPath, 'utf8');
+    await fs.writeFile(
+      auditsPath,
+      audits.replace(/\n- rulesReviewReport: [^\n]+/, ''),
+      'utf8',
+    );
+    const missing = runDevPlanCli(['task-brief', planDir, 'S1']);
+    assert.equal(missing.status, 1, missing.stderr.toString());
+    assert.match(missing.stderr.toString(), /rulesReviewReport must be \.rules-review-tmp/);
+
+    await fs.writeFile(auditsPath, audits, 'utf8');
+    const responsePath = path.join('.rules-review-tmp', rulesReview.runId, 'response.md');
+    const realResponsePath = `${responsePath}.real`;
+    await fs.rename(responsePath, realResponsePath);
+    await fs.symlink(path.resolve(realResponsePath), responsePath, 'file');
+    const symlinked = runDevPlanCli(['task-brief', planDir, 'S1']);
+    assert.equal(symlinked.status, 1, symlinked.stderr.toString());
+    assert.match(symlinked.stderr.toString(), /rulesReviewReport must not be a symlink/);
+  });
+});
+
 test('CLI task-report-template writes implementer report template', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-task-report-template');
@@ -3980,9 +4065,20 @@ test('CLI rule-review-package writes rules-only package when project rule review
     const planPath = path.join(planDir, 'plan.md');
     await fs.writeFile(
       planPath,
-      withPassedReviewVerdicts(withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8'))),
+      withPassedReviewVerdicts(withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')))
+        .replace('\n#### 门禁记录', '\n- 项目规则审查 runId：R0\n\n#### 门禁记录'),
       'utf8',
     );
+    const shouldSetHash = `sha256:${'1'.repeat(64)}`;
+    await appendProjectRuleReviewAudit(planDir, {
+      runId: 'R0',
+      recommendation: 'should_review_before_merge',
+      verdict: 'failed',
+      severity: 'minor',
+      shouldFix: 1,
+      shouldSetHash,
+    });
+    await appendShouldAcceptanceDecision(planDir, { runId: 'R0', shouldSetHash });
     await writeReadyTaskHandoff('dev-plans/2026-06-10-rule-review-package', 'S1');
     initGitRepo();
 
@@ -3998,7 +4094,9 @@ test('CLI rule-review-package writes rules-only package when project rule review
     assert.match(reviewPackage, /recommendation: <ready_for_merge/);
     assert.match(reviewPackage, /shouldFix: <integer>/);
     assert.match(reviewPackage, /cannotVerify: <integer>/);
-    assert.match(reviewPackage, /- baseRunId：无（full）/);
+    assert.match(reviewPackage, /- baseRunId：R0/);
+    assert.match(reviewPackage, /### D1：示例分叉/);
+    assert.doesNotMatch(reviewPackage, /### A2：|### D2：|SHOULD 接受/);
     assert.doesNotMatch(reviewPackage, /## AI Review 结论/);
     assert.doesNotMatch(reviewPackage, /#### AI Review 结论/);
     assert.doesNotMatch(reviewPackage, /需求符合性/);
@@ -4807,6 +4905,14 @@ test('CLI close-check requires project rule review A* evidence when required', a
     const passed = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-required']);
     assert.equal(passed.status, 0, passed.stderr.toString());
 
+    const rulePackagePath = path.join(planDir, 'review-packages', 'S1-rules.md');
+    const rulePackage = await fs.readFile(rulePackagePath, 'utf8');
+    await fs.rm(rulePackagePath);
+    const missingRulePackage = spawnSync('node', [script, 'close-check', planDir]);
+    assert.equal(missingRulePackage.status, 1, missingRulePackage.stderr.toString());
+    assert.match(missingRulePackage.stderr.toString(), /missing rule review package/);
+    await fs.writeFile(rulePackagePath, rulePackage, 'utf8');
+
     const auditsPath = path.join(planDir, 'audits.md');
     await fs.writeFile(
       auditsPath,
@@ -4819,6 +4925,49 @@ test('CLI close-check requires project rule review A* evidence when required', a
     const extraHash = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-required']);
     assert.equal(extraHash.status, 1, extraHash.stderr.toString());
     assert.match(extraHash.stderr.toString(), /must not include shouldSetHash/);
+  });
+});
+
+test('CLI close-check binds rules-review dispatch rules to current slice rules', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-rule-scope-binding');
+    await writeValidExecutingPlan(planDir);
+    const rulesReview = await prepareRulesReviewRunFixture();
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8'), { ruleIds: ['CORE-001'] }),
+      'utf8',
+    );
+    await writeCloseCheckHandoffFixtures(planDir, 'S1', { rulesReview });
+    await appendProjectRuleReviewAudit(planDir, {
+      ...rulesReview,
+      selectedRuleRefs: ['CORE-001'],
+    });
+
+    const result = runDevPlanCli(['close-check', planDir]);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /dispatch selectedRuleRefs must equal current project rules/);
+  });
+});
+
+test('CLI close-check binds rules-review changed units to current slice files', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-rule-file-binding');
+    await writeValidExecutingPlan(planDir);
+    const rulesReview = await prepareRulesReviewRunFixture({ reviewedInput: 'src/context.ts' });
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
+      'utf8',
+    );
+    await writeCloseCheckHandoffFixtures(planDir, 'S1', { rulesReview });
+    await appendProjectRuleReviewAudit(planDir, rulesReview);
+
+    const result = runDevPlanCli(['close-check', planDir]);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /changedUnits must cover package file src\/example\.ts/);
   });
 });
 

@@ -89,6 +89,7 @@ general reviewer 每完成一轮审查，controller 都必须新建一个 `done`
 - validation: <rules-review validate command> => passed
 - recommendation: <rules-review recommendation>
 - shouldSetHash: <仅 should_review_before_merge 时存在>
+- rulesReviewReport: <recommendation 非 ready_for_merge 时为 .rules-review-tmp/<runId>/response.md>
 - issueSummary:
   - mustFix: <非负整数>
   - shouldFix: <非负整数>
@@ -98,7 +99,7 @@ general reviewer 每完成一轮审查，controller 都必须新建一个 `done`
 - summary: <非占位摘要>
 ```
 
-`rulesReviewRunId`、recommendation、三个计数和条件性 `shouldSetHash` 必须来自同一 rule-reviewer fixed summary；A* 的 validation 只展示命令，`close-check` 不执行它，而会重验 plan 选择的真实 run。默认 SHOULD 被用户整组接受时，A* 仍保留 `failed` 和原始 severity；只改变第四 verdict。部分修复或重跑必须使用新 runId 和新 A*。
+`rulesReviewRunId`、recommendation、三个计数、条件性 `shouldSetHash` 和 `rulesReviewReport` 必须来自同一 rule-reviewer fixed summary；非 `ready_for_merge` 时报告路径必填并绑定当前 run，供下一轮 task brief 引导 implementer 读取具体 finding。A* 的 validation 只展示命令，`close-check` 不执行它，而会重验 plan 选择的真实 run。默认 SHOULD 被用户整组接受时，A* 仍保留 `failed` 和原始 severity；只改变第四 verdict。部分修复或重跑必须使用新 runId 和新 A*。
 
 ## 状态
 

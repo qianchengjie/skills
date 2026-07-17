@@ -201,9 +201,9 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs rule-review-package dev-plans/Y
 - `not-applicable`：退出 0，提示 not-applicable，不生成文件。
 - `blocked`：退出 1，不生成文件。
 
-规则包包含同一套 scope / diff / claims / task report / 硬门禁记录，并额外包含 `项目规则审查` 字段、selected rule IDs、resolved `规则获取` 命令和适用原因。规则包不内联 `get-rules` 输出、不复制规则正文、不包含 general reviewer 三 verdict；生成时会从 task brief 和关联审计投影中排除 general review A*，若切片正文已有旧 `#### AI Review 结论` 也必须移除。Git inventory 命令或解析失败时规则包直接阻断，只有成功空 inventory 才生成空变更清单。controller 调用 `rules-review` 时，必须把 selectedRuleIds 映射为 `rules-review` 的 `selectedRuleRefs` 输入；controller 最终只消费 rule-reviewer fixed summary，不解析完整 rules-review 报告正文。
+规则包包含同一套 scope / diff / claims / task report / 硬门禁记录，并额外包含 `项目规则审查` 字段、selected rule IDs、resolved `规则获取` 命令和适用原因。规则包不内联 `get-rules` 输出、不复制规则正文、不包含 general reviewer 三 verdict；生成时会从 task brief、切片关联项和关联审计投影中排除旧 General Review A*、旧项目规则 A* 与旧 SHOULD 接受 D*，只保留普通业务 D/A，历史规则审查只通过 `baseRunId` 连接。Git inventory 命令或解析失败时规则包直接阻断，只有成功空 inventory 才生成空变更清单。controller 调用 `rules-review` 时，必须把 selectedRuleIds 映射为 `rules-review` 的 `selectedRuleRefs` 输入；controller 最终只消费 rule-reviewer fixed summary，不解析完整 rules-review 报告正文。
 
-fixed summary 必须投影同一当前 run 的 `rulesReviewRunId`、`recommendation` 与 `issueSummary.mustFix / shouldFix / cannotVerify`；仅 `should_review_before_merge` 还必须投影 validator 派生的 `shouldSetHash`。rule-reviewer 始终保留 raw verdict：`should_review_before_merge` 返回 `failed`，不能自行静默通过。controller 在 plan 的 `AI Review 结论` 写唯一安全的 `项目规则审查 runId`，并为每次重跑新建 A*；部分修复不得沿用旧 run / A*。全局约束启用 `- 零已知缺陷收口：enabled` 时必须进入有限修复，不能使用默认 SHOULD 接受例外。
+fixed summary 必须投影同一当前 run 的 `rulesReviewRunId`、`recommendation` 与 `issueSummary.mustFix / shouldFix / cannotVerify`；仅 `should_review_before_merge` 还必须投影 validator 派生的 `shouldSetHash`，非 `ready_for_merge` 必须投影 `.rules-review-tmp/<runId>/response.md`。该路径随当前 A* 进入下一轮 task brief，implementer 读取具体 finding，controller 不复制报告正文。rule-reviewer 始终保留 raw verdict：`should_review_before_merge` 返回 `failed`，不能自行静默通过。controller 在 plan 的 `AI Review 结论` 写唯一安全的 `项目规则审查 runId`，并为每次重跑新建 A*；部分修复不得沿用旧 run / A*。`close-check` 还会要求 rule review package 与当前 general review package 的业务变更文件一致，并核对真实 dispatch 的 selectedRuleRefs、changed units、input snapshot 和非空 changedFiles 没有脱离当前切片。全局约束启用 `- 零已知缺陷收口：enabled` 时必须进入有限修复，不能使用默认 SHOULD 接受例外。
 
 ## whole-review-package
 

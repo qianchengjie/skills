@@ -342,7 +342,7 @@ Evidence 字段规则：
 - `conclusion: ready-for-review` 时，`changedFiles` 和 `validation` 必须非空；`blockedReason` 必须为空。`conclusion: blocked` 时，`blockedReason` 必须非空。
 - `review-package` 只接受 `conclusion: ready-for-review` 的 task report；同时 P0/P1 claims 必须已由控制器写成 `implemented` / `verified` / 合法 `waived`，并带 evidence 或 note。
 - `review-package` 是 general reviewer 的注意力入口，不是事实真源；它不包含 `项目规则审查` 信息。首轮生成 `full` 包；已有审查结论后，命中重新 full 条件时重建 `full` 包，否则生成基于当前 general review A* 的 `incremental` 包。若 P0/P1 claim、边界或证据无法从 package 判断，reviewer 必须 focused 回源检查，或输出 `cannot-verify-from-package`。
-- `rule-review-package` 只在 `项目规则审查：required` 时生成，路径为 `review-packages/<S-id>-rules.md`；它复用同一套 scope / diff / claims / task report / 硬门禁记录，并额外包含 `项目规则审查`，但不内联规则正文或 general reviewer 三 verdict。
+- `rule-review-package` 只在 `项目规则审查：required` 时生成，路径为 `review-packages/<S-id>-rules.md`；它复用同一套 scope / diff / claims / task report / 硬门禁记录，并额外包含 `项目规则审查`，但不内联规则正文、general reviewer 三 verdict、旧项目规则 A* 或旧 SHOULD 接受 D*。历史规则审查只通过当前选择器投影的 `baseRunId` 连接。
 
 ## AI Review 结论
 
@@ -399,7 +399,7 @@ Evidence 必须非空。前三项必须各引用且只引用同一个当前 gene
 
 `Status` / `Severity` 固定组合：`passed` / `not-applicable` 只能搭配 `not-applicable`；`failed` / `cannot-verify-from-package` 只能搭配 `critical` / `major` / `minor`。
 
-`项目规则审查：required` 时，第四 verdict 不能是 `not-applicable`，Evidence 必须引用当前最终 A*；A* 必须以 `done` 关联当前切片，并投影 `selectedRuleIds`、`rulesReviewRunId`、`validation: <rules-review validate command> => passed`、`recommendation`、`issueSummary.mustFix / shouldFix / cannotVerify`、`verdict`、`severity` 和 `summary`。`shouldSetHash` 仅在 `recommendation = should_review_before_merge` 时存在。`validation` 是审计展示，不是执行入口；`close-check` 不执行该命令，而是从当前 sliced-dev skill root 定位受信任 rules-review validator，对选择器指定的真实 run 重跑 `--mode run`，再比较 runId、recommendation、三个计数和条件性 hash。路径不安全、缺失、symlink / 逃逸、validator 不可用或失败、finalReview 不可读或投影不一致都拒收。
+`项目规则审查：required` 时，第四 verdict 不能是 `not-applicable`，Evidence 必须引用当前最终 A*；A* 必须以 `done` 关联当前切片，并投影 `selectedRuleIds`、`rulesReviewRunId`、`validation: <rules-review validate command> => passed`、`recommendation`、`issueSummary.mustFix / shouldFix / cannotVerify`、`verdict`、`severity` 和 `summary`。`shouldSetHash` 仅在 `recommendation = should_review_before_merge` 时存在；recommendation 非 `ready_for_merge` 时还必须投影 `.rules-review-tmp/<runId>/response.md`，下一轮 task brief 通过该路径把 finding 交给 implementer。`validation` 是审计展示，不是执行入口；`close-check` 不执行该命令，而是从当前 sliced-dev skill root 定位受信任 rules-review validator，对选择器指定的真实 run 重跑 `--mode run`，再比较 runId、recommendation、三个计数和条件性 hash，并把真实 selectedRuleRefs、changed units、input snapshot、非空 changedFiles 与当前 plan 和两份 review package 绑定。路径不安全、缺失、symlink / 逃逸、validator 不可用或失败、finalReview 不可读或投影不一致都拒收。
 
 默认模式下，`ready_for_merge` 只有三个计数均为 `0` 才能直接投影 `passed`。`should_review_before_merge` 的 A* 必须保留原始 `failed` 与原始 severity；只有真实用户接受当前完整 SHOULD 集合，且 `mustFix=0`、`shouldFix>0`、`cannotVerify=0` 时，controller 才可让第四 verdict 单独写 `passed + not-applicable`。此时第四 verdict Evidence 必须同时且各一次引用当前 A* 与 decided D*，Note 必须包含固定文本 `用户接受当前 run 全部剩余 SHOULD`；D* 必须关联当前切片并包含：
 

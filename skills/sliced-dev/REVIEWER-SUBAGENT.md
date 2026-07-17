@@ -28,7 +28,7 @@
 
 `task_name` 使用小写字母、数字和下划线，并包含切片号与本轮尝试号；general reviewer 例如 `review_s1_a1`，rule-reviewer 例如 `rule_review_s1_a1`。`attempt` 只区分 reviewer 派发轮次，不等于切片 `修复次数`；是否计次由控制器按有限修复规则判断。不要添加当前 `spawn_agent` schema 未定义的字段。
 
-后续 general re-review 也必须新建 reviewer，禁止对 general reviewer 使用 `followup_task`。例如第二轮参数固定为：
+后续 general re-review 也必须新建 reviewer，禁止对 general reviewer 或 rule-reviewer 使用 `followup_task`。例如第二轮参数固定为：
 
 ```json
 {
@@ -39,6 +39,8 @@
 ```
 
 每轮 reviewer 只消费本轮 review package，不继承上一 reviewer 的会话记忆。新建 reviewer 本身不构成 full reason；package 的显式模式、直接基线 A* 和本轮 fix diff 才是本轮审查输入。package 从 Task Brief、切片正文和关联审计投影中移除旧 General Review 结论：full 不带旧快照，incremental 只在 `General Review 基线` 中带一次直接基线。
+
+结构合法的 `passed / failed / cannot-verify-from-package` 都是有效返回；负结论进入修复或阻塞，禁止通过重派 reviewer 洗掉。只有 reviewer 未返回、越界写文件，或 final summary 无法按固定格式归属本轮 package / run 时，才允许对同一输入最多 fresh 重派一次；仍失败则写 `AI Review：blocked（<原因>）` 并停止。general reviewer fresh 重派仍使用同一 package、模式和 hash；rule-reviewer fresh 重派必须使用新 runId，失败临时 run 不得更新当前选择器。
 
 满足以下任一类条件时，controller 重新生成 full package：
 
@@ -131,6 +133,7 @@ Rule review package：<dev-plans/.../review-packages/<S-id>-rules.md>
 - 使用 package 中的 selectedRuleIds / 规则获取命令 / scope / diff / claims / task report 作为当前 slice 的完整累计审查范围。
 - 运行完整 rules-review 协议，并把 selectedRuleIds 映射为 rules-review 的 selectedRuleRefs。
 - package 中的 `baseRunId` 只能来自当前切片的“项目规则审查 runId”选择器；有值时只把它作为直接上一轮候选，无值时使用 full，不扫描目录猜“最新” run。
+- package 不携带旧项目规则 A* 或旧 SHOULD 接受 D*；`baseRunId` 是唯一允许进入本轮的历史规则审查链接。
 - 每次成功重跑都生成新的唯一 runId；部分修复后不得沿用旧 run 或改写旧 A*，失败的临时 run 不得替换当前选择器。
 
 允许：
@@ -163,10 +166,10 @@ final summary 固定为：
   - shouldFix: <integer>
   - cannotVerify: <integer>
 - summary: <一句话说明>
-- rulesReviewReport: <可选 report path / runId>
+- rulesReviewReport: <recommendation 非 ready_for_merge 时必须为 .rules-review-tmp/<runId>/response.md>
 ```
 
-`rulesReviewRunId`、`recommendation` 和三个计数必须与当前 run 一致；`shouldSetHash` 在 `should_review_before_merge` 时必填，其它 recommendation 时不得出现。validation 行只展示本轮校验命令；`close-check` 不执行该自报命令，而会按 plan 的唯一 `项目规则审查 runId` 回源重跑受信任 validator。
+`rulesReviewRunId`、`recommendation` 和三个计数必须与当前 run 一致；`shouldSetHash` 在 `should_review_before_merge` 时必填，其它 recommendation 时不得出现。非 `ready_for_merge` run 必须先生成 `response.md`，只返回其路径，不粘贴报告正文。validation 行只展示本轮校验命令；`close-check` 不执行该自报命令，而会按 plan 的唯一 `项目规则审查 runId` 回源重跑受信任 validator，并核对真实 `selectedRuleRefs`、changed-unit input refs 和 input snapshot 是否覆盖当前 rule review package 范围。
 
 若 rule review package 的 `全局约束` 包含固定 token `- 零已知缺陷收口：enabled`，必须按 `rules-review` 的结构化结果投影：
 

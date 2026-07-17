@@ -19,7 +19,7 @@
 
 每轮派发顺序固定为：
 
-1. 把本轮实现依据写回真源。首轮使用当前切片、Claims 和门禁记录；返修把失败硬门禁写入 `#### 门禁记录`，或把当前 General Review A*（含待修的 open / blocked G*）写回 `audits.md` 并关联当前切片。需要调整执行边界时，先按授权边界规则完成预检和写回。
+1. 把本轮实现依据写回真源。首轮使用当前切片、Claims 和门禁记录；返修把失败硬门禁写入 `#### 门禁记录`，或把当前 General Review A*（含待修的 open / blocked G*）/ 项目规则审查 A*（含 `rulesReviewReport`）写回 `audits.md` 并关联当前切片。需要调整执行边界时，先按授权边界规则完成预检和写回。
 2. 运行 `task-brief`，重新生成 `task-briefs/<S-id>.md`。
 3. 运行 `task-report-template`，覆盖 `task-reports/<S-id>.json` 为默认 `blocked`、空 `changedFiles`、空 `validation` 的本轮报告。
 4. 派发 subagent。旧的 `ready-for-review` 报告不得沿用；implementer 未更新的默认 `blocked` 报告不得通过接收门禁。
@@ -87,6 +87,7 @@ Task brief：<dev-plans/.../task-briefs/<S-id>.md>
 - task brief 内没有阻塞本片的 open D。
 - 已读取必读上下文；若仍有局部事实缺口，只需按硬规则做 focused 只读查证即可解决。
 - 已按 task brief 的 `项目规则审查` 中 selectedRuleIds 和 `规则获取` 命令理解本片规则；若命令失败、规则冲突或无法满足则 blocked。不要运行 `rules-review`，也不要判断最终规则审查是否 passed。
+- `关联 Audits` 含 `rulesReviewReport` 时，已读取该报告；只处理其中属于当前切片、当前规则 run 和允许修改范围的 finding，无法定位时 blocked。
 - 已理解 task brief 中的 Claims；每条 claim 都能映射到实现、验证、blocked 或风险说明。
 - 预计改动不会越过 task brief 的允许修改范围，也不会命中禁止修改。
 - 没有发现新分叉、风险升级或验证方式变化。

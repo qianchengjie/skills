@@ -1437,6 +1437,21 @@ function renderList(items) {
   return items.length > 0 ? items.map((item) => `- ${item}`).join('\n') : '- 无';
 }
 
+function sameStringSet(left, right) {
+  return left.length === right.length && left.every((value) => right.includes(value));
+}
+
+function parsePackageChangedFiles(reviewPackage) {
+  const files = [];
+  forEachMarkdownLineOutsideFences(getSection(reviewPackage, '变更文件'), (line) => {
+    const match = /^-\s+(.+)$/.exec(line);
+    if (!match) return;
+    const file = match[1].trim().replace(/（untracked）$/, '');
+    if (!isExplicitNoneItem(file)) files.push(file);
+  });
+  return [...new Set(files)];
+}
+
 function renderMarkdownBlock(block) {
   const trimmed = block.trim();
   return trimmed && !/^(暂无。|无|none|n\/a|na)$/i.test(trimmed) ? trimmed : '- 无';
@@ -2043,15 +2058,31 @@ function renderFencedCodeBlock(language, content) {
   return `${fence}${info}\n${content}\n${fence}`;
 }
 
-function renderAssociatedBlocksWithoutGeneralReview(sliceBody, decisions, audits) {
+function renderAssociatedBlocksForReview(
+  sliceBody,
+  decisions,
+  audits,
+  { excludeRuleReviewResults = false } = {},
+) {
   const association = parseAssociationItems(sliceBody);
   const blocks = association.items.flatMap((item) => {
     if (DECISION_ID_RE.test(item.id)) {
-      return decisions.get(item.id)?.body.trimEnd() ?? `### ${item.id}\n\n未找到。`;
+      const decision = decisions.get(item.id);
+      if (
+        excludeRuleReviewResults
+        && decision
+        && parseSingleTopLevelField(decision.body, SHOULD_ACCEPTANCE_FIELD).values.length > 0
+      ) return [];
+      return decision?.body.trimEnd() ?? `### ${item.id}\n\n未找到。`;
     }
     if (AUDIT_ID_RE.test(item.id)) {
       const audit = audits.get(item.id);
       if (audit && hasSubsection(audit.body, GENERAL_REVIEW_AUDIT_VERDICTS_SECTION)) return [];
+      if (
+        excludeRuleReviewResults
+        && audit
+        && parseSingleTopLevelField(audit.body, 'rulesReviewRunId').values.length > 0
+      ) return [];
       return audit?.body.trimEnd() ?? `### ${item.id}\n\n未找到。`;
     }
     return `${item.id}：无法识别。`;
@@ -2091,6 +2122,56 @@ function renderTaskBriefGateRequirements(sliceBody) {
 ${renderMarkdownBlock(gateNotes)}`;
 }
 
+async function resolveGitRepoRoot() {
+  const output = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+  return fs.realpath(output);
+}
+
+async function validateRuleReviewRepairInput(sliceId, sliceBody, audits) {
+  const verdicts = parseReviewVerdicts(sliceBody);
+  if (verdicts.missing || verdicts.invalid) return [];
+  const verdict = verdicts.items.find((item) => item.verdict === PROJECT_RULE_REVIEW_VERDICT);
+  if (!verdict || !['failed', 'cannot-verify-from-package'].includes(verdict.status)) return [];
+
+  const errors = [];
+  const auditRefs = extractIds(verdict.evidence, AUDIT_REF_RE);
+  if (auditRefs.length !== 1 || !audits.has(auditRefs[0])) {
+    return [`${sliceId}: failed ${PROJECT_RULE_REVIEW_VERDICT} must reference exactly one current A*`];
+  }
+
+  const auditId = auditRefs[0];
+  const auditBody = audits.get(auditId).body;
+  const runId = parseSingleTopLevelField(auditBody, 'rulesReviewRunId');
+  const selector = parseRulesReviewRunSelector(sliceBody);
+  if (
+    runId.values.length !== 1
+    || !isSafeRulesReviewRunId(runId.value)
+    || selector.values.length !== 1
+    || selector.runId !== runId.value
+  ) {
+    errors.push(`${sliceId}: ${auditId} rulesReviewRunId must equal the current safe runId selector`);
+    return errors;
+  }
+
+  const report = parseSingleTopLevelField(auditBody, 'rulesReviewReport');
+  const expectedReport = `.rules-review-tmp/${runId.value}/response.md`;
+  if (report.values.length !== 1 || normalizeRepoPath(report.value) !== expectedReport) {
+    errors.push(`${sliceId}: ${auditId} rulesReviewReport must be ${expectedReport}`);
+    return errors;
+  }
+
+  try {
+    const repoRoot = await resolveGitRepoRoot();
+    await inspectTrustedPath(path.join(repoRoot, expectedReport), 'file', `${auditId} rulesReviewReport`);
+  } catch (error) {
+    errors.push(`${sliceId}: ${error.message}`);
+  }
+  return errors;
+}
+
 async function buildTaskBrief(planDir, sliceId) {
   const [plan, decisionsMarkdown, auditsMarkdown] = await Promise.all([
     fs.readFile(path.join(planDir, 'plan.md'), 'utf8'),
@@ -2109,6 +2190,10 @@ async function buildTaskBrief(planDir, sliceId) {
 
   const decisions = getBlocks(decisionsMarkdown, DECISION_ID_RE);
   const audits = getBlocks(auditsMarkdown, AUDIT_ID_RE);
+  const repairInputErrors = await validateRuleReviewRepairInput(sliceId, slice.body, audits);
+  if (repairInputErrors.length > 0) {
+    throw gateError(`task-brief: ${repairInputErrors.join('; ')}`);
+  }
   const title = getSliceTitle(slice) || '(无标题)';
   const target = getSubsection(slice.body, SLICE_WHAT_SECTION);
   const briefPath = getTaskBriefPath(planDir, sliceId);
@@ -2158,6 +2243,7 @@ ${renderTaskBriefGateRequirements(slice.body)}
 - Implementer 必须填写 task report：${reportPath}。
 - Task report 只记录 implementer handoff：conclusion、changedFiles、validation、blockedReason；不得写 claims 状态建议。
 - Implementer 结论只能是 ready-for-review 或 blocked；review-package 只接受 ready-for-review。
+- \`关联 Audits\` 含 \`rulesReviewReport\` 时，Implementer 必须读取该报告并只修复当前切片范围内的 finding。
 - 修改运行时逻辑时必须补充或更新直接相关测试；若不适用，必须在 task report 的 validation summary 中说明原因。
 
 ---
@@ -2368,7 +2454,12 @@ function renderRuleReviewVerdictTemplate() {
   - shouldFix: <integer>
   - cannotVerify: <integer>
 - summary: <一句话说明>
-- rulesReviewReport: <可选 report path / runId>`;
+- rulesReviewReport: <非 ready_for_merge 时必须为 .rules-review-tmp/<runId>/response.md>`;
+}
+
+function isRuleReviewInternalPath(file) {
+  return matchesPathPattern(file, '.rules-review-tmp/**')
+    || matchesPathPattern(file, '.agents/rules/**');
 }
 
 function collectChangedFileInventory(planDir, sliceBody) {
@@ -3148,18 +3239,16 @@ async function readRulesReviewProjectionForClose(runId) {
   }
 
   try {
-    const repoRootOutput = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
-    const repoRoot = await fs.realpath(repoRootOutput);
+    const repoRoot = await resolveGitRepoRoot();
     const runsRoot = path.join(repoRoot, '.rules-review-tmp');
     const runDir = path.join(runsRoot, runId);
     if (path.dirname(runDir) !== runsRoot) throw new Error('rules-review run path escaped .rules-review-tmp');
     await inspectTrustedPath(runDir, 'directory', 'rules-review run directory');
 
     const validator = await resolveRulesReviewValidatorForClose();
+    const dispatchPath = path.join(runDir, 'dispatch.json');
     const finalReviewPath = path.join(runDir, 'finalReview.json');
+    await inspectTrustedPath(dispatchPath, 'file', 'rules-review dispatch');
     await inspectTrustedPath(finalReviewPath, 'file', 'rules-review finalReview');
     let stdout;
     try {
@@ -3183,11 +3272,13 @@ async function readRulesReviewProjectionForClose(runId) {
       throw new Error('trusted rules-review validator did not return a passed run gate');
     }
 
+    let dispatch;
     let finalReview;
     try {
+      dispatch = JSON.parse(await fs.readFile(dispatchPath, 'utf8'));
       finalReview = JSON.parse(await fs.readFile(finalReviewPath, 'utf8'));
     } catch (error) {
-      throw new Error(`rules-review finalReview is unreadable: ${error.message}`);
+      throw new Error(`rules-review dispatch/finalReview is unreadable: ${error.message}`);
     }
 
     const recommendation = output.gate.recommendation;
@@ -3200,6 +3291,7 @@ async function readRulesReviewProjectionForClose(runId) {
         throw new Error(`trusted rules-review validator returned invalid issueSummary.${metric}`);
       }
     }
+    if (dispatch.runId !== runId) throw new Error(`dispatch runId must be ${runId}`);
     if (finalReview.runId !== runId) throw new Error(`finalReview runId must be ${runId}`);
     if (finalReview.recommendation !== recommendation) throw new Error('finalReview recommendation does not match run gate');
     for (const metric of ['mustFix', 'shouldFix', 'cannotVerify']) {
@@ -3214,14 +3306,78 @@ async function readRulesReviewProjectionForClose(runId) {
     if (recommendation !== SHOULD_REVIEW_RECOMMENDATION && shouldSetHash !== undefined) {
       throw new Error('trusted rules-review validator returned shouldSetHash for another recommendation');
     }
+    if (recommendation !== 'ready_for_merge') {
+      await inspectTrustedPath(
+        path.join(runDir, 'response.md'),
+        'file',
+        'rules-review non-clean response',
+      );
+    }
 
     return {
       errors: [],
-      projection: { runId, runDir, recommendation, issueSummary, shouldSetHash },
+      projection: {
+        runId,
+        runDir,
+        recommendation,
+        issueSummary,
+        shouldSetHash,
+        selectedRuleRefs: dispatch.ruleSet.selectedRuleRefs,
+        changedUnitInputRefs: dispatch.targets.changedUnits.map((target) => target.inputRefs),
+        inputSnapshotRefs: dispatch.inputSnapshot.files.map((entry) => entry.inputRef),
+        changedFiles: dispatch.changedFiles,
+      },
     };
   } catch (error) {
     return { errors: [error.message] };
   }
+}
+
+function validateProjectRuleReviewScopeForClose(
+  sliceId,
+  projectRuleReview,
+  projection,
+  generalReviewPackage,
+  ruleReviewPackage,
+) {
+  const errors = [];
+  const generalFiles = parsePackageChangedFiles(generalReviewPackage)
+    .filter((file) => !isRuleReviewInternalPath(file));
+  const ruleFiles = parsePackageChangedFiles(ruleReviewPackage);
+  const rulePackageRuleIds = parseRuleIds([getSection(ruleReviewPackage, PROJECT_RULE_REVIEW_FIELD)]);
+
+  if (!sameStringSet(ruleFiles, generalFiles)) {
+    errors.push(`close-check:${sliceId}: rule review package changed files must equal current review package scope`);
+  }
+  if (!sameStringSet(rulePackageRuleIds, projectRuleReview.selectedRuleIds)) {
+    errors.push(`close-check:${sliceId}: rule review package selectedRuleIds must equal current project rules`);
+  }
+  if (!sameStringSet(projection.selectedRuleRefs, projectRuleReview.selectedRuleIds)) {
+    errors.push(`close-check:${sliceId}: rules-review dispatch selectedRuleRefs must equal current project rules`);
+  }
+
+  const ruleFileSet = new Set(ruleFiles);
+  const snapshotSet = new Set(projection.inputSnapshotRefs);
+  const coveredFiles = new Set(projection.changedUnitInputRefs.flat());
+  for (const file of ruleFiles) {
+    if (!coveredFiles.has(file)) {
+      errors.push(`close-check:${sliceId}: rules-review changedUnits must cover package file ${file}`);
+    }
+    if (!snapshotSet.has(file)) {
+      errors.push(`close-check:${sliceId}: rules-review inputSnapshot must contain package file ${file}`);
+    }
+  }
+  projection.changedUnitInputRefs.forEach((inputRefs, index) => {
+    if (!inputRefs.some((file) => ruleFileSet.has(file))) {
+      errors.push(`close-check:${sliceId}: rules-review changedUnits[${index}] must anchor to a package changed file`);
+    }
+  });
+  for (const file of projection.changedFiles) {
+    if (!ruleFileSet.has(file)) {
+      errors.push(`close-check:${sliceId}: rules-review dispatch changedFiles contains out-of-scope file ${file}`);
+    }
+  }
+  return errors;
 }
 
 function validateAssociatedItemForClose(sliceId, sliceBody, itemId, expectedStatus, itemBody, itemType) {
@@ -3309,10 +3465,7 @@ function validateProjectRuleReviewAuditForClose(
   if (auditRuleIds.length === 0) {
     errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} must list selectedRuleIds`);
   }
-  if (
-    auditRuleIds.length !== projectRuleReview.selectedRuleIds.length
-    || projectRuleReview.selectedRuleIds.some((ruleId) => !auditRuleIds.includes(ruleId))
-  ) {
+  if (!sameStringSet(auditRuleIds, projectRuleReview.selectedRuleIds)) {
     errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} selectedRuleIds must equal current project rules`);
   }
   if (!validateAuditDisplayCommand(validation, projection.runId, projection.runDir)) {
@@ -3347,6 +3500,21 @@ function validateProjectRuleReviewAuditForClose(
     if (value !== projection.issueSummary[metric]) {
       errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} issueSummary.${metric} must be ${projection.issueSummary[metric]}`);
     }
+  }
+  const auditReport = parseSingleTopLevelField(auditBody, 'rulesReviewReport');
+  const expectedReport = `.rules-review-tmp/${projection.runId}/response.md`;
+  if (
+    projection.recommendation !== 'ready_for_merge'
+    && (auditReport.values.length !== 1 || normalizeRepoPath(auditReport.value) !== expectedReport)
+  ) {
+    errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} rulesReviewReport must be ${expectedReport}`);
+  }
+  if (
+    projection.recommendation === 'ready_for_merge'
+    && auditReport.values.length > 0
+    && (auditReport.values.length !== 1 || normalizeRepoPath(auditReport.value) !== expectedReport)
+  ) {
+    errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} audit ${auditId} rulesReviewReport must bind to ${expectedReport}`);
   }
   const auditShouldSetHash = parseSingleTopLevelField(auditBody, 'shouldSetHash');
   if (projection.recommendation === SHOULD_REVIEW_RECOMMENDATION) {
@@ -3403,11 +3571,13 @@ function validateProjectRuleReviewAuditForClose(
 }
 
 async function validateProjectRuleReviewVerdictForClose(
+  planDir,
   sliceId,
   sliceBody,
   audits,
   decisions,
   zeroKnownDefectsClosure,
+  generalReviewPackage,
 ) {
   const errors = [];
   const verdicts = parseReviewVerdicts(sliceBody);
@@ -3426,8 +3596,30 @@ async function validateProjectRuleReviewVerdictForClose(
       errors.push(`close-check:${sliceId}: ${PROJECT_RULE_REVIEW_VERDICT} required needs one safe current runId selector`);
       return errors;
     }
+    const ruleReviewPackage = await readNonEmptyFileForClose(
+      getRuleReviewPackagePath(planDir, sliceId),
+      'rule review package',
+      sliceId,
+    );
+    errors.push(...ruleReviewPackage.errors);
+    if (ruleReviewPackage.content) {
+      errors.push(...validateRuleReviewPackageFormat(ruleReviewPackage.content)
+        .map((error) => `close-check:${sliceId}: ${error}`));
+      if (!ruleReviewPackage.content.includes(sliceId)) {
+        errors.push(`close-check:${sliceId}: rule review package must include current slice id`);
+      }
+    }
     const runResult = await readRulesReviewProjectionForClose(selector.runId);
     errors.push(...runResult.errors.map((error) => `close-check:${sliceId}: ${error}`));
+    if (runResult.projection && generalReviewPackage && ruleReviewPackage.content) {
+      errors.push(...validateProjectRuleReviewScopeForClose(
+        sliceId,
+        projectRuleReview,
+        runResult.projection,
+        generalReviewPackage,
+        ruleReviewPackage.content,
+      ));
+    }
 
     const auditRefs = extractIds(verdict.evidence, AUDIT_REF_RE);
     if (auditRefs.length !== 1) {
@@ -3535,11 +3727,13 @@ async function validateTaskHandoffForClose(
     }
   }
   errors.push(...await validateProjectRuleReviewVerdictForClose(
+    planDir,
     sliceId,
     sliceBody,
     audits,
     decisions,
     zeroKnownDefectsClosure,
+    reviewPackage.content,
   ));
 
   return errors;
@@ -3698,7 +3892,7 @@ ${renderMarkdownBlock(handoff)}
 
 ## 关联分叉与审计
 
-${renderAssociatedBlocksWithoutGeneralReview(slice.body, decisions, audits)}
+${renderAssociatedBlocksForReview(slice.body, decisions, audits)}
 
 ## 变更文件
 
@@ -3755,7 +3949,7 @@ async function buildRuleReviewPackage(planDir, sliceId, { taskBrief, taskReport 
   const decisions = getBlocks(decisionsMarkdown, DECISION_ID_RE);
   const audits = getBlocks(auditsMarkdown, AUDIT_ID_RE);
   const changedFiles = collectChangedFileInventory(planDir, slice.body)
-    .filter(({ file }) => !matchesPathPattern(file, '.rules-review-tmp/**') && !matchesPathPattern(file, '.agents/rules/**'));
+    .filter(({ file }) => !isRuleReviewInternalPath(file));
   const changedFileList = changedFiles.map(({ file, untracked }) => `${file}${untracked ? '（untracked）' : ''}`);
   const diffStat = await renderDiffStatForChangedFiles(changedFiles);
   const diff = await renderDiffForChangedFiles(changedFiles);
@@ -3766,8 +3960,14 @@ async function buildRuleReviewPackage(planDir, sliceId, { taskBrief, taskReport 
   const rulesReviewSelector = parseRulesReviewRunSelector(slice.body);
   const handoff = getSubsection(slice.body, SLICE_HANDOFF_SECTION);
   const claimsResult = await readRequiredSliceClaims(planDir, sliceId, 'rule-review-package');
-  const ruleSliceBody = removeMarkdownHeadingSection(slice.body.trimEnd(), 4, SLICE_AI_REVIEW_VERDICTS_SECTION);
-  const ruleTaskBrief = removeMarkdownHeadingSection(taskBrief.trimEnd(), 2, '关联 Audits');
+  const ruleSliceBody = [SLICE_AI_REVIEW_VERDICTS_SECTION, '关联项'].reduce(
+    (body, title) => removeMarkdownHeadingSection(body, 4, title),
+    slice.body.trimEnd(),
+  );
+  const ruleTaskBrief = ['关联 Decisions', '关联 Audits'].reduce(
+    (brief, title) => removeMarkdownHeadingSection(brief, 2, title),
+    taskBrief.trimEnd(),
+  );
 
   const content = `# 切片规则审查包：${sliceId}
 
@@ -3809,7 +4009,7 @@ ${renderMarkdownBlock(handoff)}
 
 ## 关联分叉与审计
 
-${renderAssociatedBlocksWithoutGeneralReview(slice.body, decisions, audits)}
+${renderAssociatedBlocksForReview(slice.body, decisions, audits, { excludeRuleReviewResults: true })}
 
 ## 变更文件
 
