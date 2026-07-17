@@ -22,6 +22,16 @@ test('subagent 文档使用当前共享工作区契约', async () => {
   assert.doesNotMatch(contract, /\bfork_context\b|\bagent_type\b|forked workspace/);
   assert.match(implementer, /"task_name": "implement_s1_a1"/);
   assert.match(implementer, /"fork_turns": "none"/);
+  assert.match(implementer, /首轮派发使用 `spawn_agent`/);
+  assert.match(implementer, /同一切片返修优先对原 implementer 调用 `followup_task`/);
+  assert.match(implementer, /fresh fallback：使用 `spawn_agent\(fork_turns: "none"\)`/);
+  assert.match(implementer, /只有原 implementer 不可用或运行时拒绝 follow-up/);
+  assert.match(implementer, /接收门禁已确认原 implementer 写入越界文件或其输出与实际 diff 冲突/);
+  assert.match(implementer, /用户授权边界、任务目标、Claims 契约发生实质变化/);
+  assert.match(implementer, /执行 allowlist 在既有授权边界内扩展，不单独触发新建 implementer/);
+  assert.match(implementer, /最新 task brief 覆盖旧上下文和此前读取内容/);
+  assert.match(implementer, /subagent 记忆不是真源/);
+  assert.match(implementer, /task-brief[\s\S]*task-report-template[\s\S]*派发 subagent/);
   assert.match(implementer, /同一工作区同一时间只允许一个 implementer/);
   assert.match(reviewer, /"task_name": "review_s1_a1"/);
   assert.match(reviewer, /"fork_turns": "none"/);
@@ -3401,6 +3411,31 @@ test('CLI task-brief includes constraints context and slice handoff', async () =
   });
 });
 
+test('CLI task-brief refresh includes current General Review repair evidence', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-brief-repair');
+    await writeValidExecutingPlan(planDir);
+    await writeTaskBriefFixture(planDir, 'S1');
+
+    const briefPath = path.join(planDir, 'task-briefs', 'S1.md');
+    const initialBrief = await fs.readFile(briefPath, 'utf8');
+    assert.doesNotMatch(initialBrief, /### A2：S1 General Review 快照/);
+    assert.doesNotMatch(initialBrief, /\| G1 \| 需求符合性 \| major \| initial \| open \|/);
+
+    await appendGeneralReviewAuditFixture(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = withGeneralReviewIssues(await fs.readFile(planPath, 'utf8'))
+      .replace('- diff-check：pending', '- diff-check：pending\n- 返修依据：A2 / G1 open');
+    await fs.writeFile(planPath, plan, 'utf8');
+
+    await writeTaskBriefFixture(planDir, 'S1');
+    const refreshedBrief = await fs.readFile(briefPath, 'utf8');
+    assert.match(refreshedBrief, /### A2：S1 General Review 快照/);
+    assert.match(refreshedBrief, /\| G1 \| 需求符合性 \| major \| initial \| open \|/);
+    assert.match(refreshedBrief, /### 门禁记录[\s\S]*返修依据：A2 \/ G1 open/);
+  });
+});
+
 test('CLI task-report-template writes implementer report template', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-task-report-template');
@@ -3418,6 +3453,22 @@ test('CLI task-report-template writes implementer report template', async () => 
     const report = JSON.parse(await fs.readFile(path.join(planDir, 'task-reports', 'S1.json'), 'utf8'));
     assert.equal(report.schemaVersion, 'sliced-dev.taskReport.v2');
     assert.equal(report.sliceId, 'S1');
+    assert.equal(report.conclusion, 'blocked');
+    assert.deepEqual(report.changedFiles, []);
+    assert.deepEqual(report.validation, []);
+    assert.equal(report.blockedReason, '');
+  });
+});
+
+test('CLI task-report-template resets an earlier ready report before repair dispatch', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-report-template-reset');
+    await writeValidExecutingPlan(planDir);
+    await writeTaskReportTemplateFixture(planDir, 'S1');
+    await markTaskReportReady(planDir, 'S1');
+
+    await writeTaskReportTemplateFixture(planDir, 'S1');
+    const report = JSON.parse(await fs.readFile(path.join(planDir, 'task-reports', 'S1.json'), 'utf8'));
     assert.equal(report.conclusion, 'blocked');
     assert.deepEqual(report.changedFiles, []);
     assert.deepEqual(report.validation, []);

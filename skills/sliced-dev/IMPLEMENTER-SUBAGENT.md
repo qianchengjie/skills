@@ -13,10 +13,20 @@
 - 当前切片已完成切片前分叉审查，且没有开放分叉。
 - 当前切片 `上下文预检：ready`。
 - `task-briefs/<S-id>.md` 已由 `task-brief` 命令生成。
+- `task-reports/<S-id>.json` 已由 `task-report-template` 命令重置为本轮默认 `blocked` 报告。
 - 当前片已有 `claims/<S-id>.json`，且 task brief 已渲染 Claims 概览。
 - 需确认片已在当前连续流程内完成执行确认；若确认后未派发即中断，续跑时必须重新预告并重新确认。
 
-派发时必须使用 `spawn_agent`，参数固定：
+每轮派发顺序固定为：
+
+1. 把本轮实现依据写回真源。首轮使用当前切片、Claims 和门禁记录；返修把失败硬门禁写入 `#### 门禁记录`，或把当前 General Review A*（含待修的 open / blocked G*）写回 `audits.md` 并关联当前切片。需要调整执行边界时，先按授权边界规则完成预检和写回。
+2. 运行 `task-brief`，重新生成 `task-briefs/<S-id>.md`。
+3. 运行 `task-report-template`，覆盖 `task-reports/<S-id>.json` 为默认 `blocked`、空 `changedFiles`、空 `validation` 的本轮报告。
+4. 派发 subagent。旧的 `ready-for-review` 报告不得沿用；implementer 未更新的默认 `blocked` 报告不得通过接收门禁。
+
+### 首轮派发
+
+首轮派发使用 `spawn_agent`，参数固定：
 
 ```json
 {
@@ -28,10 +38,25 @@
 
 `task_name` 使用小写字母、数字和下划线，并包含切片号与本轮尝试号；例如 `S1` 第一次实现使用 `implement_s1_a1`。不要添加当前 `spawn_agent` schema 未定义的字段。不得用普通新会话、自由 prompt 或当前控制器上下文模拟 subagent。
 
+### 返修派发
+
+同一切片返修优先对原 implementer 调用 `followup_task`：
+
+```json
+{
+  "target": "implement_s1_a1",
+  "message": "<使用下方任务包模板；要求重新读取最新 task brief，并以其内容覆盖旧上下文>"
+}
+```
+
+只有原 implementer 不可用或运行时拒绝 follow-up、接收门禁已确认原 implementer 写入越界文件或其输出与实际 diff 冲突，或用户授权边界、任务目标、Claims 契约发生实质变化时，才能 fresh fallback：使用 `spawn_agent(fork_turns: "none")` 新建 implementer。执行 allowlist 在既有授权边界内扩展，不单独触发新建 implementer。
+
+follow-up 和 fresh fallback 必须消费同一份最新 task brief；fresh fallback 仍使用首轮任务包和固定参数。subagent 记忆不是真源，最新 task brief 覆盖旧上下文和此前读取内容。修复次数、单写者、越界归属确认和需确认片重新确认边界保持不变。
+
 subagent 返回后，控制器先做接收门禁：
 
 - 读取 subagent final summary。
-- 读取 `task-reports/<S-id>.json`，确认 `conclusion: ready-for-review` 且最小 handoff 字段已填写。
+- 读取本轮重置后由 implementer 更新的 `task-reports/<S-id>.json`，确认 `conclusion: ready-for-review` 且最小 handoff 字段已填写。
 - 检查实际改动文件落在 task brief 的 `允许修改` 范围内，且未命中 `禁止修改`。
 - 确认 subagent 未报告 blocked、新分叉、风险升级、验证方式变化或越界需求。
 
@@ -47,6 +72,7 @@ Task brief：<dev-plans/.../task-briefs/<S-id>.md>
 
 硬规则：
 - fork_turns="none"，本任务包是你的唯一流程上下文。
+- 每次被派发都重新读取路径指向的最新 task brief；最新 task brief 覆盖旧上下文和此前读取内容，不依赖上轮记忆继续实现。
 - 你在与控制器共享的工作区修改文件，改动会立即可见；最终列出改动文件，交由控制器检查。
 - 不要为本流程创建 Git worktree；若任务必须依赖 workspace 隔离，blocked 回控制器。
 - 只允许读取 task brief 及 task brief 中列出的必读上下文。
