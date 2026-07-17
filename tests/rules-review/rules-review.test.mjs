@@ -14,6 +14,12 @@ const sourceFixtures = path.join(repoRoot, "tests/rules-review/fixtures");
 const nativeTmp = os.tmpdir();
 let fixtures;
 
+const manualEntryContract = fs.readFileSync(path.join(repoRoot, "skills/rules-review/SKILL.md"), "utf8");
+assert.match(manualEntryContract, /同一会话只接受 controller 已知且未发生分叉的直接上一轮 runId/);
+assert.match(manualEntryContract, /跨会话只接受用户或外层调用方显式提供的 runId/);
+assert.match(manualEntryContract, /不扫描目录猜测 latest run/);
+assert.match(manualEntryContract, /显式 scope \/ source \/ base 非法或无法验证时必须 blocked，不得静默降级为 full/);
+
 async function runValidate(args) {
   return execFileAsync(process.execPath, [script, ...args], { cwd: repoRoot });
 }
@@ -1375,6 +1381,7 @@ const findingResponse = await runValidate([
 const findingResponseOutput = JSON.parse(findingResponse.stdout);
 assert.match(findingResponseOutput.response, /- F001：CORE-001 finding evidence/);
 assert.match(findingResponseOutput.response, /  规则：CORE-001；目标：T001；来源：本次引入/);
+assert.match(findingResponseOutput.response, /- runId：run-pass-finding-evidence-key-order/);
 assert.doesNotMatch(findingResponseOutput.response, /RI001/);
 assertNextSection(findingFinal, "## 结论", "## 问题");
 assertNextSection(findingFinal, "## 问题", "## 范围");
@@ -2154,7 +2161,9 @@ await assertRunDirFails(finalObservationTamperDir, /finalReview observations mus
     assert.deepEqual(finalReview.issueSummary, issueSummary({ observations: 1 }));
     assert.deepEqual(finalReview.observations.map((item) => item.reviewItemId), ["RI002"]);
     const response = await runValidate(["--mode", "render-response", "--dir", fixture.currentDir]);
-    assert.equal(JSON.parse(response.stdout).ok, true);
+    const output = JSON.parse(response.stdout);
+    assert.equal(output.ok, true);
+    assert.match(output.response, /- runId：R1/);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }

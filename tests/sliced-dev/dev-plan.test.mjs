@@ -3659,9 +3659,91 @@ test('CLI rule-review-package writes rules-only package when project rule review
     assert.match(reviewPackage, /recommendation: <ready_for_merge/);
     assert.match(reviewPackage, /shouldFix: <integer>/);
     assert.match(reviewPackage, /cannotVerify: <integer>/);
+    assert.match(reviewPackage, /- baseRunId：无（full）/);
     assert.doesNotMatch(reviewPackage, /## AI Review 结论/);
     assert.doesNotMatch(reviewPackage, /#### AI Review 结论/);
     assert.doesNotMatch(reviewPackage, /需求符合性/);
+  });
+});
+
+test('CLI rule-review-package excludes protocol inputs and only rolls the selector as direct baseRunId', async () => {
+  await withTempRepo(async () => {
+    const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
+    const planDir = path.join('dev-plans', '2026-06-10-rule-review-base');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withPassedReviewVerdicts(withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')))
+        .replace('\n#### 门禁记录', '\n- 项目规则审查 runId：R0\n\n#### 门禁记录'),
+      'utf8',
+    );
+    await writeReadyTaskHandoff(planDir, 'S1');
+    initGitRepo();
+    await fs.mkdir('src', { recursive: true });
+    await Promise.all([
+      fs.writeFile('src/business-a.ts', 'export const a = 0;\n', 'utf8'),
+      fs.writeFile('src/business-b.ts', 'export const b = 0;\n', 'utf8'),
+    ]);
+    execFileSync('git', ['add', 'src/business-a.ts', 'src/business-b.ts']);
+    execFileSync('git', ['commit', '-m', 'baseline']);
+    await Promise.all([
+      fs.writeFile('src/business-a.ts', 'export const a = 1;\n', 'utf8'),
+      fs.writeFile('src/business-b.ts', 'export const b = 1;\n', 'utf8'),
+      fs.mkdir(path.join('.rules-review-tmp', 'R0'), { recursive: true }),
+      fs.mkdir(path.join('.agents', 'rules'), { recursive: true }),
+    ]);
+    await Promise.all([
+      fs.writeFile(path.join('.rules-review-tmp', 'R0', 'final.md'), '# R0 passed\n', 'utf8'),
+      fs.writeFile(path.join('.agents', 'rules', 'index.md'), '# Rules\n', 'utf8'),
+    ]);
+
+    const generate = () => {
+      const result = spawnSync('node', [script, 'rule-review-package', planDir, 'S1']);
+      assert.equal(result.status, 0, result.stderr.toString());
+      return fs.readFile(path.join(planDir, 'review-packages', 'S1-rules.md'), 'utf8');
+    };
+    const assertCumulativeBusinessScope = (reviewPackage) => {
+      assert.match(reviewPackage, /src\/business-a\.ts/);
+      assert.match(reviewPackage, /src\/business-b\.ts/);
+      assert.doesNotMatch(reviewPackage, /\.rules-review-tmp\/(?:R0|R1|Rfailed)\//);
+      assert.doesNotMatch(reviewPackage, /\.agents\/rules\/index\.md/);
+    };
+
+    const r1Package = await generate();
+    assert.match(r1Package, /- baseRunId：R0/);
+    assertCumulativeBusinessScope(r1Package);
+
+    await fs.mkdir(path.join('.rules-review-tmp', 'Rfailed'), { recursive: true });
+    await fs.writeFile(path.join('.rules-review-tmp', 'Rfailed', 'dispatch.json'), '{"runId":"Rfailed"}\n', 'utf8');
+    const afterFailedRunPackage = await generate();
+    assert.match(afterFailedRunPackage, /- baseRunId：R0/);
+    assertCumulativeBusinessScope(afterFailedRunPackage);
+
+    await fs.mkdir(path.join('.rules-review-tmp', 'R1'), { recursive: true });
+    await fs.writeFile(path.join('.rules-review-tmp', 'R1', 'final.md'), '# R1 passed\n', 'utf8');
+    const beforeSelectorRollPackage = await generate();
+    assert.match(beforeSelectorRollPackage, /- baseRunId：R0/);
+    assertCumulativeBusinessScope(beforeSelectorRollPackage);
+
+    await fs.writeFile(planPath, (await fs.readFile(planPath, 'utf8')).replace(
+      '- 项目规则审查 runId：R0',
+      '- 项目规则审查 runId：R1',
+    ), 'utf8');
+    const r2Package = await generate();
+    assert.match(r2Package, /- baseRunId：R1/);
+    assert.doesNotMatch(r2Package.slice(r2Package.indexOf('## 控制器证据')), /baseRunId：R0/);
+    assertCumulativeBusinessScope(r2Package);
+
+    const generalResult = spawnSync('node', [script, 'review-package', planDir, 'S1']);
+    assert.equal(generalResult.status, 0, generalResult.stderr.toString());
+    const generalPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1.md'), 'utf8');
+    assert.match(generalPackage, /\.rules-review-tmp\/R0\/final\.md/);
+    assert.match(generalPackage, /\.rules-review-tmp\/Rfailed\/dispatch\.json/);
+    assert.match(generalPackage, /\.rules-review-tmp\/R1\/final\.md/);
+    assert.match(generalPackage, /\.agents\/rules\/index\.md/);
+    assert.match(generalPackage, /src\/business-a\.ts/);
+    assert.match(generalPackage, /src\/business-b\.ts/);
   });
 });
 

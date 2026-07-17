@@ -2696,6 +2696,7 @@ function renderResponseMarkdown(runDir, finalReview, gate) {
   lines.push(
     '',
     '## 报告',
+    `- runId：${finalReview.runId}`,
     `- 完整报告：${formatMarkdownFileLink('final.md', finalMdPath)}`,
     `- 事实源：${formatMarkdownFileLink('finalReview.json', finalReviewPath)}`,
     `- 分派源：${formatMarkdownFileLink('dispatch.json', dispatchPath)}`,
