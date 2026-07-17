@@ -3627,8 +3627,8 @@ async function buildSliceReviewPackage(planDir, sliceId, { taskBrief, taskReport
   const generalReviewInstructions = generalReview.mode === 'full'
     ? '本轮是 full review：按当前切片边界完整审查三个 verdict，为 finding 从 G1 起分配稳定 ID。'
     : `本轮是 incremental re-review，基线为 ${generalReview.base}：
-- 只复核基线中 disposition=open / blocked 的 G*、本轮修复索引所指文件 / 符号 / 验证、受修复 delta 影响的 Claims，以及被 delta 直接影响的已通过 verdict。
-- 未受影响的 passed 结论沿用基线；Git Diff 是修复证据，不是重新扫描整个任务的授权。
+- 只围绕基线中 disposition=open / blocked 的 G* 和本轮 fix diff 做 scoped re-review；本轮修复索引给出 fix diff 对应的文件 / 符号 / 验证。
+- 只有被 fix diff 直接影响的 Claims 和已通过 verdict 才重新判断；其它 passed 结论沿用基线，Git Diff 只是证据，不是重新扫描整个任务的授权。
 - 保留基线中所有 G* 并更新 Disposition，不得令旧 finding 静默消失；新 finding 继续分配未使用的 G*。`;
 
   const content = `# 切片审查包：${sliceId}

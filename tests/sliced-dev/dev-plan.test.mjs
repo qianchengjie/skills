@@ -13,11 +13,11 @@ const rulesReviewValidator = path.join(repoRoot, 'skills/rules-review/scripts/va
 const cleanRulesReviewFixture = path.join(repoRoot, 'tests/rules-review/fixtures/run-pass-full-clean');
 
 test('subagent 文档使用当前共享工作区契约', async () => {
-  const [skill, implementer, reviewer, executionRules] = await Promise.all(
-    ['SKILL.md', 'IMPLEMENTER-SUBAGENT.md', 'REVIEWER-SUBAGENT.md', 'EXECUTION-RULES.md']
+  const [skill, implementer, reviewer, executionRules, planFile, scriptsDoc] = await Promise.all(
+    ['SKILL.md', 'IMPLEMENTER-SUBAGENT.md', 'REVIEWER-SUBAGENT.md', 'EXECUTION-RULES.md', 'PLAN-FILE.md', 'SCRIPTS.md']
       .map((name) => fs.readFile(new URL(`../../skills/sliced-dev/${name}`, import.meta.url), 'utf8')),
   );
-  const contract = [skill, implementer, reviewer, executionRules].join('\n');
+  const contract = [skill, implementer, reviewer, executionRules, planFile, scriptsDoc].join('\n');
 
   assert.doesNotMatch(contract, /\bfork_context\b|\bagent_type\b|forked workspace/);
   assert.match(implementer, /"task_name": "implement_s1_a1"/);
@@ -37,11 +37,21 @@ test('subagent 文档使用当前共享工作区契约', async () => {
   assert.match(implementer, /只为核对当前 Claims、追踪直接调用链或定位 focused 验证失败时[\s\S]*focused Read \/ `rg`/);
   assert.doesNotMatch(implementer, /只允许读取 task brief 及 task brief 中列出的必读上下文/);
   assert.match(reviewer, /"task_name": "review_s1_a1"/);
+  assert.match(reviewer, /"task_name": "review_s1_a2"/);
   assert.match(reviewer, /"fork_turns": "none"/);
-  assert.match(reviewer, /followup_task/);
-  assert.match(reviewer, /只有原 reviewer 不可用/);
-  assert.match(reviewer, /同一 incremental package/);
+  assert.match(reviewer, /每轮 general reviewer 和每轮 rule-reviewer 都使用 `spawn_agent`/);
+  assert.match(reviewer, /禁止对 general reviewer 使用 `followup_task`/);
+  assert.match(reviewer, /每轮 reviewer 只消费本轮 review package/);
   assert.match(reviewer, /不得重新扫描整个任务/);
+  assert.match(executionRules, /审查契约发生实质变化/);
+  assert.match(executionRules, /原 full review 不再能作为可信增量基线/);
+  assert.match(executionRules, /实际改动超出已审范围/);
+  assert.match(executionRules, /修复无法与 fix diff 清晰隔离/);
+  assert.match(executionRules, /风险等级上升/);
+  assert.match(executionRules, /原审查存在未解决的 `cannot-verify-from-package`/);
+  assert.match(executionRules, /无法证明当前代码由已审基线加连续 fix diff 推导而来/);
+  assert.match(executionRules, /除此之外，只对开放 Findings 和本轮 fix diff 做 scoped re-review/);
+  assert.doesNotMatch(contract, /优先(?:用 `followup_task` )?恢复原 reviewer|只有原 reviewer 不可用|已有审查结论后只生成|只要已有一轮结论，后续修复复核必须是 `incremental`/);
 });
 
 test('授权边界术语防回退', async () => {
@@ -3800,8 +3810,8 @@ test('CLI review-package uses current done A* as incremental general review base
     const reviewPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1.md'), 'utf8');
     assert.match(reviewPackage, /## General Review 模式\n\n- 模式：incremental\n- 基线：A2/);
     assert.match(reviewPackage, /## General Review 基线\n\n### A2：S1 General Review 快照/);
-    assert.match(reviewPackage, /只复核基线中 disposition=open \/ blocked 的 G\*/);
-    assert.match(reviewPackage, /Git Diff 是修复证据，不是重新扫描整个任务的授权/);
+    assert.match(reviewPackage, /只围绕基线中 disposition=open \/ blocked 的 G\* 和本轮 fix diff 做 scoped re-review/);
+    assert.match(reviewPackage, /Git Diff 只是证据，不是重新扫描整个任务的授权/);
     assert.match(reviewPackage, /\| G1 \| 需求符合性 \| major \| initial \| open \|/);
   });
 });

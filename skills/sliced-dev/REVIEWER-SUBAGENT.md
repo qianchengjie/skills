@@ -4,7 +4,7 @@
 
 ## 控制器流程
 
-控制器负责生成 review-package、派发 general reviewer subagent、必要时派发 rule-reviewer subagent，并把四 verdict 一次性写回 `plan.md` / D/A。review package 是注意力收束视图，不是真源；reviewer subagent 不修改业务文件或 sliced-dev 真源。general reviewer 首轮做 full review，修复后只做基于直接上一轮 A* 的 incremental re-review。
+控制器负责生成 review-package、派发 general reviewer subagent、必要时派发 rule-reviewer subagent，并把四 verdict 一次性写回 `plan.md` / D/A。review package 是注意力收束视图，不是真源；reviewer subagent 不修改业务文件或 sliced-dev 真源。general reviewer 首轮做 full review；后续先判断审查契约和原 full review 是否仍能支撑可信增量复核，再选择 full 或 incremental。
 
 当前运行时只提供上下文隔离，不提供独立 workspace 或 reviewer 权限沙盒。reviewer 与控制器共享工作区；下述只读边界由 reviewer 遵守，控制器仍以 final summary 和实际 diff 做接收检查。
 
@@ -15,7 +15,7 @@
 - 已运行 `review-package` 命令，生成 `review-packages/<S-id>.md`。
 - review-package 包含当前片 Claims 概览和 evidence 明细。
 
-首轮 general reviewer 和每轮 rule-reviewer 使用 `spawn_agent`。首轮 general reviewer 参数固定：
+每轮 general reviewer 和每轮 rule-reviewer 都使用 `spawn_agent`。首轮 general reviewer 参数固定：
 
 ```json
 {
@@ -27,16 +27,24 @@
 
 `task_name` 使用小写字母、数字和下划线，并包含切片号与本轮尝试号；general reviewer 例如 `review_s1_a1`，rule-reviewer 例如 `rule_review_s1_a1`。`attempt` 只区分 reviewer 派发轮次，不等于切片 `修复次数`；是否计次由控制器按有限修复规则判断。不要添加当前 `spawn_agent` schema 未定义的字段。
 
-后续 general re-review 必须优先对原 reviewer 调用 `followup_task`，传入新生成的 incremental package：
+后续 general re-review 也必须新建 reviewer，禁止对 general reviewer 使用 `followup_task`。例如第二轮参数固定为：
 
 ```json
 {
-  "target": "review_s1_a1",
-  "message": "<使用下方任务包模板，指向本轮 incremental package>"
+  "task_name": "review_s1_a2",
+  "fork_turns": "none",
+  "message": "<使用下方任务包模板，指向本轮 review package>"
 }
 ```
 
-只有原 reviewer 不可用、已丢失句柄或运行时拒绝 follow-up 时，才能新建 reviewer。新 reviewer 必须从同一 incremental package 和其内嵌基线 A* 恢复上下文，不得以“我不是原 reviewer”为由改成 full review；controller 在当前切片 `#### 门禁记录` 记录 fallback 原因和消费的 A*。subagent 记忆只是便利条件，package + A* 才是恢复真源。
+每轮 reviewer 只消费本轮 review package，不继承上一 reviewer 的会话记忆。新建 reviewer 本身不构成 full reason；package 的显式模式、直接基线 A* 和本轮 fix diff 才是本轮审查输入。
+
+满足以下任一类条件时，controller 重新生成 full package：
+
+- 审查契约发生实质变化：切片目标或验收口径、全局约束 / 非目标、审查范围边界、P0/P1 Claim 的要求或接口契约发生变化。
+- 原 full review 不再能作为可信增量基线：实际改动超出已审范围、修复无法与 fix diff 清晰隔离、风险等级上升、原审查存在未解决的 `cannot-verify-from-package`，或无法证明当前代码由已审基线加连续 fix diff 推导而来。
+
+除此之外，只对开放 Findings 和本轮 fix diff 做 scoped re-review。基线 A* 缺失、多义、非 `done` 或结构损坏时先 fail-closed 修复协议状态，不得用 full 绕过；协议闭合后仍无法证明可信演进链时再重新 full。full 判断属于 controller / reviewer 的语义责任，脚本只检查显式模式、非占位 Full reason 和快照结构。
 
 ## General Reviewer 任务包模板
 
@@ -56,7 +64,7 @@ General Review 模式：<full / incremental>
 - task report 只提供交付索引，不等于 claim 证据真源。
 - 本包不包含 `项目规则审查`；项目规则由独立 rule-reviewer 处理，general reviewer 不读取规则仓、不读取规则 ID、不运行 `get-rules`。
 - `full` 只用于首轮或 package 明示记录 Full reason 的重建基线；`incremental` 不得重新扫描整个任务。
-- `incremental` 只复核基线中 `open / blocked` 的 G*、本轮修复索引所指文件 / 符号 / 验证、受影响 Claims，以及被 delta 直接影响的旧 passed verdict；其它 passed 结论沿用基线。
+- `incremental` 只围绕基线中 `open / blocked` 的 G* 和本轮 fix diff 做 scoped re-review；只有被 fix diff 直接影响的 Claims 和旧 passed verdict 才重新判断，其它 passed 结论沿用基线。
 
 允许：
 - 读取 review package。
