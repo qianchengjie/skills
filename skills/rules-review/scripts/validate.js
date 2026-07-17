@@ -1169,10 +1169,19 @@ function validateExecutionModeAgainstPolicy(executionPlan, dispatch, artifact, r
     addViolation(result, 'D141', artifact, '/reviewBatches', 'multi_batch executionPlan requires at least two reviewBatches', '>= 2', batchCount);
   }
 
-  if (executionPlan.selectedBy === 'human_override') return;
-  const metrics = isObject(executionPlan.metrics) ? executionPlan.metrics : {};
+  const reviewItems = new Map(asArray(dispatch && dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
+  const dispatchedIds = new Set(asArray(dispatch && dispatch.reviewBatches).flatMap((batch) => asArray(batch && batch.reviewItemIds)));
+  const dispatchedTargets = new Set([...dispatchedIds].map((reviewItemId) => reviewItems.get(reviewItemId) && reviewItems.get(reviewItemId).targetId).filter(Boolean));
+  if (executionPlan.selectedBy === 'human_override') {
+    if (executionPlan.humanOverride && executionPlan.humanOverride.requestedMode === 'multi_batch' && dispatchedIds.size < 2) {
+      addViolation(result, 'D143', artifact, '/executionPlan/humanOverride/requestedMode', 'human override cannot request multi_batch with fewer than two dispatched reviewItems', '>= 2 dispatched reviewItems', dispatchedIds.size);
+    }
+    return;
+  }
   const signals = isObject(executionPlan.signals) ? executionPlan.signals : {};
-  const mustMulti = metrics.reviewItems > 30 || metrics.targets > 20 || signals.userRequestedConcurrency === true;
+  const mustMulti = dispatchedIds.size > 30
+    || dispatchedTargets.size > 20
+    || (signals.userRequestedConcurrency === true && dispatchedIds.size >= 2);
   if (mustMulti && executionPlan.mode !== 'multi_batch') {
     addViolation(result, 'D142', artifact, '/executionPlan/mode', 'hard execution policy requires multi_batch', 'multi_batch', executionPlan.mode);
   }
@@ -1662,14 +1671,18 @@ function validateRunArtifacts(runDir, dispatch, result) {
   return { results, resultOwners };
 }
 
-function validateIncrementalPlan(runDir, dispatch, result) {
+function validateIncrementalPlan(runDir, dispatch, result, ancestry = new Set()) {
   if (!isObject(dispatch && dispatch.continuation)) return null;
-  const base = loadSingleStepBase(runDir, dispatch, result);
+  const base = loadBaseRun(runDir, dispatch, result, ancestry);
   if (!base) return null;
 
-  validateCrossRunIdentity(dispatch, base.dispatch, result);
+  validateCrossRunIdentity(dispatch, base.dispatch, base.history, result);
+  validateDisappearedBaseResults(dispatch, base.dispatch, base.results, result);
   const mandatory = calculateMandatoryRecheck(dispatch, base.dispatch, base.results);
   const recheckedIds = new Set(asArray(dispatch.reviewBatches).flatMap((batch) => asArray(batch && batch.reviewItemIds)));
+  if (asArray(dispatch.reviewItems).length > 0 && mandatory.size === asArray(dispatch.reviewItems).length) {
+    addViolation(result, 'INC024', rel(runDir, 'dispatch.json'), '/continuation', 'incremental dispatch cannot recheck every current reviewItem; use full', 'at least one reusable current reviewItem', 0);
+  }
   const missingMandatory = [...mandatory].filter((reviewItemId) => !recheckedIds.has(reviewItemId));
   if (missingMandatory.length > 0) {
     addViolation(result, 'INC020', rel(runDir, 'dispatch.json'), '/reviewBatches', 'incremental reviewBatches must include every machine-mandatory recheck item', [...mandatory].sort(compareStrings), missingMandatory.sort(compareStrings));
@@ -1700,18 +1713,23 @@ function validateIncrementalPlan(runDir, dispatch, result) {
   return { ...base, reused, recheckedIds, mandatory };
 }
 
-function resolveEffectiveResults(runDir, dispatch, currentResults, result) {
-  if (!isObject(dispatch && dispatch.continuation)) return currentResults;
-  const plan = validateIncrementalPlan(runDir, dispatch, result);
-  if (!plan) return currentResults;
+function resolveEffectiveRun(runDir, dispatch, currentResults, result, ancestry = new Set()) {
+  if (!isObject(dispatch && dispatch.continuation)) return { results: currentResults, history: [dispatch] };
+  const plan = validateIncrementalPlan(runDir, dispatch, result, ancestry);
+  if (!plan) return { results: currentResults, history: [dispatch] };
   const resultsById = new Map([...plan.reused, ...currentResults]
     .map((reviewResult) => [reviewResult.reviewItemId, reviewResult]));
-  return asArray(dispatch.reviewItems)
+  const results = asArray(dispatch.reviewItems)
     .map((item) => resultsById.get(item.reviewItemId))
     .filter(Boolean);
+  return { results, history: [...plan.history, dispatch] };
 }
 
-function loadSingleStepBase(runDir, dispatch, result) {
+function resolveEffectiveResults(runDir, dispatch, currentResults, result, ancestry = new Set()) {
+  return resolveEffectiveRun(runDir, dispatch, currentResults, result, ancestry).results;
+}
+
+function loadBaseRun(runDir, dispatch, result, ancestry) {
   const artifact = rel(runDir, 'dispatch.json');
   const baseRunId = dispatch.continuation.baseRunId;
   if (baseRunId === dispatch.runId) {
@@ -1720,6 +1738,7 @@ function loadSingleStepBase(runDir, dispatch, result) {
   }
 
   let baseDir;
+  let nextAncestry;
   try {
     const worktree = loadCurrentWorktree(path.join(runDir, 'dispatch.json'));
     const runRoot = path.join(worktree.root, '.rules-review-tmp');
@@ -1730,14 +1749,18 @@ function loadSingleStepBase(runDir, dispatch, result) {
     const realRunRoot = fs.realpathSync(runRoot);
     const realCurrent = fs.realpathSync(runDir);
     if (path.dirname(realCurrent) !== realRunRoot) throw new Error('incremental current run must be an immediate child of .rules-review-tmp');
+    nextAncestry = new Set(ancestry || []);
+    if (nextAncestry.has(realCurrent)) throw new Error('continuation cycle detected');
+    nextAncestry.add(realCurrent);
     baseDir = path.join(realRunRoot, baseRunId);
     const stat = fs.lstatSync(baseDir);
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('base run must be a real sibling directory');
     const realBase = fs.realpathSync(baseDir);
     if (path.dirname(realBase) !== realRunRoot || realBase === realCurrent) throw new Error('base run must resolve to a different sibling under .rules-review-tmp');
+    if (nextAncestry.has(realBase)) throw new Error('continuation cycle detected');
     baseDir = realBase;
   } catch (error) {
-    addViolation(result, 'INC002', artifact, '/continuation/baseRunId', `incremental base resolution failed closed: ${error.message}`, 'safe sibling v3 full run', baseRunId, 2);
+    addViolation(result, 'INC002', artifact, '/continuation/baseRunId', `incremental base resolution failed closed: ${error.message}`, 'safe sibling v3 run without a cycle', baseRunId, 2);
     return null;
   }
 
@@ -1756,10 +1779,7 @@ function loadSingleStepBase(runDir, dispatch, result) {
   if (baseDispatch && baseDispatch.runId !== baseRunId) {
     addViolation(baseResult, 'INC004', rel(baseDir, baseDispatchPath), '/runId', 'base dispatch runId must match continuation.baseRunId', baseRunId, baseDispatch.runId);
   }
-  if (baseDispatch && Object.prototype.hasOwnProperty.call(baseDispatch, 'continuation')) {
-    addViolation(baseResult, 'INC005', rel(baseDir, baseDispatchPath), '/continuation', 'S5 only accepts one full base; multi-run ancestry and cycles are deferred to S6', 'full base without continuation', baseDispatch.continuation);
-  }
-  if (baseDispatch && baseDispatch.schemaVersion === SCHEMA_VERSION && !Object.prototype.hasOwnProperty.call(baseDispatch, 'continuation')) {
+  if (baseDispatch && baseDispatch.schemaVersion === SCHEMA_VERSION) {
     validateDispatch(baseDispatch, rel(baseDir, baseDispatchPath), baseResult, baseDispatchPath, true);
   }
   if (baseFinal) validateFinalReviewShape(baseFinal, rel(baseDir, baseFinalPath), baseResult);
@@ -1768,21 +1788,25 @@ function loadSingleStepBase(runDir, dispatch, result) {
     : { results: [], resultOwners: new Map() };
   if (baseDispatch && baseDispatch.schemaVersion === SCHEMA_VERSION) {
     validateCurrentBatchResults(baseDispatch, baseState.results, baseState.resultOwners, baseResult);
-    validateEffectiveResults(baseDispatch, baseState.results, baseResult);
-    const computed = calculateGate(baseDispatch, baseState.results, baseResult);
-    if (baseFinal) validateFinalReviewAgainstComputed(baseFinal, baseDispatch, baseState.results, computed, rel(baseDir, baseFinalPath), baseResult);
-    const finalGate = calculateGate(baseDispatch, baseState.results, baseResult);
+    const baseResolved = resolveEffectiveRun(baseDir, baseDispatch, baseState.results, baseResult, nextAncestry);
+    validateEffectiveResults(baseDispatch, baseResolved.results, baseResult);
+    const computed = calculateGate(baseDispatch, baseResolved.results, baseResult);
+    if (baseFinal) validateFinalReviewAgainstComputed(baseFinal, baseDispatch, baseResolved.results, computed, rel(baseDir, baseFinalPath), baseResult);
+    const finalGate = calculateGate(baseDispatch, baseResolved.results, baseResult);
     if (finalGate.protocolGate !== 'passed' || !baseFinal || baseFinal.protocolGate !== 'passed') {
       addViolation(baseResult, 'INC006', rel(baseDir, baseFinalPath), '/protocolGate', 'incremental base protocol must revalidate as passed', 'passed', baseFinal && baseFinal.protocolGate);
     } else {
       validateFinalMarkdown(baseFinal, path.join(baseDir, 'final.md'), baseResult, baseDispatch);
+    }
+    if (baseResult.violations.length === 0) {
+      return { dir: baseDir, dispatch: baseDispatch, results: baseResolved.results, history: baseResolved.history };
     }
   }
   if (baseResult.violations.length > 0) {
     mergeValidationResult(result, baseResult);
     return null;
   }
-  return { dir: baseDir, dispatch: baseDispatch, results: baseState.results };
+  return null;
 }
 
 function mergeValidationResult(target, source) {
@@ -1793,40 +1817,74 @@ function mergeValidationResult(target, source) {
   target.exitCode = Math.max(target.exitCode, source.exitCode);
 }
 
-function validateCrossRunIdentity(dispatch, baseDispatch, result) {
+function validateCrossRunIdentity(dispatch, baseDispatch, history, result) {
   const artifact = 'dispatch.json';
   const currentTargets = buildDispatchTargetMap(dispatch);
   const baseTargets = buildDispatchTargetMap(baseDispatch);
-  const maxTargetId = maxNumericId(baseTargets.keys(), TARGET_RE);
-  baseTargets.forEach((_target, targetId) => {
-    if (!currentTargets.has(targetId)) addViolation(result, 'INC010', artifact, '/targets', 'S5 incremental does not support disappeared base targets; use full or defer to S6', targetId, 'missing');
-  });
+  const historicalTargetIds = new Set(asArray(history).flatMap((ancestor) => [...buildDispatchTargetMap(ancestor).keys()]));
+  const maxTargetId = maxNumericId(historicalTargetIds, TARGET_RE);
   currentTargets.forEach((_target, targetId) => {
     if (!baseTargets.has(targetId) && numericId(targetId, TARGET_RE) <= maxTargetId) {
       addViolation(result, 'INC011', artifact, `/targets/${targetId}`, 'new targetId must be greater than every targetId in the base chain', `> ${maxTargetId}`, targetId);
     }
   });
 
-  const baseItemsById = new Map(asArray(baseDispatch.reviewItems).map((item) => [item.reviewItemId, item]));
-  const baseItemsByTuple = new Map(asArray(baseDispatch.reviewItems).map((item) => [reviewItemTuple(item), item]));
-  const currentItemsById = new Map(asArray(dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
-  const maxReviewItemId = maxNumericId(baseItemsById.keys(), REVIEW_ITEM_RE);
-  baseItemsById.forEach((_item, reviewItemId) => {
-    if (!currentItemsById.has(reviewItemId)) addViolation(result, 'INC012', artifact, '/reviewItems', 'S5 incremental does not support disappeared base reviewItems; use full or defer to S6', reviewItemId, 'missing');
+  const historicalItemsById = new Map();
+  const historicalItemsByTuple = new Map();
+  asArray(history).forEach((ancestor) => {
+    asArray(ancestor && ancestor.reviewItems).forEach((item) => {
+      const tuple = reviewItemTuple(item);
+      if (!historicalItemsById.has(item.reviewItemId)) historicalItemsById.set(item.reviewItemId, item);
+      if (!historicalItemsByTuple.has(tuple)) historicalItemsByTuple.set(tuple, item);
+    });
   });
+  const currentItemsById = new Map(asArray(dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
+  const maxReviewItemId = maxNumericId(historicalItemsById.keys(), REVIEW_ITEM_RE);
   currentItemsById.forEach((item, reviewItemId) => {
-    const baseById = baseItemsById.get(reviewItemId);
-    const baseByTuple = baseItemsByTuple.get(reviewItemTuple(item));
-    if (baseById && reviewItemTuple(baseById) !== reviewItemTuple(item)) {
-      addViolation(result, 'INC013', artifact, `/reviewItems/${reviewItemId}`, 'reviewItemId must keep the same ruleRef x targetId tuple across the incremental chain', reviewItemTuple(baseById), reviewItemTuple(item));
+    const historicalById = historicalItemsById.get(reviewItemId);
+    const historicalByTuple = historicalItemsByTuple.get(reviewItemTuple(item));
+    if (historicalById && reviewItemTuple(historicalById) !== reviewItemTuple(item)) {
+      addViolation(result, 'INC013', artifact, `/reviewItems/${reviewItemId}`, 'reviewItemId must keep the same ruleRef x targetId tuple across the incremental chain', reviewItemTuple(historicalById), reviewItemTuple(item));
     }
-    if (!baseById && baseByTuple) {
-      addViolation(result, 'INC014', artifact, `/reviewItems/${reviewItemId}`, 'an existing ruleRef x targetId tuple must keep its base reviewItemId', baseByTuple.reviewItemId, reviewItemId);
+    if (!historicalById && historicalByTuple) {
+      addViolation(result, 'INC014', artifact, `/reviewItems/${reviewItemId}`, 'an existing ruleRef x targetId tuple must keep its historical reviewItemId', historicalByTuple.reviewItemId, reviewItemId);
     }
-    if (!baseById && numericId(reviewItemId, REVIEW_ITEM_RE) <= maxReviewItemId) {
+    if (!historicalById && !historicalByTuple && numericId(reviewItemId, REVIEW_ITEM_RE) <= maxReviewItemId) {
       addViolation(result, 'INC015', artifact, `/reviewItems/${reviewItemId}`, 'new reviewItemId must be greater than every reviewItemId in the base chain', `> ${maxReviewItemId}`, reviewItemId);
     }
   });
+}
+
+function validateDisappearedBaseResults(dispatch, baseDispatch, baseResults, result) {
+  const artifact = 'dispatch.json';
+  const currentItemIds = new Set(asArray(dispatch.reviewItems).map((item) => item.reviewItemId));
+  const resultsById = new Map(asArray(baseResults).map((reviewResult) => [reviewResult.reviewItemId, reviewResult]));
+  asArray(baseDispatch.reviewItems).forEach((baseItem) => {
+    if (currentItemIds.has(baseItem.reviewItemId)) return;
+    const baseResult = resultsById.get(baseItem.reviewItemId);
+    if (!baseResult) {
+      addViolation(result, 'INC025', artifact, '/reviewItems', 'disappeared base reviewItem must have one effective base result', baseItem.reviewItemId, null);
+      return;
+    }
+    if (['finding', 'cannot_verify'].includes(baseResult.status)) {
+      addViolation(result, 'INC026', artifact, '/reviewItems', 'disappeared base finding/cannot_verify requires full review', 'full without continuation', { reviewItemId: baseItem.reviewItemId, status: baseResult.status });
+      return;
+    }
+    if (baseResult.status === 'observation' && !observationCanDisappear(dispatch, baseItem)) {
+      addViolation(result, 'INC027', artifact, '/reviewItems', 'disappeared base observation requires a machine-visible structural reason or full review', 'rule exits selected scope, current not_applicable row, or file-level target deletion', baseItem.reviewItemId);
+    }
+  });
+}
+
+function observationCanDisappear(dispatch, baseItem) {
+  const selectedRuleRefs = new Set(asArray(dispatch.ruleSet && dispatch.ruleSet.selectedRuleRefs));
+  if (!selectedRuleRefs.has(baseItem.ruleRef)) return true;
+
+  return asArray(dispatch.applicabilityMatrix).some((row) => row
+    && row.ruleRef === baseItem.ruleRef
+    && row.targetId === baseItem.targetId
+    && row.applicability === 'not_applicable'
+    && !Object.prototype.hasOwnProperty.call(row, 'reviewItemId'));
 }
 
 function calculateMandatoryRecheck(dispatch, baseDispatch, baseResults) {

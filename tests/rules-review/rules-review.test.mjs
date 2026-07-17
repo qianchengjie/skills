@@ -344,22 +344,129 @@ function resultForReviewItem(reviewItemId, status = "passed") {
   return { reviewItemId, status: "not_applicable", reason: `${reviewItemId} is optional in this fixture` };
 }
 
-function currentSnapshot(root) {
-  return ["src/changed.ts", "src/stable.ts"].map((inputRef) => ({
-    inputRef,
-    state: "present",
-    contentHash: hashBytes(fs.readFileSync(path.join(root, inputRef))),
-  }));
-}
-
-function bindDispatchToRoot(dispatch, root) {
+function refreshDispatchInputs(dispatch, root) {
   dispatch.ruleSet.sourceIndexHash = hashBytes(fs.readFileSync(path.join(root, ".agents/rules/index.md")));
   dispatch.ruleSet.ruleSources.forEach((source) => {
     source.sourceHash = hashBytes(fs.readFileSync(path.join(root, source.sourceFile)));
   });
+  const inputRefs = [...new Set([
+    ...dispatch.targets.changedUnits,
+    ...dispatch.targets.candidates,
+  ].flatMap((target) => target.inputRefs || []))].sort();
+  dispatch.inputSnapshot = {
+    files: inputRefs.map((inputRef) => fs.existsSync(path.join(root, inputRef))
+      ? { inputRef, state: "present", contentHash: hashBytes(fs.readFileSync(path.join(root, inputRef))) }
+      : { inputRef, state: "deleted" }),
+  };
+}
+
+function bindDispatchToRoot(dispatch, root) {
   dispatch.targets.changedUnits[0].inputRefs = ["src/changed.ts"];
   dispatch.targets.candidates[0].inputRefs = ["src/stable.ts"];
-  dispatch.inputSnapshot = { files: currentSnapshot(root) };
+  refreshDispatchInputs(dispatch, root);
+}
+
+function refreshExecutionMetrics(dispatch) {
+  Object.assign(dispatch.executionPlan.metrics, {
+    changedUnits: dispatch.targets.changedUnits.length,
+    candidates: dispatch.targets.candidates.length,
+    targets: dispatch.targets.changedUnits.length + dispatch.targets.candidates.length,
+    requiredRuleRefs: dispatch.ruleSet.requiredRuleRefs.length,
+    reviewItems: dispatch.reviewItems.length,
+  });
+}
+
+function setIncrementalBatches(dispatch, groups, { userRequestedConcurrency = false } = {}) {
+  dispatch.reviewBatches = groups.map((reviewItemIds, index) => {
+    const reviewBatchId = `B${dispatch.runId}${index + 1}`;
+    return {
+      reviewBatchId,
+      ruleSetId: dispatch.ruleSet.ruleSetId,
+      reviewItemIds,
+      taskRef: `tasks/${reviewBatchId}.json`,
+      shardRef: `shards/${reviewBatchId}.json`,
+      returnStatus: "returned",
+      aggregateStatus: "aggregated",
+      unaggregatedReason: null,
+    };
+  });
+  Object.assign(dispatch.executionPlan, {
+    mode: groups.length === 0 ? "no_batch" : groups.length === 1 ? "single_batch" : "multi_batch",
+    selectedBy: "ai",
+    signals: { userRequestedConcurrency },
+    reason: groups.length === 0 ? "全部 current reviewItems 可安全复用" : "派发机器下界与保守扩审项目",
+    humanOverride: null,
+  });
+  refreshExecutionMetrics(dispatch);
+}
+
+async function finalizeIncrementalRun(runDir, dispatchPath, statuses = {}) {
+  const dispatch = readJson(dispatchPath);
+  if (dispatch.reviewBatches.length > 0) {
+    await runValidate(["--mode", "build-tasks", "--dispatch", dispatchPath, "--out", path.join(runDir, "tasks")]);
+    fs.mkdirSync(path.join(runDir, "shards"), { recursive: true });
+    for (const batch of dispatch.reviewBatches) {
+      writeJson(path.join(runDir, batch.shardRef), {
+        kind: "rules-review-shard",
+        schemaVersion: 3,
+        runId: dispatch.runId,
+        reviewBatchId: batch.reviewBatchId,
+        results: batch.reviewItemIds.map((reviewItemId) => resultForReviewItem(reviewItemId, statuses[reviewItemId])),
+      });
+    }
+  }
+  await runValidate(["--mode", "aggregate-final", "--dir", runDir, "--output", path.join(runDir, "finalReview.json")]);
+  await renderFinalInDir(runDir);
+  await runValidate(["--mode", "run", "--dir", runDir]);
+}
+
+async function createNextIncrementalRun(fixture, {
+  runId = "R2",
+  groups = [],
+  statuses = {},
+  userRequestedConcurrency = false,
+  mutate,
+  finalize = true,
+} = {}) {
+  const previousDir = fixture.currentDir;
+  const previousDispatch = readJson(path.join(previousDir, "dispatch.json"));
+  const runDir = path.join(path.dirname(previousDir), runId);
+  fs.mkdirSync(runDir);
+  const dispatch = JSON.parse(JSON.stringify(previousDispatch));
+  dispatch.runId = runId;
+  dispatch.continuation = { baseRunId: previousDispatch.runId };
+  delete dispatch.fullReason;
+  if (mutate) mutate(dispatch, fixture.root);
+  refreshDispatchInputs(dispatch, fixture.root);
+  setIncrementalBatches(dispatch, groups, { userRequestedConcurrency });
+  const dispatchPath = path.join(runDir, "dispatch.json");
+  writeJson(dispatchPath, dispatch);
+  if (finalize) await finalizeIncrementalRun(runDir, dispatchPath, statuses);
+  return { ...fixture, previousDir, currentDir: runDir, currentDispatchPath: dispatchPath };
+}
+
+function moveTypeReviewToT001(dispatch, { keepT002 = true, removeOptionalT002 = false } = {}) {
+  const typeT001 = dispatch.applicabilityMatrix.find((row) => row.ruleRef === "TYPE-001" && row.targetId === "T001");
+  Object.assign(typeT001, { applicability: "applicable", reviewItemId: "RI004" });
+  delete typeT001.reason;
+  dispatch.reviewItems = dispatch.reviewItems.filter((item) => item.reviewItemId !== "RI002" && (!removeOptionalT002 || item.reviewItemId !== "RI003"));
+  dispatch.reviewItems.push({
+    reviewItemId: "RI004",
+    ruleRef: "TYPE-001",
+    targetKind: "changed_unit",
+    targetId: "T001",
+    required: true,
+  });
+  if (keepT002) {
+    const typeT002 = dispatch.applicabilityMatrix.find((row) => row.ruleRef === "TYPE-001" && row.targetId === "T002");
+    Object.assign(typeT002, { applicability: "not_applicable", reason: "TYPE-001 no longer applies to T002" });
+    delete typeT002.reviewItemId;
+    return;
+  }
+  dispatch.targets.candidates = dispatch.targets.candidates.filter((target) => target.targetId !== "T002");
+  dispatch.targets.contextExpansions = dispatch.targets.contextExpansions.filter((entry) => !entry.addedTargetIds.includes("T002"));
+  dispatch.applicabilityMatrix = dispatch.applicabilityMatrix.filter((row) => row.targetId !== "T002");
+  dispatch.reviewItems = dispatch.reviewItems.filter((item) => item.targetId !== "T002");
 }
 
 async function createSingleStepFixture({
@@ -2097,10 +2204,8 @@ await assertRunDirFails(finalObservationTamperDir, /finalReview observations mus
     assert.equal(dispatch.reviewItems.length, 31);
     assert.deepEqual(dispatch.reviewBatches.flatMap((batch) => batch.reviewItemIds), ["RI001"]);
     assert.equal(dispatch.executionPlan.mode, "single_batch");
-    await assertValidateFails(
-      ["--mode", "dispatch", "--input", fixture.currentDispatchPath],
-      /hard execution policy requires multi_batch/,
-    );
+    const validation = await runValidate(["--mode", "dispatch", "--input", fixture.currentDispatchPath]);
+    assert.equal(JSON.parse(validation.stdout).ok, true);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -2167,7 +2272,7 @@ await assertRunDirFails(finalObservationTamperDir, /finalReview observations mus
     delete baseDispatch.fullReason;
     baseDispatch.continuation = { baseRunId: "R1" };
     writeJson(baseDispatchPath, baseDispatch);
-    await assertValidateFails(["--mode", "dispatch", "--input", fixture.currentDispatchPath], /S5 only accepts one full base/);
+    await assertValidateFails(["--mode", "dispatch", "--input", fixture.currentDispatchPath], /continuation cycle detected/);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -2313,7 +2418,14 @@ await assertRunDirFails(finalObservationTamperDir, /finalReview observations mus
   const fixture = await createSingleStepFixture({ recheckIds: ["RI001"] });
   try {
     const dispatch = readJson(fixture.currentDispatchPath);
-    dispatch.reviewItems[2].reviewItemId = "RI000";
+    dispatch.reviewItems.push({
+      reviewItemId: "RI000",
+      ruleRef: "UI-001",
+      targetKind: "changed_unit",
+      targetId: "T001",
+      required: false,
+    });
+    dispatch.executionPlan.metrics.reviewItems = 4;
     writeJson(fixture.currentDispatchPath, dispatch);
     await assertValidateFails(["--mode", "dispatch", "--input", fixture.currentDispatchPath], /new reviewItemId must be greater than every reviewItemId/);
   } finally {
@@ -2372,7 +2484,580 @@ await assertRunDirFails(finalObservationTamperDir, /finalReview observations mus
     dispatch.reviewItems = dispatch.reviewItems.filter((item) => item.reviewItemId !== "RI003");
     dispatch.executionPlan.metrics.reviewItems = 2;
     writeJson(fixture.currentDispatchPath, dispatch);
-    await assertValidateFails(["--mode", "dispatch", "--input", fixture.currentDispatchPath], /S5 incremental does not support disappeared base reviewItems/);
+    const validation = await runValidate(["--mode", "dispatch", "--input", fixture.currentDispatchPath]);
+    assert.equal(JSON.parse(validation.stdout).ok, true);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture({ finalizeCurrent: true });
+  try {
+    const chain = await createNextIncrementalRun(fixture, { userRequestedConcurrency: true });
+    const dispatch = readJson(chain.currentDispatchPath);
+    const finalReview = readJson(path.join(chain.currentDir, "finalReview.json"));
+    assert.deepEqual(dispatch.continuation, { baseRunId: "R1" });
+    assert.equal(dispatch.executionPlan.mode, "no_batch");
+    assert.deepEqual(dispatch.reviewBatches, []);
+    assert.equal(dispatch.reviewItems.find((item) => item.reviewItemId === "RI003").required, false);
+    assert.deepEqual(finalReview.issueSummary, issueSummary({ observations: 1 }));
+    assert.deepEqual(finalReview.observations.map((item) => item.reviewItemId), ["RI002"]);
+    assert.equal(Object.hasOwn(finalReview, "effectiveResults"), false);
+    for (const dir of ["tasks", "retries", "shards"]) assert.equal(fs.existsSync(path.join(chain.currentDir, dir)), false);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture({ finalizeCurrent: true });
+  try {
+    const chain = await createNextIncrementalRun(fixture, {
+      groups: [["RI001"]],
+      userRequestedConcurrency: true,
+    });
+    assert.equal(readJson(chain.currentDispatchPath).executionPlan.mode, "single_batch");
+
+    const override = await createNextIncrementalRun(fixture, {
+      runId: "R2override",
+      groups: [["RI001"]],
+      finalize: false,
+    });
+    const overrideDispatch = readJson(override.currentDispatchPath);
+    Object.assign(overrideDispatch.executionPlan, {
+      mode: "multi_batch",
+      selectedBy: "human_override",
+      humanOverride: { requestedMode: "multi_batch", risk: "用户要求并发" },
+    });
+    writeJson(override.currentDispatchPath, overrideDispatch);
+    await assertValidateFails(
+      ["--mode", "dispatch", "--input", override.currentDispatchPath],
+      /human override cannot request multi_batch with fewer than two dispatched reviewItems/,
+    );
+
+    const multi = await createNextIncrementalRun(fixture, {
+      runId: "R2multi",
+      groups: [["RI001"], ["RI002"]],
+      userRequestedConcurrency: true,
+    });
+    assert.equal(readJson(multi.currentDispatchPath).executionPlan.mode, "multi_batch");
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture({ finalizeCurrent: true });
+  try {
+    const chain = await createNextIncrementalRun(fixture, { finalize: false });
+    const r0DispatchPath = path.join(fixture.baseDir, "dispatch.json");
+    const r0FinalPath = path.join(fixture.baseDir, "finalReview.json");
+    const r1DispatchPath = path.join(fixture.currentDir, "dispatch.json");
+    const originalR0Dispatch = fs.readFileSync(r0DispatchPath, "utf8");
+    const originalR0Final = fs.readFileSync(r0FinalPath, "utf8");
+    const originalR1Dispatch = fs.readFileSync(r1DispatchPath, "utf8");
+
+    const r1Missing = readJson(r1DispatchPath);
+    r1Missing.continuation.baseRunId = "missing-ancestor";
+    writeJson(r1DispatchPath, r1Missing);
+    await assertValidateFails(["--mode", "dispatch", "--input", chain.currentDispatchPath], /incremental base resolution failed closed/);
+    fs.writeFileSync(r1DispatchPath, originalR1Dispatch);
+
+    const r1Cycle = readJson(r1DispatchPath);
+    r1Cycle.continuation.baseRunId = "R2";
+    writeJson(r1DispatchPath, r1Cycle);
+    await assertValidateFails(["--mode", "dispatch", "--input", chain.currentDispatchPath], /continuation cycle detected/);
+    fs.writeFileSync(r1DispatchPath, originalR1Dispatch);
+
+    const r0V2 = readJson(r0DispatchPath);
+    r0V2.schemaVersion = 2;
+    writeJson(r0DispatchPath, r0V2);
+    await assertValidateFails(["--mode", "dispatch", "--input", chain.currentDispatchPath], /incremental base must use schemaVersion 3/);
+    fs.writeFileSync(r0DispatchPath, originalR0Dispatch);
+
+    fs.writeFileSync(r0FinalPath, "{\n");
+    await assertValidateFails(["--mode", "dispatch", "--input", chain.currentDispatchPath], /input is not strict JSON or file is unreadable/);
+    fs.writeFileSync(r0FinalPath, originalR0Final);
+
+    const r0InvalidFinal = readJson(r0FinalPath);
+    r0InvalidFinal.issueSummary.observations = 0;
+    writeJson(r0FinalPath, r0InvalidFinal);
+    await assertValidateFails(["--mode", "dispatch", "--input", chain.currentDispatchPath], /finalReview issueSummary must equal validator result/);
+    fs.writeFileSync(r0FinalPath, originalR0Final);
+
+    const realBaseDir = `${fixture.baseDir}-real`;
+    fs.renameSync(fixture.baseDir, realBaseDir);
+    fs.symlinkSync(realBaseDir, fixture.baseDir, "dir");
+    await assertValidateFails(["--mode", "dispatch", "--input", chain.currentDispatchPath], /base run must be a real sibling directory/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture({ extraStableItems: 7, finalizeCurrent: true });
+  try {
+    const chain = await createNextIncrementalRun(fixture, {
+      finalize: false,
+      mutate(dispatch) {
+        dispatch.targets.candidates.push({
+          targetId: "T003",
+          targetKind: "candidate",
+          loc: "src/stable.ts:30",
+          summary: "历史最大值以下的新 target",
+          inputRefs: ["src/stable.ts"],
+        });
+        for (const ruleRef of dispatch.ruleSet.requiredRuleRefs) {
+          dispatch.applicabilityMatrix.push({
+            ruleRef,
+            targetId: "T003",
+            targetKind: "candidate",
+            applicability: "not_applicable",
+            reason: `${ruleRef} does not apply to T003`,
+            evidence: [{ loc: "src/stable.ts:30", summary: `${ruleRef} checked for T003` }],
+          });
+        }
+        dispatch.reviewItems.push({
+          reviewItemId: "RI000",
+          ruleRef: "UI-001",
+          targetKind: "changed_unit",
+          targetId: "T001",
+          required: false,
+        });
+      },
+    });
+    const output = await assertValidateFails(
+      ["--mode", "dispatch", "--input", chain.currentDispatchPath],
+      /new targetId must be greater than every targetId in the base chain/,
+    );
+    assert.match(output, /new reviewItemId must be greater than every reviewItemId in the base chain/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture();
+  try {
+    const r1Dispatch = readJson(fixture.currentDispatchPath);
+    r1Dispatch.reviewItems = r1Dispatch.reviewItems.filter((item) => item.reviewItemId !== "RI003");
+    refreshExecutionMetrics(r1Dispatch);
+    writeJson(fixture.currentDispatchPath, r1Dispatch);
+    await finalizeIncrementalRun(fixture.currentDir, fixture.currentDispatchPath);
+
+    const restored = await createNextIncrementalRun(fixture, {
+      groups: [["RI003"]],
+      statuses: { RI003: "not_applicable" },
+      mutate(dispatch) {
+        dispatch.reviewItems.push({
+          reviewItemId: "RI003",
+          ruleRef: "UI-001",
+          targetKind: "candidate",
+          targetId: "T002",
+          required: false,
+        });
+      },
+    });
+    assert.equal(JSON.parse((await runValidate(["--mode", "run", "--dir", restored.currentDir])).stdout).ok, true);
+
+    const reboundTuple = await createNextIncrementalRun(fixture, {
+      runId: "R2tuple",
+      groups: [["RI004"]],
+      finalize: false,
+      mutate(dispatch) {
+        dispatch.reviewItems.push({
+          reviewItemId: "RI004",
+          ruleRef: "UI-001",
+          targetKind: "candidate",
+          targetId: "T002",
+          required: false,
+        });
+      },
+    });
+    await assertValidateFails(["--mode", "dispatch", "--input", reboundTuple.currentDispatchPath], /existing ruleRef x targetId tuple must keep its historical reviewItemId/);
+
+    const reboundId = await createNextIncrementalRun(fixture, {
+      runId: "R2id",
+      groups: [["RI003"]],
+      finalize: false,
+      mutate(dispatch) {
+        dispatch.reviewItems.push({
+          reviewItemId: "RI003",
+          ruleRef: "UI-001",
+          targetKind: "changed_unit",
+          targetId: "T001",
+          required: false,
+        });
+      },
+    });
+    await assertValidateFails(["--mode", "dispatch", "--input", reboundId.currentDispatchPath], /reviewItemId must keep the same ruleRef x targetId tuple across the incremental chain/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture({ finalizeCurrent: true });
+  try {
+    const fullDir = path.join(path.dirname(fixture.currentDir), "Rfull");
+    fs.mkdirSync(fullDir);
+    const dispatch = readJson(path.join(fixture.baseDir, "dispatch.json"));
+    dispatch.runId = "Rfull";
+    dispatch.fullReason = "建立独立 full 新链根";
+    const dispatchPath = path.join(fullDir, "dispatch.json");
+    writeJson(dispatchPath, dispatch);
+    await runValidate(["--mode", "build-tasks", "--dispatch", dispatchPath, "--out", path.join(fullDir, "tasks")]);
+    fs.mkdirSync(path.join(fullDir, "shards"));
+    writeJson(path.join(fullDir, "shards/B001.json"), {
+      kind: "rules-review-shard",
+      schemaVersion: 3,
+      runId: "Rfull",
+      reviewBatchId: "B001",
+      results: dispatch.reviewItems.map((item) => resultForReviewItem(item.reviewItemId)),
+    });
+    await runValidate(["--mode", "aggregate-final", "--dir", fullDir, "--output", path.join(fullDir, "finalReview.json")]);
+    await renderFinalInDir(fullDir);
+    assert.equal(JSON.parse((await runValidate(["--mode", "run", "--dir", fullDir])).stdout).ok, true);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture();
+  try {
+    const dispatch = readJson(fixture.currentDispatchPath);
+    dispatch.ruleSet.selectedRuleRefs = dispatch.ruleSet.selectedRuleRefs.filter((ruleRef) => ruleRef !== "TYPE-001");
+    dispatch.ruleSet.requiredRuleRefs = dispatch.ruleSet.requiredRuleRefs.filter((ruleRef) => ruleRef !== "TYPE-001");
+    dispatch.applicabilityMatrix = dispatch.applicabilityMatrix.filter((row) => row.ruleRef !== "TYPE-001");
+    dispatch.reviewItems = dispatch.reviewItems.filter((item) => item.reviewItemId !== "RI002");
+    refreshExecutionMetrics(dispatch);
+    writeJson(fixture.currentDispatchPath, dispatch);
+    await finalizeIncrementalRun(fixture.currentDir, fixture.currentDispatchPath);
+    assert.deepEqual(readJson(path.join(fixture.currentDir, "finalReview.json")).issueSummary, issueSummary());
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture();
+  try {
+    const dispatch = readJson(fixture.currentDispatchPath);
+    moveTypeReviewToT001(dispatch);
+    refreshDispatchInputs(dispatch, fixture.root);
+    setIncrementalBatches(dispatch, [["RI004"]]);
+    writeJson(fixture.currentDispatchPath, dispatch);
+    await finalizeIncrementalRun(fixture.currentDir, fixture.currentDispatchPath);
+    assert.deepEqual(readJson(path.join(fixture.currentDir, "finalReview.json")).issueSummary, issueSummary());
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture();
+  try {
+    fs.writeFileSync(path.join(fixture.root, "src/removed.ts"), "export const removed = true;\n");
+    git(fixture.root, ["add", "src/removed.ts"]);
+    git(fixture.root, ["commit", "-qm", "add removed target input"]);
+    fs.rmSync(path.join(fixture.root, "src/removed.ts"));
+    const dispatch = readJson(fixture.currentDispatchPath);
+    moveTypeReviewToT001(dispatch, { removeOptionalT002: true });
+    const deletedTarget = dispatch.targets.candidates.find((target) => target.targetId === "T002");
+    dispatch.targets.candidates = dispatch.targets.candidates.filter((target) => target.targetId !== "T002");
+    deletedTarget.targetKind = "changed_unit";
+    deletedTarget.inputRefs = ["src/removed.ts"];
+    dispatch.targets.changedUnits.push(deletedTarget);
+    dispatch.targets.contextExpansions = dispatch.targets.contextExpansions.filter((entry) => !entry.addedTargetIds.includes("T002"));
+    dispatch.applicabilityMatrix.filter((row) => row.targetId === "T002").forEach((row) => { row.targetKind = "changed_unit"; });
+    dispatch.changedFiles = ["src/removed.ts"];
+    refreshDispatchInputs(dispatch, fixture.root);
+    setIncrementalBatches(dispatch, [["RI004"]]);
+    writeJson(fixture.currentDispatchPath, dispatch);
+    await finalizeIncrementalRun(fixture.currentDir, fixture.currentDispatchPath);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture();
+  try {
+    fs.rmSync(path.join(fixture.root, "src/stable.ts"));
+    const dispatch = readJson(fixture.currentDispatchPath);
+    moveTypeReviewToT001(dispatch, { removeOptionalT002: true });
+    const deletedTarget = dispatch.targets.candidates.find((target) => target.targetId === "T002");
+    dispatch.targets.candidates = dispatch.targets.candidates.filter((target) => target.targetId !== "T002");
+    deletedTarget.targetKind = "changed_unit";
+    dispatch.targets.changedUnits.push(deletedTarget);
+    dispatch.targets.contextExpansions = dispatch.targets.contextExpansions.filter((entry) => !entry.addedTargetIds.includes("T002"));
+    dispatch.applicabilityMatrix.filter((row) => row.targetId === "T002").forEach((row) => { row.targetKind = "changed_unit"; });
+    dispatch.changedFiles = ["src/stable.ts"];
+    refreshDispatchInputs(dispatch, fixture.root);
+    setIncrementalBatches(dispatch, [["RI004"]]);
+    writeJson(fixture.currentDispatchPath, dispatch);
+    await finalizeIncrementalRun(fixture.currentDir, fixture.currentDispatchPath);
+    assert.equal(readJson(fixture.currentDispatchPath).inputSnapshot.files.find((entry) => entry.inputRef === "src/stable.ts").state, "deleted");
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture();
+  try {
+    fs.rmSync(path.join(fixture.root, "src/stable.ts"));
+    const dispatch = readJson(fixture.currentDispatchPath);
+    const deletedTarget = dispatch.targets.candidates.find((target) => target.targetId === "T002");
+    dispatch.targets.candidates = dispatch.targets.candidates.filter((target) => target.targetId !== "T002");
+    deletedTarget.targetKind = "changed_unit";
+    dispatch.targets.changedUnits.push(deletedTarget);
+    dispatch.targets.contextExpansions = dispatch.targets.contextExpansions.filter((entry) => !entry.addedTargetIds.includes("T002"));
+    dispatch.ruleSet.requiredRuleRefs = dispatch.ruleSet.requiredRuleRefs.filter((ruleRef) => ruleRef !== "TYPE-001");
+    dispatch.ruleSet.excludedRuleRefs.push("TYPE-001");
+    dispatch.applicabilityMatrix = dispatch.applicabilityMatrix.filter((row) => row.ruleRef !== "TYPE-001");
+    dispatch.applicabilityMatrix.filter((row) => row.targetId === "T002").forEach((row) => { row.targetKind = "changed_unit"; });
+    dispatch.reviewItems = dispatch.reviewItems.filter((item) => item.targetId !== "T002");
+    dispatch.changedFiles = ["src/stable.ts"];
+    refreshDispatchInputs(dispatch, fixture.root);
+    refreshExecutionMetrics(dispatch);
+    writeJson(fixture.currentDispatchPath, dispatch);
+    const output = await assertValidateFails(["--mode", "dispatch", "--input", fixture.currentDispatchPath], /"code": "INC027"/);
+    assert.deepEqual(JSON.parse(output).violations.map(({ code }) => code), ["INC027"]);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture();
+  try {
+    const dispatch = readJson(fixture.currentDispatchPath);
+    moveTypeReviewToT001(dispatch, { keepT002: false });
+    refreshDispatchInputs(dispatch, fixture.root);
+    setIncrementalBatches(dispatch, [["RI004"]]);
+    writeJson(fixture.currentDispatchPath, dispatch);
+    await assertValidateFails(["--mode", "dispatch", "--input", fixture.currentDispatchPath], /disappeared base observation requires a machine-visible structural reason or full review/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+for (const status of ["finding", "cannot_verify"]) {
+  const fixture = await createSingleStepFixture({
+    baseStatuses: { RI001: "passed", RI002: status, RI003: "not_applicable" },
+  });
+  try {
+    const dispatch = readJson(fixture.currentDispatchPath);
+    moveTypeReviewToT001(dispatch);
+    refreshDispatchInputs(dispatch, fixture.root);
+    setIncrementalBatches(dispatch, [["RI004"]]);
+    writeJson(fixture.currentDispatchPath, dispatch);
+    await assertValidateFails(["--mode", "dispatch", "--input", fixture.currentDispatchPath], /disappeared base finding\/cannot_verify requires full review/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+for (const status of ["passed", "not_applicable"]) {
+  const fixture = await createSingleStepFixture({
+    baseStatuses: { RI001: "passed", RI002: "observation", RI003: status },
+  });
+  try {
+    const dispatch = readJson(fixture.currentDispatchPath);
+    dispatch.reviewItems = dispatch.reviewItems.filter((item) => item.reviewItemId !== "RI003");
+    refreshExecutionMetrics(dispatch);
+    writeJson(fixture.currentDispatchPath, dispatch);
+    await finalizeIncrementalRun(fixture.currentDir, fixture.currentDispatchPath);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture({
+    baseStatuses: { RI001: "passed", RI002: "passed", RI003: "not_applicable" },
+  });
+  try {
+    const r1 = readJson(fixture.currentDispatchPath);
+    r1.ruleSet.selectedRuleRefs = r1.ruleSet.selectedRuleRefs.filter((ruleRef) => ruleRef !== "TYPE-001");
+    r1.ruleSet.requiredRuleRefs = r1.ruleSet.requiredRuleRefs.filter((ruleRef) => ruleRef !== "TYPE-001");
+    r1.targets.candidates = [];
+    r1.targets.contextExpansions = [];
+    r1.applicabilityMatrix = r1.applicabilityMatrix.filter((row) => row.targetId !== "T002" && row.ruleRef !== "TYPE-001");
+    r1.reviewItems = r1.reviewItems.filter((item) => item.targetId !== "T002");
+    refreshDispatchInputs(r1, fixture.root);
+    setIncrementalBatches(r1, []);
+    writeJson(fixture.currentDispatchPath, r1);
+    await finalizeIncrementalRun(fixture.currentDir, fixture.currentDispatchPath);
+
+    const rebound = await createNextIncrementalRun(fixture, {
+      finalize: false,
+      mutate(dispatch) {
+        dispatch.targets.candidates.push({
+          targetId: "T002",
+          targetKind: "candidate",
+          loc: "src/stable.ts:1",
+          summary: "不能复用历史已消失 targetId",
+          inputRefs: ["src/stable.ts"],
+        });
+        dispatch.applicabilityMatrix.push({
+          ruleRef: "CORE-001",
+          targetId: "T002",
+          targetKind: "candidate",
+          applicability: "not_applicable",
+          reason: "CORE-001 does not apply to rebound T002",
+          evidence: [{ loc: "src/stable.ts:1", summary: "CORE-001 checked for rebound T002" }],
+        });
+      },
+    });
+    await assertValidateFails(["--mode", "dispatch", "--input", rebound.currentDispatchPath], /new targetId must be greater than every targetId in the base chain/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture({ recheckIds: ["RI002"] });
+  try {
+    fs.writeFileSync(path.join(fixture.root, ".agents/rules/type.md"), "# TYPE-001 changed\n");
+    const dispatch = readJson(fixture.currentDispatchPath);
+    refreshDispatchInputs(dispatch, fixture.root);
+    writeJson(fixture.currentDispatchPath, dispatch);
+    await finalizeIncrementalRun(fixture.currentDir, fixture.currentDispatchPath);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture({ recheckIds: ["RI001", "RI002"] });
+  try {
+    fs.writeFileSync(path.join(fixture.root, ".agents/rules/index.md"), "# Rules changed\n");
+    const dispatch = readJson(fixture.currentDispatchPath);
+    refreshDispatchInputs(dispatch, fixture.root);
+    writeJson(fixture.currentDispatchPath, dispatch);
+    await assertValidateFails(["--mode", "dispatch", "--input", fixture.currentDispatchPath], /incremental dispatch cannot recheck every current reviewItem; use full/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture({ recheckIds: ["RI001"] });
+  try {
+    const dispatch = readJson(fixture.currentDispatchPath);
+    dispatch.ruleSet.ruleSources.find((source) => source.ruleRef === "TYPE-001").summary = "结构化规则摘要变化";
+    writeJson(fixture.currentDispatchPath, dispatch);
+    await assertValidateFails(["--mode", "dispatch", "--input", fixture.currentDispatchPath], /must include every machine-mandatory recheck item/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture({ recheckIds: ["RI001"] });
+  try {
+    const dispatch = readJson(fixture.currentDispatchPath);
+    dispatch.targets.changedUnits[0].inputRefs = ["src/changed.ts", "src/stable.ts"];
+    refreshDispatchInputs(dispatch, fixture.root);
+    writeJson(fixture.currentDispatchPath, dispatch);
+    await finalizeIncrementalRun(fixture.currentDir, fixture.currentDispatchPath);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture({ recheckIds: ["RI001"] });
+  try {
+    fs.renameSync(path.join(fixture.root, "src/changed.ts"), path.join(fixture.root, "src/renamed.ts"));
+    const dispatch = readJson(fixture.currentDispatchPath);
+    dispatch.changedFiles = ["src/changed.ts", "src/renamed.ts"];
+    dispatch.targets.changedUnits[0].inputRefs = ["src/changed.ts", "src/renamed.ts"];
+    refreshDispatchInputs(dispatch, fixture.root);
+    writeJson(fixture.currentDispatchPath, dispatch);
+    await finalizeIncrementalRun(fixture.currentDir, fixture.currentDispatchPath);
+    const snapshot = readJson(fixture.currentDispatchPath).inputSnapshot.files;
+    assert.equal(snapshot.find((entry) => entry.inputRef === "src/changed.ts").state, "deleted");
+    assert.equal(snapshot.find((entry) => entry.inputRef === "src/renamed.ts").state, "present");
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture();
+  try {
+    fs.writeFileSync(path.join(fixture.root, "src/new.ts"), "export const added = true;\n");
+    const dispatch = readJson(fixture.currentDispatchPath);
+    dispatch.changedFiles = ["src/new.ts"];
+    dispatch.targets.changedUnits.push({
+      targetId: "T003",
+      targetKind: "changed_unit",
+      loc: "src/new.ts:1",
+      summary: "新增文件目标",
+      inputRefs: ["src/new.ts"],
+    });
+    dispatch.applicabilityMatrix.push(
+      {
+        ruleRef: "CORE-001",
+        targetId: "T003",
+        targetKind: "changed_unit",
+        applicability: "applicable",
+        reviewItemId: "RI004",
+        evidence: [{ loc: "src/new.ts:1", summary: "CORE-001 applies to T003" }],
+      },
+      {
+        ruleRef: "TYPE-001",
+        targetId: "T003",
+        targetKind: "changed_unit",
+        applicability: "not_applicable",
+        reason: "TYPE-001 does not apply to T003",
+        evidence: [{ loc: "src/new.ts:1", summary: "TYPE-001 checked for T003" }],
+      },
+    );
+    dispatch.reviewItems.push({
+      reviewItemId: "RI004",
+      ruleRef: "CORE-001",
+      targetKind: "changed_unit",
+      targetId: "T003",
+      required: true,
+    });
+    refreshDispatchInputs(dispatch, fixture.root);
+    setIncrementalBatches(dispatch, [["RI004"]]);
+    writeJson(fixture.currentDispatchPath, dispatch);
+    await finalizeIncrementalRun(fixture.currentDir, fixture.currentDispatchPath);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture({
+    baseStatuses: { RI001: "finding", RI002: "observation", RI003: "not_applicable" },
+    recheckIds: ["RI001"],
+    finalizeCurrent: true,
+  });
+  try {
+    const chain = await createNextIncrementalRun(fixture);
+    assert.equal(readJson(chain.currentDispatchPath).executionPlan.mode, "no_batch");
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await createSingleStepFixture({ recheckIds: ["RI001"] });
+  try {
+    await finalizeIncrementalRun(fixture.currentDir, fixture.currentDispatchPath, { RI001: "finding" });
+    const r1Final = readJson(path.join(fixture.currentDir, "finalReview.json"));
+    assert.deepEqual(r1Final.issueSummary, issueSummary({ findings: 1, mustFix: 1, observations: 1 }));
+    assert.deepEqual(r1Final.findings.map((finding) => finding.findingId), ["F001"]);
+    const chain = await createNextIncrementalRun(fixture, { finalize: false });
+    await assertValidateFails(["--mode", "dispatch", "--input", chain.currentDispatchPath], /must include every machine-mandatory recheck item/);
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
