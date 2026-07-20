@@ -5691,6 +5691,7 @@ test('CLI roster prints head and slice table', async () => {
     assert.equal(result.status, 0, result.stderr.toString());
     const stdout = result.stdout.toString();
     assert.match(stdout, /当前切片：S1/);
+    assert.match(stdout, /下一步记录（未校验）：执行 S1/);
     assert.match(stdout, /\| 切片 \| 状态 \| 候选 \| 风险 \| 执行 \| 门禁 \| 依赖 \| Commit \| 标题 \|/);
     assert.match(stdout, /\| S1 \| not-started \| 候选需确认 \| B \| 待判定 \| grilled \| 无 \| 待提交 \| 示例切片 \|/);
     // 概览不应展开切片正文
@@ -5718,6 +5719,7 @@ test('CLI show current loads the current slice block, show S-id loads one slice'
     assert.equal(current.status, 0, current.stderr.toString());
     const currentOut = current.stdout.toString();
     assert.match(currentOut, /当前切片：S1/);
+    assert.match(currentOut, /下一步记录（未校验）：执行 S1/);
     assert.match(currentOut, /### S1：示例切片/);
     assert.match(currentOut, /#### 上下文预检/);
 
