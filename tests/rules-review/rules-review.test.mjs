@@ -318,6 +318,21 @@ function v3ConsumerCommands(runDir, dispatchPath) {
   ];
 }
 
+async function prepareSealedV3Run(options) {
+  const fixture = createV3RunFixture(options);
+  await runValidate(["--mode", "seal-dispatch", "--input", fixture.dispatchPath]);
+  for (const command of v3ConsumerCommands(fixture.runDir, fixture.dispatchPath)) {
+    await runValidate(command);
+  }
+  return fixture;
+}
+
+function commitFixture(root, paths, message = "slice") {
+  git(root, ["add", "-A", "--", ...paths]);
+  git(root, ["commit", "-qm", message]);
+  return git(root, ["rev-parse", "HEAD"]).trim();
+}
+
 function resultForReviewItem(reviewItemId, status = "passed") {
   const loc = reviewItemId === "RI001" ? "src/changed.ts:1" : "src/stable.ts:1";
   if (status === "passed") {
@@ -891,6 +906,195 @@ fixtures = materializeV3Fixtures();
     fs.rmSync(outside, { recursive: true, force: true });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  const { root, runDir, dispatchPath } = await prepareSealedV3Run();
+  const preservedFiles = [
+    "tasks/B001.json",
+    "shards/B001.json",
+    "finalReview.json",
+    "final.md",
+    "response.md",
+  ];
+  try {
+    const sealed = readJson(dispatchPath);
+    const baseCommit = git(root, ["rev-parse", "HEAD"]).trim();
+    assert.deepEqual(sealed.inputSource, { kind: "worktree", baseCommit });
+    const preserved = new Map(preservedFiles.map((file) => [file, fs.readFileSync(path.join(runDir, file), "utf8")]));
+    const headCommit = commitFixture(root, ["src"]);
+
+    await assertValidateFails(["--mode", "run", "--dir", runDir], /current Git worktree input verification failed closed/);
+    const bound = await runValidate(["--mode", "bind-commit", "--dir", runDir, "--commit", headCommit.slice(0, 12)]);
+    assert.equal(JSON.parse(bound.stdout).ok, true);
+    assert.deepEqual(readJson(dispatchPath).inputSource, { kind: "commit", baseCommit, headCommit });
+    for (const command of v3ConsumerCommands(runDir, dispatchPath)) {
+      assert.equal(JSON.parse((await runValidate(command)).stdout).ok, true, command.join(" "));
+    }
+    for (const [file, content] of preserved) {
+      assert.equal(fs.readFileSync(path.join(runDir, file), "utf8"), content, `${file} changed while binding`);
+    }
+
+    const beforeIdempotentBind = fs.readFileSync(dispatchPath, "utf8");
+    await runValidate(["--mode", "bind-commit", "--dir", runDir, "--commit", headCommit]);
+    assert.equal(fs.readFileSync(dispatchPath, "utf8"), beforeIdempotentBind);
+
+    fs.writeFileSync(path.join(root, "src", "example.js"), "later worktree change\n");
+    assert.equal(JSON.parse((await runValidate(["--mode", "run", "--dir", runDir])).stdout).ok, true);
+    const laterCommit = commitFixture(root, ["src"], "later slice");
+    assert.equal(JSON.parse((await runValidate(["--mode", "run", "--dir", runDir])).stdout).ok, true);
+    await assertValidateFails(
+      ["--mode", "bind-commit", "--dir", runDir, "--commit", laterCommit],
+      /already bound to another commit/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  const { root, runDir, dispatchPath } = await prepareSealedV3Run();
+  try {
+    const legacy = readJson(dispatchPath);
+    delete legacy.inputSource;
+    writeJson(dispatchPath, legacy);
+    const headCommit = commitFixture(root, ["src"]);
+    await runValidate(["--mode", "bind-commit", "--dir", runDir, "--commit", headCommit]);
+    assert.deepEqual(readJson(dispatchPath).inputSource, {
+      kind: "commit",
+      baseCommit: git(root, ["rev-parse", `${headCommit}^`]).trim(),
+      headCommit,
+    });
+    assert.equal(JSON.parse((await runValidate(["--mode", "run", "--dir", runDir])).stdout).ok, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  const cases = [
+    {
+      name: "content mismatch",
+      mutate: ({ root }) => fs.writeFileSync(path.join(root, "src", "example.js"), "committed after review\n"),
+      stage: ["src"],
+      pattern: /commit input snapshot mismatch for src\/example\.js/,
+    },
+    {
+      name: "extra file",
+      mutate: ({ root }) => fs.writeFileSync(path.join(root, "src", "extra.js"), "extra\n"),
+      stage: ["src"],
+      pattern: /commit changed file set does not match dispatch\.changedFiles/,
+    },
+    {
+      name: "missing file",
+      mutate: () => {},
+      stage: ["src/example.js"],
+      pattern: /commit changed file set does not match dispatch\.changedFiles/,
+    },
+    {
+      name: "rule source mismatch",
+      mutate: ({ root }) => fs.writeFileSync(path.join(root, ".agents", "rules", "core.md"), "changed rule\n"),
+      stage: ["src", ".agents/rules/core.md"],
+      pattern: /commit rule source hash mismatch/,
+    },
+    {
+      name: "rule index mismatch",
+      mutate: ({ root }) => fs.writeFileSync(path.join(root, ".agents", "rules", "index.md"), "changed index\n"),
+      stage: ["src", ".agents/rules/index.md"],
+      pattern: /commit rule index hash does not match/,
+    },
+  ];
+  for (const testCase of cases) {
+    const fixture = await prepareSealedV3Run();
+    try {
+      testCase.mutate(fixture);
+      const headCommit = commitFixture(fixture.root, testCase.stage, testCase.name);
+      await assertValidateFails(
+        ["--mode", "bind-commit", "--dir", fixture.runDir, "--commit", headCommit],
+        testCase.pattern,
+      );
+      assert.equal(readJson(fixture.dispatchPath).inputSource.kind, "worktree");
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }
+}
+
+{
+  const fixture = await prepareSealedV3Run();
+  try {
+    fs.mkdirSync(path.join(fixture.root, "docs"));
+    fs.writeFileSync(path.join(fixture.root, "docs", "intermediate.md"), "intermediate\n");
+    commitFixture(fixture.root, ["docs"], "intermediate");
+    const headCommit = commitFixture(fixture.root, ["src"]);
+    await assertValidateFails(
+      ["--mode", "bind-commit", "--dir", fixture.runDir, "--commit", headCommit],
+      /commit parent does not match sealed baseCommit/,
+    );
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = await prepareSealedV3Run();
+  try {
+    const originalBranch = git(fixture.root, ["branch", "--show-current"]).trim();
+    git(fixture.root, ["checkout", "-qb", "bind-feature"]);
+    commitFixture(fixture.root, ["src"], "feature change");
+    git(fixture.root, ["checkout", "-q", originalBranch]);
+    fs.writeFileSync(path.join(fixture.root, "side.txt"), "side\n");
+    commitFixture(fixture.root, ["side.txt"], "side change");
+    git(fixture.root, ["merge", "--no-ff", "-qm", "merge", "bind-feature"]);
+    const mergeCommit = git(fixture.root, ["rev-parse", "HEAD"]).trim();
+    await assertValidateFails(
+      ["--mode", "bind-commit", "--dir", fixture.runDir, "--commit", mergeCommit],
+      /non-merge commit with exactly one parent/,
+    );
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = createV3RunFixture();
+  try {
+    fs.writeFileSync(path.join(fixture.root, "src", "added.js"), "added\n");
+    const dispatch = readJson(fixture.dispatchPath);
+    [...dispatch.targets.changedUnits, ...dispatch.targets.candidates].forEach((target) => {
+      target.inputRefs = ["src/example.js", "src/deleted.js", "src/added.js"];
+    });
+    writeJson(fixture.dispatchPath, dispatch);
+    await runValidate(["--mode", "seal-dispatch", "--input", fixture.dispatchPath]);
+    for (const command of v3ConsumerCommands(fixture.runDir, fixture.dispatchPath)) await runValidate(command);
+    assert.deepEqual(readJson(fixture.dispatchPath).changedFiles, ["src/added.js", "src/deleted.js", "src/example.js"]);
+    const headCommit = commitFixture(fixture.root, ["src"]);
+    await runValidate(["--mode", "bind-commit", "--dir", fixture.runDir, "--commit", headCommit]);
+    assert.equal(JSON.parse((await runValidate(["--mode", "run", "--dir", fixture.runDir])).stdout).ok, true);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+{
+  const fixture = createV3RunFixture();
+  try {
+    fs.writeFileSync(path.join(fixture.root, "src", "deleted.js"), "deleted before seal\n");
+    fs.renameSync(path.join(fixture.root, "src", "example.js"), path.join(fixture.root, "src", "renamed.js"));
+    const dispatch = readJson(fixture.dispatchPath);
+    [...dispatch.targets.changedUnits, ...dispatch.targets.candidates].forEach((target) => {
+      target.inputRefs = ["src/example.js", "src/renamed.js"];
+    });
+    writeJson(fixture.dispatchPath, dispatch);
+    await runValidate(["--mode", "seal-dispatch", "--input", fixture.dispatchPath]);
+    for (const command of v3ConsumerCommands(fixture.runDir, fixture.dispatchPath)) await runValidate(command);
+    assert.deepEqual(readJson(fixture.dispatchPath).changedFiles, ["src/example.js", "src/renamed.js"]);
+    const headCommit = commitFixture(fixture.root, ["src"]);
+    await runValidate(["--mode", "bind-commit", "--dir", fixture.runDir, "--commit", headCommit]);
+    assert.equal(JSON.parse((await runValidate(["--mode", "run", "--dir", fixture.runDir])).stdout).ok, true);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
   }
 }
 

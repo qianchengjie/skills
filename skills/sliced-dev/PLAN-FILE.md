@@ -166,7 +166,7 @@ dev-plans/
 - 条件字段 `用户验收`：`pending` / `passed` / `issues` / `skipped` 开头，可追加中文说明；只用于 `执行：需确认`、`风险：C`、用户明确要求逐片验收，或用户实际反馈 issue 的切片；`skipped` 必须写明用户明确跳过原因。
 - 条件字段 `替代切片`：只用于 `状态：split`，使用 `S1.1 / S1.2` 形式列出一个或多个真实存在的后代切片；不能引用自身、同级片或不存在的 ID。
 - 条件字段 `跳过依据`：只用于 `状态：skipped`，值必须是一个 `D*`；该 D 必须为 `decided`、在当前切片 `关联项` 中同样写为 `decided`、正文 `关联` 包含当前切片，并有非占位 `结论` 和 `证据`。
-- 条件字段 `Commit`：只用于执行型切片（`not-started` / `blocked` / `in-progress` / `done`），值为 `待提交` / `已提交`；`split` / `skipped` 必须省略。
+- 条件字段 `Commit`：只用于执行型切片（`not-started` / `blocked` / `in-progress` / `done`），值为 `待提交` / `已提交`；它只记录状态，不写 commit hash；`split` / `skipped` 必须省略。
 - `修复次数`：`当前次数/最大次数`，例如 `0/4`、`1/4`、`4/4`，统计本切片实际修改任务范围内文件的自动修复总次数，不按门禁分别计数，默认上限为 `4`。单纯重跑 reviewer、重生成 package、补运行证据或修 review 协议工件不计次。次数用尽后任一门禁仍失败则停止，不继续自动修。
 
 脚本只检查 `替代切片` ID 非重复、真实存在且为父片后代，不判断这些切片是否完整覆盖父片任务与验收；覆盖关系由拆分拷问 / 计划审查判断。
@@ -399,7 +399,7 @@ Evidence 必须非空。前三项必须各引用且只引用同一个当前 gene
 
 `Status` / `Severity` 固定组合：`passed` / `not-applicable` 只能搭配 `not-applicable`；`failed` / `cannot-verify-from-package` 只能搭配 `critical` / `major` / `minor`。
 
-`项目规则审查：required` 时，第四 verdict 不能是 `not-applicable`，Evidence 必须引用当前最终 A*；A* 必须以 `done` 关联当前切片，并投影 `selectedRuleIds`、`rulesReviewRunId`、`validation: <rules-review validate command> => passed`、`recommendation`、`issueSummary.mustFix / shouldFix / cannotVerify`、`verdict`、`severity` 和 `summary`。`shouldSetHash` 仅在 `recommendation = should_review_before_merge` 时存在；recommendation 非 `ready_for_merge` 时还必须投影 `.rules-review-tmp/<runId>/response.md`，下一轮 task brief 通过该路径把 finding 交给 implementer。`validation` 是审计展示，不是执行入口；`close-check` 不执行该命令，而是从当前 sliced-dev skill root 定位受信任 rules-review validator，对选择器指定的真实 run 重跑 `--mode run`，再比较 runId、recommendation、三个计数和条件性 hash，并把真实 selectedRuleRefs、changed units、input snapshot、非空 changedFiles 与当前 plan 和两份 review package 绑定。路径不安全、缺失、symlink / 逃逸、validator 不可用或失败、finalReview 不可读或投影不一致都拒收。
+`项目规则审查：required` 时，第四 verdict 不能是 `not-applicable`，Evidence 必须引用当前最终 A*；A* 必须以 `done` 关联当前切片，并投影 `selectedRuleIds`、`rulesReviewRunId`、`validation: <rules-review validate command> => passed`、`recommendation`、`issueSummary.mustFix / shouldFix / cannotVerify`、`verdict`、`severity` 和 `summary`。`shouldSetHash` 仅在 `recommendation = should_review_before_merge` 时存在；recommendation 非 `ready_for_merge` 时还必须投影 `.rules-review-tmp/<runId>/response.md`，下一轮 task brief 通过该路径把 finding 交给 implementer。`validation` 是审计展示，不是执行入口；`close-check` 不执行该命令，而是从当前 sliced-dev skill root 定位受信任 rules-review validator，对选择器指定的真实 run 重跑 `--mode run`，再比较 runId、recommendation、三个计数和条件性 hash，并把真实 selectedRuleRefs、changed units、input snapshot、changedFiles 与当前 plan 和两份 review package 绑定。两份 package 的业务变更文件集合必须一致，`dispatch.changedFiles` 必须与该集合精确相等；集合非空时 `inputSource.kind` 必须为 `commit`，集合为空时允许未绑定。路径不安全、缺失、symlink / 逃逸、validator 不可用或失败、finalReview 不可读或投影不一致都拒收。
 
 默认模式下，`ready_for_merge` 只有三个计数均为 `0` 才能直接投影 `passed`。`should_review_before_merge` 的 A* 必须保留原始 `failed` 与原始 severity；只有真实用户接受当前完整 SHOULD 集合，且 `mustFix=0`、`shouldFix>0`、`cannotVerify=0` 时，controller 才可让第四 verdict 单独写 `passed + not-applicable`。此时第四 verdict Evidence 必须同时且各一次引用当前 A* 与 decided D*，Note 必须包含固定文本 `用户接受当前 run 全部剩余 SHOULD`；D* 必须关联当前切片并包含：
 
@@ -538,7 +538,7 @@ Evidence 必须非空。前三项必须各引用且只引用同一个当前 gene
 
 不要把用户口令或过程说明（如 `已拷问写回`）写进 `拆分拷问` 或切片 `门禁` 字段。
 
-`Commit` 只用于执行型切片，表示本片**代码**的提交状态，不表示 `dev-plans` 自身是否已提交，也不写最终 commit hash：未提交写 `待提交`，本片代码提交边界已收口写 `已提交`；`split` / `skipped` 不进入执行，必须省略该字段。`dev-plans` 记录走自己的独立 commit（默认收口 / 用户中途要求），不由切片 `Commit` 字段表达。最终 commit hash 只放在会话回复或外部提交记录中，不写回 plan；执行型切片无代码变更时不要创建空 commit，完成后仍写 `Commit：已提交`，并在 `验证备注` / 完成报告说明无可提交变更。
+`Commit` 只用于执行型切片，表示本片**代码**的提交状态，不表示 `dev-plans` 自身是否已提交，也不写最终 commit hash：未提交写 `待提交`，本片代码提交边界已收口写 `已提交`；`split` / `skipped` 不进入执行，必须省略该字段。`dev-plans` 记录走自己的独立 commit（默认收口 / 用户中途要求），不由切片 `Commit` 字段表达。有项目规则审查绑定时，最终 commit hash 的持久机器真源是 rules-review dispatch；会话回复或外部提交记录可展示该值，但不写回 plan。执行型切片无代码变更时不要创建空 commit，完成后仍写 `Commit：已提交`，并在 `验证备注` / 完成报告说明无可提交变更。
 
 ## 维护规则
 

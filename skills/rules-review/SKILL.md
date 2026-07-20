@@ -38,7 +38,8 @@ $rules-review <当前 Git worktree 明确范围> [baseRunId]
 - 用户给定的当前 worktree 范围、指定路径或需求说明；显式路径只能收窄或标注当前 worktree inventory 中的路径
 - 可选的直接上一轮 `baseRunId`；同一会话只接受 controller 已知且未发生分叉的直接上一轮 runId，跨会话只接受用户或外层调用方显式提供的 runId，不扫描目录猜测 latest run
 - 首次调用或未显式提供可信 base 时使用 full；显式 scope / source / base 非法或无法验证时必须 blocked，不得静默降级为 full
-- 代码内容源固定为当前 Git worktree；commit / range、仅 index/staged snapshot 或外部目录必须先物化到独立 worktree
+- 完整语义审查的代码内容源固定为当前 Git worktree；commit / range、仅 index/staged snapshot 或外部目录仍不得直接发起审查
+- `seal-dispatch` 记录当前 `HEAD` 为 `inputSource.baseCommit`；审查完成并产生对应单父代码 commit 后，只允许用 `bind-commit` 把已封印输入精确绑定到该 commit，不重新做语义审查
 - 只读 / 可修复边界、背景脏文件、用户明确排除项
 - 需要读取的 `.agents/rules/index.md` 与 active 规则文件
 
@@ -120,6 +121,7 @@ ruleRef x targetId = reviewItem
 - `runId`
 - `changedFiles[]`
 - `inputSnapshot.files[]`
+- 可选 `inputSource`
 - `ruleSet`
 - `targets`
 - `applicabilityMatrix`
@@ -183,6 +185,10 @@ ruleRef x targetId = reviewItem
 - `required`
 
 每轮都必须从当前 Git worktree、当前累计 diff、当前规则仓和当前代码重新建立完整 `ruleSet`、`targets`、`applicabilityMatrix` 与 `reviewItems`。`targets.changedUnits[]` 和被 reviewItem 引用的 candidate 必须声明文件级 `inputRefs[]`；`inputSnapshot.files[]` 必须与全部 inputRefs 的去重集合精确一致。`changedFiles[]`、代码原始字节 SHA-256、`.agents/rules/index.md` 与规则源 SHA-256 由 `seal-dispatch` 从当前 worktree 生成，所有当前 run 消费命令都会重新校验。
+
+新封印 run 的 `inputSource = { kind: "worktree", baseCommit }`。旧 v3 run 缺少 `inputSource` 时按 legacy worktree 兼容。完成审查并提交代码后运行 `bind-commit`：新 run 的 commit 唯一父提交必须等于 `baseCommit`；legacy run 从唯一父提交补齐。绑定成功后原子改为 `inputSource = { kind: "commit", baseCommit, headCommit }`。同一 commit 可幂等重绑，禁止改绑其它 commit。绑定只校验 Git 身份、过滤后文件集合和原始字节 hash，不修改 reviewItems、tasks、shards、finalReview 或任何 reviewer 结论。
+
+`inputSource.kind = "commit"` 后，所有当前 run 消费命令从 `headCommit` 的 Git object 读取代码、规则索引和规则源，并复核 `baseCommit → headCommit` 的单父关系及提交文件集合；后续 worktree 清空、再次修改同名文件或继续提交都不影响该 run。该能力只绑定已经完成的 worktree review，不提供任意历史 commit / range 的完整语义审查入口。
 
 review mode 不持久化额外字段：省略 `continuation` 表示 full，存在 `continuation.baseRunId` 表示 incremental。
 
@@ -434,6 +440,7 @@ scripts/validate.js
 
 ```text
 validate.js --mode seal-dispatch --input dispatch.json
+validate.js --mode bind-commit --dir .rules-review-tmp/<run-id> --commit <commit>
 validate.js --mode dispatch --input dispatch.json
 validate.js --mode task --input tasks/<reviewBatchId>.json
 validate.js --mode retry-task --input retries/<reviewBatchId>-retry-<n>.json
@@ -452,7 +459,9 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 - dispatch、task、retry-task、shard、validation output 与 finalReview 必须统一使用 `schemaVersion = 3`；v2 不进入当前运行协议，也不能作为 incremental base。
 - `runId` / `baseRunId` 必须是安全 token；incremental base 只能解析为当前 Git worktree `.rules-review-tmp/` 下的不同真实 sibling。
 - `reviewBatchId` 必须是安全 token；每个 batch 的 `taskRef` / `shardRef` 必须精确绑定当前 run 的 `tasks/<reviewBatchId>.json` / `shards/<reviewBatchId>.json`，不得跨目录或跨 batch 引用。
-- 当前 `changedFiles[]`、`inputRefs[]`、`inputSnapshot.files[]` 与 Git worktree inventory 必须结构闭合；当前代码、规则索引与规则源的原始字节 SHA-256 必须与 dispatch 一致。
+- `inputSource.kind = "worktree"` 或 legacy 缺席时，当前 `changedFiles[]` 必须仍属于 Git worktree inventory，代码、规则索引与规则源原始字节 SHA-256 必须与 dispatch 一致。
+- `inputSource.kind = "commit"` 时，`baseCommit` / `headCommit` 必须是规范化完整 SHA，`headCommit` 必须只有 `baseCommit` 一个父提交；过滤后的 commit 文件集合必须精确等于 `changedFiles[]`，commit 中代码 blob、规则索引与规则源 hash 必须等于 `inputSnapshot` / `ruleSet`。
+- `bind-commit` 拒绝 merge commit、错误父提交、文件缺失 / 多带、内容或规则变化以及改绑其它 commit；全部检查通过后才原子更新 `dispatch.inputSource`。
 - 全部 current `reviewItem`（包括 `required = false`）必须在运行时 effectiveResults 中有且只有一个 result。
 - `selectedRuleRefs[]` 必须是 `candidateRuleRefs[]` 的子集。
 - 每个 `selectedRuleRefs[]` 中的规则必须分类到 `requiredRuleRefs[]`、`excludedRuleRefs[]` 或 `globallyNotApplicableRuleRefs[]`。
@@ -506,7 +515,7 @@ validate.js --mode run --dir .rules-review-tmp/<run-id>
 - `validate.js --mode run` 在读取任一 run artifact 前确定性检查整棵 run tree；run 根或任意嵌套目录 / 文件为 symlink、任一 realpath 逃出 run 根或出现非普通文件时立即 `blocked`，且不继续读取该树中的 artifact。
 - `retries/*.json` 必须只包含 retry schema 的固定字段，通过 `retry-task` 校验，并且 `runId`、`originalTaskRef` 分别匹配当前 dispatch 和其中一个 task。
 
-validator 只校验可确定、可复现的结构、路径、hash、引用、状态和运行时结果闭合。机器不证明 target 的语义身份、current scope / inputRefs 的语义完整性、`baseRunId` 是时间上的真正直接前驱，也不提供祖先工件被同步改写后的历史防篡改证明，不判断主 agent 的语义扩审是否充分；这些仍是主 agent、调用方与 reviewer 的人工责任，不得用关键词启发式或静默回退 full 伪装为已验证。
+validator 只校验可确定、可复现的结构、Git 身份、文件集合、路径、hash、引用、状态和运行时结果闭合。`bind-commit` 不判断审查结论是否正确，也不代表重新执行语义 review。机器不证明 target 的语义身份、current scope / inputRefs 的语义完整性、`baseRunId` 是时间上的真正直接前驱，也不提供祖先工件被同步改写后的历史防篡改证明，不判断主 agent 的语义扩审是否充分；这些仍是主 agent、调用方与 reviewer 的人工责任，不得用关键词启发式或静默回退 full 伪装为已验证。
 
 `semanticVerdict` 派生规则：
 

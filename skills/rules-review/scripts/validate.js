@@ -8,6 +8,7 @@ const { execFileSync } = require('child_process');
 const MODES = new Set([
   'dispatch',
   'seal-dispatch',
+  'bind-commit',
   'task',
   'retry-task',
   'shard',
@@ -43,6 +44,7 @@ const REVIEW_ITEM_RE = /^RI\d{3,}$/;
 const TARGET_RE = /^T\d{3,}$/;
 const FINDING_RE = /^F\d{3,}$/;
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
+const COMMIT_SHA_RE = /^[0-9a-f]{40}$/;
 const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 const LABELS = {
@@ -175,6 +177,8 @@ function run(args) {
   try {
     if (mode === 'seal-dispatch') {
       sealDispatchMode(args, result);
+    } else if (mode === 'bind-commit') {
+      bindCommitMode(args, result);
     } else if (mode === 'dispatch') {
       const dispatch = readJson(args.input, args.input, result, 'D001');
       if (dispatch) {
@@ -276,6 +280,7 @@ function sealDispatchMode(args, result) {
   try {
     const worktree = loadCurrentWorktree(args.input);
     sealed = JSON.parse(JSON.stringify(draft));
+    sealed.inputSource = { kind: 'worktree', baseCommit: worktree.baseCommit };
     sealed.changedFiles = selectChangedFiles(worktree.changedFiles, sealed.changedFiles);
     sealed.inputSnapshot = {
       files: collectDeclaredInputRefs(sealed)
@@ -305,6 +310,72 @@ function sealDispatchMode(args, result) {
   result.rendered = args.input;
 }
 
+function bindCommitMode(args, result) {
+  const runDir = args.dir;
+  if (!runDir || runDir === true) {
+    addViolation(result, 'BC001', null, '/dir', 'bind-commit requires --dir', 'run directory', runDir || null, 2);
+    return;
+  }
+  if (!isNonEmptyString(args.commit)) {
+    addViolation(result, 'BC002', null, '/commit', 'bind-commit requires --commit', 'Git commit', args.commit || null, 2);
+    return;
+  }
+  if (!validateRunDirectoryFiles(runDir, result)) return;
+
+  const dispatchPath = path.join(runDir, 'dispatch.json');
+  const dispatch = readJson(dispatchPath, rel(runDir, dispatchPath), result, 'D001');
+  if (!dispatch) return;
+
+  let bound;
+  try {
+    const { root } = loadRepository(dispatchPath);
+    const headCommit = resolveCommit(root, args.commit);
+    const parents = commitParents(root, headCommit);
+    if (parents.length !== 1) throw new Error('bind-commit requires a non-merge commit with exactly one parent');
+    const baseCommit = parents[0];
+    const source = dispatch.inputSource;
+    if (source !== undefined && (!isObject(source) || !['worktree', 'commit'].includes(source.kind))) {
+      throw new Error('dispatch.inputSource must be absent, worktree, or commit');
+    }
+    if (source && source.kind === 'worktree' && source.baseCommit !== baseCommit) {
+      throw new Error(`commit parent does not match sealed baseCommit ${source.baseCommit}`);
+    }
+    if (source && source.kind === 'commit' && source.headCommit !== headCommit) {
+      throw new Error(`dispatch is already bound to another commit ${source.headCommit}`);
+    }
+    if (source && source.kind === 'commit' && source.baseCommit !== baseCommit) {
+      throw new Error(`bound baseCommit does not match the unique parent of ${headCommit}`);
+    }
+
+    bound = JSON.parse(JSON.stringify(dispatch));
+    bound.inputSource = { kind: 'commit', baseCommit, headCommit };
+    validateDispatch(bound, rel(runDir, dispatchPath), result, dispatchPath);
+    if (result.violations.length === 0) validateIncrementalPlan(path.resolve(runDir), bound, result);
+  } catch (error) {
+    addViolation(result, 'BC003', rel(runDir, dispatchPath), '/inputSource', `bind-commit failed closed: ${error.message}`, 'matching non-merge Git commit', error.message, 2);
+    return;
+  }
+  if (result.violations.length > 0) return;
+
+  const serialized = `${JSON.stringify(bound, null, 2)}\n`;
+  if (fs.readFileSync(dispatchPath, 'utf8') !== serialized) atomicWriteFile(dispatchPath, serialized);
+  result.rendered = dispatchPath;
+}
+
+function atomicWriteFile(filePath, content) {
+  const temporary = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`);
+  try {
+    fs.writeFileSync(temporary, content, { flag: 'wx' });
+    fs.renameSync(temporary, filePath);
+  } finally {
+    try {
+      fs.unlinkSync(temporary);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+}
+
 function validateDispatchSchemaVersion(dispatch, artifact, result) {
   if (!isObject(dispatch) || dispatch.schemaVersion !== SCHEMA_VERSION) {
     addViolation(result, 'D003', artifact, '/schemaVersion', 'dispatch schemaVersion must match rules-review protocol', SCHEMA_VERSION, dispatch && dispatch.schemaVersion);
@@ -332,6 +403,19 @@ function collectDeclaredInputRefs(dispatch) {
 }
 
 function loadCurrentWorktree(dispatchPath) {
+  const { root } = loadRepository(dispatchPath);
+  const status = execFileSync('git', ['-C', root, '-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-uall'], {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const changedFiles = [...new Set(parseGitStatus(status)
+    .map((entry) => entry.file)
+    .filter((repoPath) => !isRulesReviewProtocolPath(repoPath) && !isRuleInputPath(repoPath)))]
+    .sort(compareStrings);
+  return { root, changedFiles, baseCommit: resolveCommit(root, 'HEAD') };
+}
+
+function loadRepository(dispatchPath) {
   if (!isNonEmptyString(dispatchPath)) throw new Error('dispatch path is required');
   const absoluteDispatchPath = path.resolve(dispatchPath);
   const dispatchStat = fs.lstatSync(absoluteDispatchPath);
@@ -344,16 +428,7 @@ function loadCurrentWorktree(dispatchPath) {
   if (!rootOutput || rootOutput.includes('\n')) throw new Error('unable to determine a single Git worktree root');
   const root = fs.realpathSync(rootOutput);
   assertPathInsideRoot(root, realDispatchPath, 'dispatch input');
-
-  const status = execFileSync('git', ['-C', root, '-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-uall'], {
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  const changedFiles = [...new Set(parseGitStatus(status)
-    .map((entry) => entry.file)
-    .filter((repoPath) => !isRulesReviewProtocolPath(repoPath) && !isRuleInputPath(repoPath)))]
-    .sort(compareStrings);
-  return { root, changedFiles };
+  return { root, dispatchPath: realDispatchPath };
 }
 
 function selectChangedFiles(inventory, declared) {
@@ -484,7 +559,93 @@ function hashBytes(bytes) {
   return `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
 }
 
+function resolveCommit(root, revision) {
+  if (!isNonEmptyString(revision)) throw new Error('Git commit must be a non-empty revision');
+  const output = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--end-of-options', `${revision}^{commit}`], {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  }).trim();
+  if (!COMMIT_SHA_RE.test(output)) throw new Error(`Git commit did not resolve to one full SHA: ${revision}`);
+  return output;
+}
+
+function commitParents(root, headCommit) {
+  const fields = execFileSync('git', ['-C', root, 'rev-list', '--parents', '-n', '1', headCommit], {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  }).trim().split(/\s+/);
+  if (fields[0] !== headCommit || fields.some((field) => !COMMIT_SHA_RE.test(field))) {
+    throw new Error(`unable to resolve commit parents for ${headCommit}`);
+  }
+  return fields.slice(1);
+}
+
+function listCommitChangedFiles(root, baseCommit, headCommit) {
+  const output = execFileSync('git', ['-C', root, 'diff', '--name-only', '--no-renames', '-z', baseCommit, headCommit, '--'], {
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const bytes = Buffer.from(output);
+  if (bytes.length > 0 && bytes.at(-1) !== 0) throw new Error('Git commit file inventory is not NUL terminated');
+  const files = bytes.length === 0 ? [] : bytes.subarray(0, -1).toString('utf8').split('\0');
+  return [...new Set(files.map((repoPath) => {
+    assertSafeRepoRelativePath(repoPath);
+    return repoPath;
+  }).filter((repoPath) => !isRulesReviewProtocolPath(repoPath) && !isRuleInputPath(repoPath)))]
+    .sort(compareStrings);
+}
+
+function snapshotCommitInput(root, commit, repoPath) {
+  assertSafeRepoRelativePath(repoPath);
+  const output = Buffer.from(execFileSync('git', [
+    '-C', root,
+    '--literal-pathspecs',
+    'ls-tree',
+    '-z',
+    commit,
+    '--',
+    repoPath,
+  ], { maxBuffer: 16 * 1024 * 1024 }));
+  if (output.length === 0) return { inputRef: repoPath, state: 'deleted' };
+  if (output.at(-1) !== 0 || output.subarray(0, -1).includes(0)) throw new Error(`Git tree lookup returned multiple entries for ${repoPath}`);
+  const record = output.subarray(0, -1);
+  const tab = record.indexOf(9);
+  if (tab < 0) throw new Error(`Git tree lookup returned invalid metadata for ${repoPath}`);
+  const [mode, type, objectId] = record.subarray(0, tab).toString('ascii').split(' ');
+  const actualPath = record.subarray(tab + 1).toString('utf8');
+  if (actualPath !== repoPath) throw new Error(`Git tree lookup path mismatch for ${repoPath}`);
+  if (!['100644', '100755'].includes(mode) || type !== 'blob') throw new Error(`Git input must be a regular file at ${repoPath}`);
+  const content = execFileSync('git', ['-C', root, 'cat-file', 'blob', objectId], { maxBuffer: 64 * 1024 * 1024 });
+  return { inputRef: repoPath, state: 'present', contentHash: hashBytes(content) };
+}
+
+function hashCommitFile(root, commit, repoPath) {
+  const snapshot = snapshotCommitInput(root, commit, repoPath);
+  if (snapshot.state !== 'present') throw new Error(`required repository file is missing from commit: ${repoPath}`);
+  return snapshot.contentHash;
+}
+
+function validateInputSource(inputSource, artifact, result) {
+  if (inputSource === undefined) return;
+  if (!isObject(inputSource)) {
+    addViolation(result, 'D230', artifact, '/inputSource', 'inputSource must be an object when present', 'worktree or commit input source', inputSource);
+    return;
+  }
+  if (!['worktree', 'commit'].includes(inputSource.kind)) {
+    addViolation(result, 'D231', artifact, '/inputSource/kind', 'inputSource kind must be worktree or commit', ['worktree', 'commit'], inputSource.kind);
+    return;
+  }
+  const expectedFields = inputSource.kind === 'worktree' ? ['kind', 'baseCommit'] : ['kind', 'baseCommit', 'headCommit'];
+  rejectUnsupportedFields(inputSource, artifact, result, 'D232', '/inputSource', expectedFields, 'inputSource');
+  requireFields(inputSource, artifact, result, 'D233', '/inputSource', expectedFields);
+  for (const field of expectedFields.filter((field) => field.endsWith('Commit'))) {
+    if (!COMMIT_SHA_RE.test(inputSource[field] || '')) {
+      addViolation(result, 'D234', artifact, `/inputSource/${field}`, `${field} must be a normalized full Git SHA`, '40 lowercase hex', inputSource[field]);
+    }
+  }
+}
+
 function validateCurrentInputShape(dispatch, reviewItems, artifact, result) {
+  validateInputSource(dispatch.inputSource, artifact, result);
   const changedFiles = validateRepoPathArray(dispatch.changedFiles, artifact, result, 'D200', '/changedFiles');
   changedFiles.forEach((repoPath, index) => {
     if (isRulesReviewProtocolPath(repoPath) || isRuleInputPath(repoPath)) {
@@ -612,6 +773,57 @@ function verifyCurrentDispatchInputs(dispatch, currentInputPath, artifact, resul
   }
 }
 
+function verifyCommitDispatchInputs(dispatch, currentInputPath, artifact, result) {
+  try {
+    const { root } = loadRepository(currentInputPath);
+    const source = dispatch.inputSource;
+    const baseCommit = resolveCommit(root, source.baseCommit);
+    const headCommit = resolveCommit(root, source.headCommit);
+    if (baseCommit !== source.baseCommit || headCommit !== source.headCommit) {
+      throw new Error('inputSource commits must be normalized full SHAs');
+    }
+    const parents = commitParents(root, headCommit);
+    if (parents.length !== 1 || parents[0] !== baseCommit) {
+      throw new Error('headCommit must have baseCommit as its unique parent');
+    }
+
+    const actualChangedFiles = listCommitChangedFiles(root, baseCommit, headCommit);
+    if (!setsEqual(new Set(asArray(dispatch.changedFiles)), new Set(actualChangedFiles))) {
+      throw new Error(`commit changed file set does not match dispatch.changedFiles: ${actualChangedFiles.join(', ')}`);
+    }
+
+    asArray(dispatch.inputSnapshot && dispatch.inputSnapshot.files).forEach((entry) => {
+      if (!entry || !isNonEmptyString(entry.inputRef)) throw new Error('inputSnapshot contains an invalid inputRef');
+      const actual = snapshotCommitInput(root, headCommit, entry.inputRef);
+      if (actual.state !== entry.state || actual.contentHash !== entry.contentHash) {
+        throw new Error(`commit input snapshot mismatch for ${entry.inputRef}`);
+      }
+    });
+
+    const actualIndexHash = hashCommitFile(root, headCommit, '.agents/rules/index.md');
+    if (dispatch.ruleSet.sourceIndexHash !== actualIndexHash) throw new Error('commit rule index hash does not match sourceIndexHash');
+    const sourceHashes = new Map();
+    asArray(dispatch.ruleSet && dispatch.ruleSet.ruleSources).forEach((sourceEntry) => {
+      if (!sourceHashes.has(sourceEntry.sourceFile)) {
+        sourceHashes.set(sourceEntry.sourceFile, hashCommitFile(root, headCommit, sourceEntry.sourceFile));
+      }
+      if (sourceEntry.sourceHash !== sourceHashes.get(sourceEntry.sourceFile)) {
+        throw new Error(`commit rule source hash mismatch for ${sourceEntry.sourceFile}`);
+      }
+    });
+  } catch (error) {
+    addViolation(result, 'D241', artifact, null, `Git commit input verification failed closed: ${error.message}`, 'sealed commit inputs', error.message, 2);
+  }
+}
+
+function verifyDispatchInputs(dispatch, currentInputPath, artifact, result) {
+  if (dispatch && dispatch.inputSource && dispatch.inputSource.kind === 'commit') {
+    verifyCommitDispatchInputs(dispatch, currentInputPath, artifact, result);
+    return;
+  }
+  verifyCurrentDispatchInputs(dispatch, currentInputPath, artifact, result);
+}
+
 function isRulesReviewProtocolPath(repoPath) {
   return repoPath === '.rules-review-tmp' || repoPath.startsWith('.rules-review-tmp/');
 }
@@ -629,7 +841,7 @@ function validateDispatch(dispatch, artifact, result, currentInputPath = artifac
   validateDispatchSchemaVersion(dispatch, artifact, result);
   const requiredFields = ['kind', 'schemaVersion', 'runId', 'ruleSet', 'targets', 'applicabilityMatrix', 'reviewItems', 'executionPlan', 'reviewBatches', 'changedFiles', 'inputSnapshot'];
   requireFields(dispatch, artifact, result, 'D004', '', requiredFields);
-  rejectUnsupportedFields(dispatch, artifact, result, 'D006', '', [...requiredFields, 'fullReason', 'continuation', 'priorReviewCheck'], 'dispatch');
+  rejectUnsupportedFields(dispatch, artifact, result, 'D006', '', [...requiredFields, 'fullReason', 'continuation', 'priorReviewCheck', 'inputSource'], 'dispatch');
   if (!isSafeToken(dispatch && dispatch.runId)) addViolation(result, 'D005', artifact, '/runId', 'runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', dispatch && dispatch.runId);
   validateNoPriorReviewInputs(dispatch, artifact, result);
 
@@ -642,7 +854,9 @@ function validateDispatch(dispatch, artifact, result, currentInputPath = artifac
   validateReviewBatches(dispatch, ruleSet, reviewItems, artifact, result);
   validateExecutionPlan(dispatch.executionPlan, dispatch, ruleSet, reviewItems, artifact, result);
   validateCurrentInputShape(dispatch, reviewItems, artifact, result);
-  if (!historical) verifyCurrentDispatchInputs(dispatch, currentInputPath, artifact, result);
+  if (!historical || (dispatch.inputSource && dispatch.inputSource.kind === 'commit')) {
+    verifyDispatchInputs(dispatch, currentInputPath, artifact, result);
+  }
 }
 
 function validateReviewMode(dispatch, reviewItems, artifact, result) {
@@ -1752,8 +1966,8 @@ function loadBaseRun(runDir, dispatch, result, ancestry) {
   let baseDir;
   let nextAncestry;
   try {
-    const worktree = loadCurrentWorktree(path.join(runDir, 'dispatch.json'));
-    const runRoot = path.join(worktree.root, '.rules-review-tmp');
+    const repository = loadRepository(path.join(runDir, 'dispatch.json'));
+    const runRoot = path.join(repository.root, '.rules-review-tmp');
     const runRootStat = fs.lstatSync(runRoot);
     if (runRootStat.isSymbolicLink() || !runRootStat.isDirectory()) throw new Error('.rules-review-tmp must be a real directory');
     const currentStat = fs.lstatSync(runDir);

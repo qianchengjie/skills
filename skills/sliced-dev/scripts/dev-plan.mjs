@@ -3326,6 +3326,7 @@ async function readRulesReviewProjectionForClose(runId) {
         changedUnitInputRefs: dispatch.targets.changedUnits.map((target) => target.inputRefs),
         inputSnapshotRefs: dispatch.inputSnapshot.files.map((entry) => entry.inputRef),
         changedFiles: dispatch.changedFiles,
+        inputSource: dispatch.inputSource,
       },
     };
   } catch (error) {
@@ -3355,6 +3356,12 @@ function validateProjectRuleReviewScopeForClose(
   if (!sameStringSet(projection.selectedRuleRefs, projectRuleReview.selectedRuleIds)) {
     errors.push(`close-check:${sliceId}: rules-review dispatch selectedRuleRefs must equal current project rules`);
   }
+  if (!sameStringSet(projection.changedFiles, ruleFiles)) {
+    errors.push(`close-check:${sliceId}: rules-review dispatch changedFiles must equal current review-package files`);
+  }
+  if (ruleFiles.length > 0 && projection.inputSource?.kind !== 'commit') {
+    errors.push(`close-check:${sliceId}: rules-review run with code changes must bind inputSource.kind=commit`);
+  }
 
   const ruleFileSet = new Set(ruleFiles);
   const snapshotSet = new Set(projection.inputSnapshotRefs);
@@ -3367,15 +3374,12 @@ function validateProjectRuleReviewScopeForClose(
       errors.push(`close-check:${sliceId}: rules-review inputSnapshot must contain package file ${file}`);
     }
   }
-  projection.changedUnitInputRefs.forEach((inputRefs, index) => {
-    if (!inputRefs.some((file) => ruleFileSet.has(file))) {
-      errors.push(`close-check:${sliceId}: rules-review changedUnits[${index}] must anchor to a package changed file`);
-    }
-  });
-  for (const file of projection.changedFiles) {
-    if (!ruleFileSet.has(file)) {
-      errors.push(`close-check:${sliceId}: rules-review dispatch changedFiles contains out-of-scope file ${file}`);
-    }
+  if (ruleFiles.length > 0) {
+    projection.changedUnitInputRefs.forEach((inputRefs, index) => {
+      if (!inputRefs.some((file) => ruleFileSet.has(file))) {
+        errors.push(`close-check:${sliceId}: rules-review changedUnits[${index}] must anchor to a package changed file`);
+      }
+    });
   }
   return errors;
 }
