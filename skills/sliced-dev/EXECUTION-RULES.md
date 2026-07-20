@@ -373,6 +373,8 @@ general reviewer 三项 verdict 固定为：
 
 AI Review 结论表必须使用 `Verdict | Status | Severity | Evidence | Note` 五列格式。最终写回四个 verdict：general reviewer 的三项，加 controller 根据 `项目规则审查` 预检和 rule-reviewer fixed summary 写入的 `项目规则审查`。前三项 Evidence 必须各自且只引用同一个当前 general review A*；第四项填项目规则审查 A* 或固定不适用标记（`N/A` / `NA` / `not applicable` / `不适用`）。自然语言判断说明写 Note。`required` 时同节还要有唯一 `- 项目规则审查 runId：<runId>`。脚本校验固定 verdict、各 verdict 允许的 Status、Status / Severity 固定组合和 Evidence 非空；`close-check` 还检查新格式 package 的 general review A* 与当前 package SHA-256、模式和基线绑定，并回源重验选择的真实 rules-review run。
 
+项目规则语义审查必须在代码 commit 前完成并封印最终 rules-review run。代码 commit 成功后不重做语义审查，而是立即对该 run 执行 `bind-commit`，用 Git 父提交、文件集合和字节 hash 证明“审查输入 = 实际提交”；绑定失败即阻塞本片收口和后续切片。无代码变更且两份 review package 的业务变更文件集合均为空时，不创建空 commit，也不要求绑定。
+
 general reviewer 三项 `Status` 只允许 `passed` / `failed` / `cannot-verify-from-package`；第四项 `项目规则审查` 仅在上下文预检为 `not-applicable` 时额外允许 `not-applicable`。`Severity` 只允许 `critical` / `major` / `minor` / `not-applicable`。`passed` / `not-applicable` 只能搭配 `Severity=not-applicable`；`failed` / `cannot-verify-from-package` 只能搭配 `critical` / `major` / `minor`。
 
 `cannot-verify-from-package` 必须由 controller 补证：补测试结果、代码证据、调用链、D/A 引用或重新生成 package；不能靠口头解释改成 passed。补证后仍无法判断时，写 `AI Review：blocked（原因）` 或转 `D* open`。
@@ -428,7 +430,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/<date-slu
 - 每个 done slice 必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确；最终 claim 状态必须是 `verified` 或 `waived`。
 - 每个 done + `AI Review：passed` slice 必须有非空 task brief、`conclusion: ready-for-review` 的非空 task report、非空 review-package；JSON report 必须 schema valid；review-package 必须包含 Task Brief、Task Report、Claims、Git Diff 统计、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID；Git Diff 统计必须使用 `text` fence，Git Diff 必须使用 `diff` fence，允许无当前 dirty diff。
 - `split` / `skipped` 不要求 done slice 的实现证据；它们分别以 `替代切片` / `跳过依据` 作为拒收门禁。脚本只检查 `替代切片` ID 非重复、真实存在且为父片后代，不判断这些切片是否完整覆盖父片任务与验收；覆盖关系由拆分拷问 / 计划审查判断。
-- `项目规则审查：required` 时，必须有唯一安全的当前 runId 选择器和当前最终 A*。`close-check` 从当前 sliced-dev skill root 安全解析受信任 rules-review validator，对当前仓库 `.rules-review-tmp/<runId>` 重跑真实 `--mode run`，不执行 A* 的 validation 展示命令；它拒绝不安全、缺失、symlink / 逃逸路径、validator / finalReview 失败，并比较真实 runId、recommendation、三个计数和仅 SHOULD recommendation 存在的 `shouldSetHash`。第四 verdict 默认必须等于 A* raw verdict；只有默认 SHOULD 完整 A/D/Evidence/token/confirmation 链可单独通过。`项目规则审查：not-applicable` 时，第四 verdict 必须为 `not-applicable` 且不得有选择器或适用规则 ID；`blocked` 阻塞 `上下文预检：ready`、`AI Review：passed` 和 `状态：done`。机器不判断 rule ID 是否该选、finding 是否正确或用户确认是否真实。
+- `项目规则审查：required` 时，必须有唯一安全的当前 runId 选择器和当前最终 A*。`close-check` 从当前 sliced-dev skill root 安全解析受信任 rules-review validator，对当前仓库 `.rules-review-tmp/<runId>` 重跑真实 `--mode run`，不执行 A* 的 validation 展示命令；它拒绝不安全、缺失、symlink / 逃逸路径、validator / finalReview 失败，并比较真实 runId、recommendation、三个计数和仅 SHOULD recommendation 存在的 `shouldSetHash`。general / rule review package 的业务变更文件集合必须一致，真实 `dispatch.changedFiles` 必须与该集合精确相等；集合非空时还要求 `dispatch.inputSource.kind=commit`，由 rules-review 继续保证该集合和字节内容与实际 commit 精确相等。集合为空时允许 run 保持未绑定。第四 verdict 默认必须等于 A* raw verdict；只有默认 SHOULD 完整 A/D/Evidence/token/confirmation 链可单独通过。`项目规则审查：not-applicable` 时，第四 verdict 必须为 `not-applicable` 且不得有选择器或适用规则 ID；`blocked` 阻塞 `上下文预检：ready`、`AI Review：passed` 和 `状态：done`。机器不判断 rule ID 是否该选、finding 是否正确或用户确认是否真实。
 
 `close-check` 只信 `claims/<S-id>.json` 的终态，不从 task report 推断 claim 完成。`waived` 只接受 `risk` / `scope` claim 且必须有非占位 note；P0/P1 `behavior`、`scope`、`validation` claim 写 `verified` 时必须有 `ai-statement` 之外的证据。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。
@@ -468,7 +470,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs whole-review-package dev-plans/
 - 验证结果、硬门禁结果、AI Review 结果，以及启用时的用户验收结果；失败 / 跳过说明原因和风险。
 - task report 结论、review-package 路径、必要时的 rule-review-package 路径和四项 verdict 摘要。
 - 修复次数；如果触发有限修复，说明每次修了什么。
-- 执行型切片在 plan 内的 `Commit` 状态、提交后的 commit hash 或无变更说明；commit hash 只放在完成报告或外部提交记录，不写回 plan。
+- 执行型切片在 plan 内的 `Commit` 状态、提交后的 commit hash 或无变更说明；plan 的 `Commit` 仍只记录状态，不写 hash。有规则审查绑定时，commit hash 的持久机器真源是 rules-review dispatch；完成报告可以展示该值。
 - 偏离预告或未完成项。
 - 下一片状态；进入下一片先重跑切片前分叉审查。
 
@@ -488,6 +490,13 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs whole-review-package dev-plans/
 - 若本片没有产生可提交代码变更，`Commit` 写 `已提交`，在 `验证备注` 和完成报告说明无可提交变更，不创建空 commit。
 - 只有验证通过，或用户明确接受失败 / 跳过风险后，才执行 commit。
 - 有提交时，commit title 使用简体中文，遵循仓库既有提交风格，指向本片可观察结果；切片编号不作为 title 强制开头。
+- `项目规则审查：required` 且本片产生代码 commit 时，提交后立即对最终 rules-review run 执行绑定：
+
+  ```bash
+  node <rules-review-skill-dir>/scripts/validate.js --mode bind-commit --dir .rules-review-tmp/<runId> --commit <commit>
+  ```
+
+  绑定只核对 Git 身份、唯一父提交、过滤后的文件集合和字节 hash，不重做语义审查；失败时不得把本片收口，也不得继续后续切片。无代码变更且审查文件集合为空时不执行绑定。
 - 提交后复核 `git status --short -uall`，确认未提交内容仅为 `dev-plans` 记录、无关脏改动或下一片待处理内容。
 
 ### dev-plans 提交（收口 / 按需）

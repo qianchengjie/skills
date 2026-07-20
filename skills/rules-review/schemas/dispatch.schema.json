@@ -57,6 +57,29 @@
         "files": { "type": "array", "items": { "$ref": "#/$defs/inputSnapshotFile" } }
       }
     },
+    "inputSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "baseCommit"],
+          "properties": {
+            "kind": { "const": "worktree" },
+            "baseCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "baseCommit", "headCommit"],
+          "properties": {
+            "kind": { "const": "commit" },
+            "baseCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+            "headCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+          }
+        }
+      ]
+    },
     "priorReviewCheck": false
   },
   "oneOf": [
