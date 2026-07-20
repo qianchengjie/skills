@@ -5057,7 +5057,7 @@ function renderPlanHead(plan) {
     .join(' / ');
   const currentState = getSection(plan, '当前状态');
   const state = ['阶段', '当前切片', '下一步']
-    .map((name) => `${name}：${getField(currentState, name) ?? '?'}`)
+    .map((name) => `${name === '下一步' ? '下一步记录（未校验）' : name}：${getField(currentState, name) ?? '?'}`)
     .join(' / ');
   return `# ${title}\n\n${meta}\n${state}`;
 }
