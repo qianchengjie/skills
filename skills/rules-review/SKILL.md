@@ -1,93 +1,148 @@
 ---
 name: rules-review
-description: 项目规则驱动的代码审查流程，适用于项目内 `.agents/skills/rules-review`。读取 `.agents/rules/index.md` 与适用 active 规则，把规则消费为 `ruleSet -> targets -> applicabilityMatrix -> reviewItems -> executionPlan -> reviewBatches -> results -> finalReview`，并用 validator 校验协议闭合。默认只读，不维护规则仓，不替代全量功能 QA。
+description: 项目规则驱动的代码审查流程。读取 `.agents/rules/index.md` 与适用 active 规则，把固定 Git tree 输入消费为 `ruleSet -> targets -> applicabilityMatrix -> reviewItems -> executionPlan -> reviewBatches -> results -> finalReview`，并用 validator 校验协议闭合。默认只读，不维护规则仓，不替代全量功能 QA。
 disable-model-invocation: true
 ---
 
 # 规范审查
 
-`rules-review` 是项目规则驱动的规范审查 skill。它不维护 `.agents/rules/`，不发明规则分类，不替代 `AGENTS.md`、OpenSpec、共享能力文档或代码证据；它只负责消费已有 active 规则、建立目标边界、分派审查原子、回收结果并输出可校验结论。
+`rules-review` 使用 `schemaVersion = 4`。每个新的 TARGET 都创建全新 run，完整审查该 TARGET 的全部当前 `reviewItems`，不继承旧结果，也不把修复轮当作增量审查。
 
-当前执行协议统一为 `schemaVersion = 3`。v3 支持 `full`，以及只引用一个安全 sibling v3 直接前序 run 的 `incremental`；直接前序可以是 full 或 incremental，validator 递归解析到 full 链根。v2 工件不迁移，也不能作为 incremental base。
+`protocolGate = "passed"` 只表示本轮结构协议闭合，不表示代码无问题。代码结论同时看 `semanticVerdict`、`issueSummary` 和 `recommendation`。
 
-项目规则入口是 `.agents/rules/index.md`。最小消费前提：
+## 1. 解析用户入口
 
-- 能解析 `namespace id`、`source path`、`trigger / applies-to` 和稳定 `ruleRef`。
-- 每个被消费规则都有可记录的 `sourceHash`，并带有 `summary` 或 `ruleText` 作为规则快照。
-- 缺失任一前提时 fail closed：记录 `blocked`，不要自行补分类、补 ruleRef 或猜规则来源。
+controller 只把用户语法解析为固定的 BASE 与 TARGET，不把入口写法保存进工件：
 
-JSON 协议中的 enum 一律使用英文；最终 Markdown 和聊天回复继续渲染中文文案。
+| 用户请求 | BASE | TARGET |
+| --- | --- | --- |
+| `current` | 默认 `HEAD` | 当前全部 staged、unstaged、untracked |
+| `current --base <rev>` | 指定 revision | 当前 `HEAD` 加全部未提交内容 |
+| `staged` | 默认 `HEAD` | 当前 index tree |
+| `commit <rev>` | 唯一可解析的 base | commit tree |
+| `branch <base> [head]` | 唯一 merge-base | head tree |
+| provided tree | 调用方提供的固定 BASE | 已封印 targetTree |
 
-`protocolGate = "passed"` 只表示审查协议闭合：全部 current reviewItems 在运行时 effectiveResults 中都有且只有一个合法 result，validator gate 通过。它不表示代码没有问题；代码层结论必须同时看 `semanticVerdict`、`issueSummary` 和 `recommendation`。
+base、merge-base 或目标解释不唯一时立即 blocked，不任选一种解释。
 
----
-
-## 1. 目标边界
-
-会话级显式调用入口为：
-
-```text
-$rules-review <当前 Git worktree 明确范围> [baseRunId]
-```
-
-该入口由 controller 将可选直接上一轮 `baseRunId` 写入现有 dispatch，不增加解析 scope/base、创建 run 或生成 dispatch 的 CLI/API。
-
-开始后先建立目标边界：
-
-- `cwd`、当前分支、`git status --short`
-- 用户给定的当前 worktree 范围、指定路径或需求说明；显式路径只能收窄或标注当前 worktree inventory 中的路径
-- 可选的直接上一轮 `baseRunId`；同一会话只接受 controller 已知且未发生分叉的直接上一轮 runId，跨会话只接受用户或外层调用方显式提供的 runId，不扫描目录猜测 latest run
-- 首次调用或未显式提供可信 base 时使用 full；显式 scope / source / base 非法或无法验证时必须 blocked，不得静默降级为 full
-- 完整语义审查的代码内容源固定为当前 Git worktree；commit / range、仅 index/staged snapshot 或外部目录仍不得直接发起审查
-- `seal-dispatch` 记录当前 `HEAD` 为 `inputSource.baseCommit`；审查完成并产生对应单父代码 commit 后，只允许用 `bind-commit` 把已封印输入精确绑定到该 commit，不重新做语义审查
-- 只读 / 可修复边界、背景脏文件、用户明确排除项
-- 需要读取的 `.agents/rules/index.md` 与 active 规则文件
-
-默认只读审查；除非用户明确要求修复，否则不得修改业务文件、stage 或 commit。
-
----
-
-## 2. 规则消费流程
-
-本流程的事实链是：
+内部封印接口：
 
 ```text
-ruleSet -> targets -> applicabilityMatrix -> reviewItems -> executionPlan -> reviewBatches -> results -> finalReview
+node scripts/validate.js --mode seal-dispatch \
+  --input <dispatch.json> \
+  --base <revision> \
+  [--current | --staged | --target-commit <revision> | --target-tree <oid>]
 ```
 
-主 agent 必须先读取 `.agents/rules/index.md`：
+四个 TARGET selector 必须恰好出现一个。`seal-dispatch` 使用临时 index 构造 tree，不修改真实 index、工作文件、staged/unstaged 状态或 worktree 列表。作为命令控制输入的当前 `dispatch.json` 不属于 TARGET；除此之外，包括 `.rules-review-tmp/` 兄弟路径在内的当前变更都按 Git `current` 输入封印，不做目录级静默排除。
 
-1. 读取 `CORE` 指向的 active 文件。
-2. 按 `trigger / applies-to` 读取其它匹配的 active namespace 文件。
-3. 形成 `ruleSet.candidateRuleRefs`。
-4. 形成本轮一等输入 `ruleSet.selectedRuleRefs`，作为用户 / 上游 / 主 agent 声明的本轮审查范围真源。
-5. 从本轮审查范围中拆出 `requiredRuleRefs`、`excludedRuleRefs` 和 `globallyNotApplicableRuleRefs`。
-6. 为每个规则来源记录 `namespace`、`ruleRef`、`sourceFile`、`sourceHash`、`trigger`、`appliesTo`，以及 `summary` 或 `ruleText`。
+## 2. 不可变输入
 
-`candidateRuleRefs` 是可见候选池，不是覆盖声明真源；`selectedRuleRefs` 是本轮审查范围真源。用户明确只要求审查 A、B 时，C 可以留在 candidate 中但不进入 selected；最终覆盖声明只对 selected 范围负责，不表示 candidate 全量都已处理。
+封印后的范围为：
 
-不要把 namespace 或 ruleRef 本身当完成门禁。完成门禁只看本轮 selected 范围内的结构协议是否闭合：每个 required rule 对每个 target 都有适用性判断；`applicable` 行都有对应 required `reviewItem`；全部 current `reviewItems` 都有且只有一个当前 shard 或合法 base 复用 `result`。
+```yaml
+reviewRange:
+  baseCommit: <累计审查起点 commit>
+  baseTree: <累计审查起点 tree>
+  seedCommit: <可选；仅从当前 filesystem/index 构造时存在>
+  targetTree: <实际接受并审查的 tree>
+  boundCommit: <可选；正式提交并绑定后补充>
+  excludedFiles: []
+```
 
-最小审查原子是：
+纯历史 commit/tree 不要求 `seedCommit`。`boundCommit` 只在有正式提交后存在。
+
+代码输入快照为：
+
+```yaml
+inputSnapshot:
+  files:
+    - inputRef: src/example.ts
+      state: present
+      mode: "100644"
+      contentHash: sha256:...
+    - inputRef: src/deleted.ts
+      state: deleted
+```
+
+规则快照为：
+
+```yaml
+ruleSnapshot:
+  files:
+    - path: .agents/rules/index.md
+      content: <封印文本>
+      contentHash: sha256:...
+```
+
+封印后所有 controller、reviewer、task builder、aggregator 和 renderer 只读取 `baseTree`、`targetTree`、tree entry、blob、`inputSnapshot` 与 `ruleSnapshot`：
+
+```text
+git diff <baseTree> <targetTree>
+git show <targetTree>:<path>
+```
+
+不得回读当前同名文件或 index 来补齐内容。每次消费前重新验证必需 commit/tree/blob；对象缺失时原 run 立即失效，不在原 runId 下重建，也不回退当前状态。
+
+rules-review run 是临时运行数据，不承诺跨会话、跨环境、跨天或长期恢复。
+
+## 3. 文件范围分区
+
+封印时识别的全部候选变更必须满足：
+
+```text
+候选变更 = 进入 targetTree 的变更 ∪ excludedFiles
+进入 targetTree 的变更 ∩ excludedFiles = ∅
+```
+
+`excludedFiles` 只能列出真实候选变更。漏项、重叠、非候选路径、非普通 blob、冲突或无法唯一读取的 entry 都 blocked。
+
+`scopeMode` 只按最终范围事实派生：
+
+```text
+excludedFiles 非空或 excludedRuleRefs 非空 => scoped
+两者都为空                            => full
+```
+
+不保存用户是否显式输入 paths。显式 paths 没有实际排除候选文件或适用规则时仍是 `full`。
+
+## 4. 规则与目标
+
+项目规则入口是 `.agents/rules/index.md`。controller 读取 CORE 与按 `trigger / applies-to` 命中的 active 规则，形成稳定 `ruleRef`、来源文件和规则正文快照。
+
+规则集合必须是完整互斥分区：
+
+```text
+candidateRuleRefs
+= selectedRuleRefs
+∪ excludedRuleRefs
+∪ globallyNotApplicableRuleRefs
+
+requiredRuleRefs ⊆ selectedRuleRefs
+```
+
+- `selectedRuleRefs`：实际进入本轮适用性判断和审查的规则。
+- `excludedRuleRefs`：已判定适用，但被有意跳过的规则。
+- `globallyNotApplicableRuleRefs`：不适用于当前 TARGET 的规则。
+- `requiredRuleRefs`：selected 中必须逐目标完成适用性判断的规则。
+
+validator 校验声明集合的完整、互斥和引用闭合；候选发现与适用性结论由 controller/reviewer 负责。
+
+目标统一使用 `targetId`。最小审查原子为：
 
 ```text
 ruleRef x targetId = reviewItem
 ```
 
-`targets.changedUnits[]` 和 `targets.candidates[]` 必须统一使用 `targetId` 作为唯一 ID 字段。`reviewItem.targetId` 只能引用 `changedUnits[].targetId` 或 `candidates[].targetId`，不要继续使用 `uid` / `cid` / `uId` / `candidateId` 作为主键字段。
+对每个 `requiredRuleRefs x targets` 组合先生成一行 `applicabilityMatrix`：
 
-生成 `reviewItems` 前，必须先生成 `applicabilityMatrix[]`：
+- `applicable` 必须绑定匹配的 `required: true` reviewItem。
+- `not_applicable` 必须写 reason，不得绑定 reviewItem。
+- evidence 必须可定位。
 
-- 对每个 `requiredRuleRefs[] x (targets.changedUnits[] + targets.candidates[])` 组合记录一行。
-- 每行必须标记 `applicability = applicable / not_applicable`，并给出可定位 `evidence[]`。
-- `applicable` 行必须绑定一个匹配的 `required: true` `reviewItemId`；`not_applicable` 行必须写 `reason` 且不得绑定 `reviewItemId`。
-- 机器只校验矩阵覆盖、引用闭合和 evidence 结构，不判断 `applicable / not_applicable` 的语义选择是否正确；语义争议由 reviewer 复核，不能靠 validator 猜。
+`reviewItems` 只能引用 selected 规则。每个当前 reviewItem 必须恰好进入一个当前 batch，并由当前 run 的 shard 返回恰好一个 result。`no_batch` 只允许 `reviewItems` 为空。
 
----
-
-## 3. JSON 工件
-
-运行目录结构：
+## 5. 工件与职责
 
 ```text
 .rules-review-tmp/<run-id>/
@@ -98,475 +153,100 @@ ruleRef x targetId = reviewItem
   validations/<artifact>.json
   finalReview.json
   final.md
+  response.md
 ```
 
-所有 agent-to-agent 工件必须是 `JSON.parse` 可直接解析的 strict JSON；不允许 JSONC、注释、尾逗号、代码围栏或前后解释文本。
+所有 agent 间工件必须是 strict JSON。
 
-工件来源边界：
+- `dispatch.json`：controller 的规则、目标、适用性、固定 range 和分派计划；不得含审查结论。
+- `tasks/*.json`：由 `build-tasks` 从 dispatch 机械投影，携带相同 `reviewRange` 与 `inputSnapshot`。
+- `shards/*.json`：reviewer 对本 batch 的当前结果；是产生 `passed / finding / observation / not_applicable / cannot_verify` 的唯一位置。
+- `finalReview.json`：由 `aggregate-final` 仅从当前 run 的 shards 聚合。
+- `final.md`、`response.md`：展示层，不是事实源。
 
-- `dispatch.json` 是主 agent 的计划判断产物，可以由主 agent 写入；它记录规则、目标、适用性、reviewItems 和 batch 计划，不得包含审查结论。
-- `tasks/*.json` 是 `dispatch.json` 的机械投影，必须由 `validate.js --mode build-tasks` 生成；主 agent 不得手写或用临时脚本生成。
-- `shards/*.json` 是 reviewer 的审查判断产物，是唯一产生 `passed / finding / cannot_verify` 的位置；不得由生成器根据 `dispatch.json` 批量制造。
-- `finalReview.json` 是 `dispatch.json + 当前 shards/*.json + validator 递归解析的合法 base effectiveResults` 的机械聚合，必须由 `validate.js --mode aggregate-final` 生成；主 agent 不得手写。
-- `final.md` 和最终回复是展示层，必须由 `validate.js --mode render-final` / `render-response` 渲染。
+不允许从旧 run 复制 result，不允许扫描目录猜测前序 run，不允许在 dispatch 中引用旧 review 工件。
 
-只允许使用 rules-review 内置 `validate.js` 做投影、校验、聚合和渲染；不得创建或运行本次 review 专用的临时生成脚本来批量制造 `dispatch.json`、`tasks/*.json`、`shards/*.json` 或 `finalReview.json`。
+## 6. reviewer 执行
 
-### dispatch.json
+reviewer 必须按 task 中的全部 reviewItems 返回结果，不能依赖主线程历史补齐规则或目标。审查代码只能使用固定 tree diff/blob；规则正文以 task 与 `ruleSnapshot` 的封印内容为准。
 
-`dispatch.json` 是主 agent 的计划、分派和聚合台账，至少包含：
+结果要求：
 
-- `kind = "rules-review-dispatch"`
-- `schemaVersion = 3`
-- `runId`
-- `changedFiles[]`
-- `inputSnapshot.files[]`
-- 可选 `inputSource`
-- `ruleSet`
-- `targets`
-- `applicabilityMatrix`
-- `reviewItems`
-- `executionPlan`
-- `reviewBatches`
+- `passed`：包含 evidence 与 failureChecks。
+- `finding`：包含 origin、evidence；MUST finding 为 must_fix。
+- `observation`：包含 origin，以及 reason 或 evidence。
+- `not_applicable`：只允许非 required reviewItem，包含 reason。
+- `cannot_verify`：包含 reason 或 evidence。
 
-`ruleSet` 至少包含：
+机器只验证结构、引用和结果闭合，不根据内容猜测结果是否正确。
 
-- `ruleSetId`
-- `sourceIndexHash`
-- `candidateRuleRefs[]`
-- `selectedRuleRefs[]`
-- `requiredRuleRefs[]`
-- `excludedRuleRefs[]`
-- `globallyNotApplicableRuleRefs[]`
-- `ruleSources[]`
+需要多 batch 或用户明确要求并行审查时，读取 [references/subagent-all-aspects.md](references/subagent-all-aspects.md)。
 
-`ruleSources[]` 是 `.agents/rules` 的规则快照，必须包含 `ruleLevel: MUST / SHOULD / ADVISORY`。`ruleLevel` 是 finding 优先级的规则级真源；rules-review 只消费该字段，不维护 `.agents/rules`，也不兼容缺少 `ruleLevel` 的旧规则快照。
-
-规则可选声明结构化义务：
-
-- `failureConditions[]`：规则失败条件，包含稳定 `conditionId` 和 `summary`。存在时，`passed.failureChecks[]` 必须覆盖所有 `conditionId`。
-- `requiredContext[]`：规则驱动的必查上下文，包含稳定 `contextId` 和 `summary`。存在时，`targets.contextExpansions[].requiredContextRefs[]` 必须引用并承接。
-
-`failureConditions[]` 和 `requiredContext[]` 只能来自 `.agents/rules` 中被消费规则的规则快照；rules-review 不得在 dispatch、task 或审查过程中临时新增、改写或推断这些义务。若规则源未声明 `requiredContext[]`，agent 可以按规则自行扩展上下文目标，但不得把该扩展包装成 requiredContext obligation。这些字段只让机器校验“义务是否被记录和承接”，不让机器判断 failure condition 或必查上下文的业务解释是否充分。
-
-规则集合关系必须闭合：
-
-- `selectedRuleRefs` 必须是 `candidateRuleRefs` 的子集。
-- `selectedRuleRefs` 必须全部被分类为 `requiredRuleRefs`、`excludedRuleRefs` 或 `globallyNotApplicableRuleRefs`，该闭合只声明本轮审查范围闭合。
-- `requiredRuleRefs`、`excludedRuleRefs`、`globallyNotApplicableRuleRefs` 都必须是 `selectedRuleRefs` 的子集。
-- 三组集合两两不得相交。
-- `globallyNotApplicableRuleRefs` 不得生成 `required: true` 的 `reviewItem`。
-- 每个 `requiredRuleRefs[]` 中的规则必须至少生成一个 `required: true` 的 `reviewItem`。
-
-`targets` 至少包含：
-
-- `changedUnits[]`：目标 diff 中实际新增、修改、删除或移除的审查目标。
-- `candidates[]`：由规则触发而需要纳入判断的候选目标。
-- `contextExpansions[]`：扩展目标的原因和 `addedTargetIds[]`。
-
-`contextExpansions[].addedTargetIds[]` 必须存在于 `targets.candidates[].targetId`。
-
-如果规则快照声明了 `requiredContext[]`，对应扩展必须通过 `contextExpansions[].requiredContextRefs[]` 记录承接的 `contextId`。例如：
-
-- 导出 / barrel / public API 变更：记录消费者检索上下文。
-- 测试配置 / 测试文件变更：记录 `package.json`、模块测试配置或 CI 入口上下文。
-- UA / session / default / runtime 变更：记录运行时消费链上下文。
-
-带 `requiredContextRefs[]` 的 `contextExpansions[]` 必须包含非空 `addedTargetIds[]`；空扩展不得承接必查上下文。
-
-被 `reviewItems[].targetId` 引用的 target 必须包含非空 `summary`，并且至少包含非空 `loc` 或 `source`。未被审查项引用的候选 target 不受此硬门禁约束。
-
-`reviewItems[]` 至少包含：
-
-- `reviewItemId`
-- `ruleRef`
-- `targetKind`
-- `targetId`
-- `required`
-
-每轮都必须从当前 Git worktree、当前累计 diff、当前规则仓和当前代码重新建立完整 `ruleSet`、`targets`、`applicabilityMatrix` 与 `reviewItems`。`targets.changedUnits[]` 和被 reviewItem 引用的 candidate 必须声明文件级 `inputRefs[]`；`inputSnapshot.files[]` 必须与全部 inputRefs 的去重集合精确一致。`changedFiles[]`、代码原始字节 SHA-256、`.agents/rules/index.md` 与规则源 SHA-256 由 `seal-dispatch` 从当前 worktree 生成，所有当前 run 消费命令都会重新校验。
-
-新封印 run 的 `inputSource = { kind: "worktree", baseCommit }`。旧 v3 run 缺少 `inputSource` 时按 legacy worktree 兼容。完成审查并提交代码后运行 `bind-commit`：新 run 的 commit 唯一父提交必须等于 `baseCommit`；legacy run 从唯一父提交补齐。绑定成功后原子改为 `inputSource = { kind: "commit", baseCommit, headCommit }`。同一 commit 可幂等重绑，禁止改绑其它 commit。绑定只校验 Git 身份、过滤后文件集合和原始字节 hash，不修改 reviewItems、tasks、shards、finalReview 或任何 reviewer 结论。
-
-`inputSource.kind = "commit"` 后，所有当前 run 消费命令从 `headCommit` 的 Git object 读取代码、规则索引和规则源，并复核 `baseCommit → headCommit` 的单父关系及提交文件集合；后续 worktree 清空、再次修改同名文件或继续提交都不影响该 run。该能力只绑定已经完成的 worktree review，不提供任意历史 commit / range 的完整语义审查入口。
-
-review mode 不持久化额外字段：省略 `continuation` 表示 full，存在 `continuation.baseRunId` 表示 incremental。
-
-- full 必须省略 `continuation` 并记录非空 `fullReason`。current reviewItems 非空时全部分派；为空时使用 `executionPlan.mode = "no_batch"` 与 `reviewBatches = []`。
-- incremental 必须省略 `fullReason`，且 `continuation` 只能包含安全 token `baseRunId`。baseRunId 只解析到 `.rules-review-tmp/` 下不同的真实 sibling v3 直接前序 run；前序可以继续包含 continuation。validator 必须沿链递归重验每个祖先的 dispatch、当前 shards 覆盖、effectiveResults、finalReview 与 `protocolGate = "passed"`，并拒绝 v2、缺失、损坏、路径逃逸、symlink、自引用或循环；不得扫描 sibling 推断“最新”或真正直接前驱。
-- incremental 必须至少复用一个直接 base effectiveResults 中的 `passed / observation / reviewer not_applicable` 结果，并把 current reviewItems 的真子集分派给 reviewer。若全部项目都需重审，应改为 full；若全部项目可复用，使用 `no_batch`。
-- 同一链内，当前不在直接 base 的新 targetId 必须大于全部祖先 targetId 最大值；reviewItemId 不得改绑，历史 `ruleRef x targetId` tuple 必须沿用既有 reviewItemId，真正的新 reviewItemId 必须大于全部祖先最大值。full 建立新链根时不扫描旧链，允许重新编号。
-- 直接 base 的 finding / cannot_verify reviewItem 消失时 incremental 不成立；observation 消失必须由规则退出 current selected scope、同一 rule-target 当前明确 `not_applicable`，或同 targetId、同 inputRefs、全部文件已删除且当前矩阵 `not_applicable` 的文件级删除结构解释。passed / reviewer not_applicable 可在当前 scope 结构闭合后自然淘汰。文件内 target 消失但文件仍存在时，不能把“删除”当作机器事实。
-
-机器 mandatory recheck 下界从直接 base 的完整 effectiveResults 与当前结构计算，包含：base 中的 `finding / cannot_verify`、任一 inputRef 内容或状态变化以及 inputRefs 集合变化所影响 target 的全部 current reviewItems、新 target、新 reviewItem、规则索引变化影响的全部项目，以及规则源文件/hash/level/结构变化影响的同 ruleRef 项目。主 agent 可以按语义风险保守扩大重审集合，但不能缩小该下界。
-
-effectiveResults 只在 validator 运行时从祖先与当前 shards 递归派生，不写入任何工件；最终每个 current reviewItem（包括 `required = false`）必须恰有一个 effective result，finalReview 的 findings、observations、cannotVerifyItems、issueSummary、semanticVerdict、recommendation、coverageClaim 与 findingId 都从完整集合重算。
-
-禁止把其它 review 的结论产物当作当前 scope、evidence、context、target、规则解释或 cannot_verify 来源。唯一允许的历史引用是 `continuation.baseRunId`；base 的解析与结果复用只能由 validator 完成，主 agent 和 reviewer 不得直接读取旧 `final.md`、`finalReview.json`、task 或 shard 来重建当前 scope。如果用户明确粘贴旧结论，只能把它当用户陈述的线索，必须回到当前规则、diff 和代码证据重新验证。
-
-`executionPlan` 必须在 `ruleSet` 已闭合、`targets`、`applicabilityMatrix` 和 `reviewItems` 已形成后生成。它只记录执行模式选择，不证明选择最优：
-
-- `mode`: `no_batch / single_batch / multi_batch`
-- `selectedBy`: `ai / human_override`
-- `policyVersion = "review-execution-policy/v1"`
-- `metrics.changedUnits`
-- `metrics.candidates`
-- `metrics.targets`
-- `metrics.requiredRuleRefs`
-- `metrics.reviewItems`
-- `signals.userRequestedConcurrency`
-- `reason`
-- `humanOverride`: `null`；当 `selectedBy = "human_override"` 时必须包含 `requestedMode` 和 `risk`
-
-执行策略：
-
-- 派发集合为空时必须是 `no_batch`，同时 `selectedBy = "ai"`、`humanOverride = null`、`reviewBatches = []`；人工覆盖不能强制 `no_batch`。
-- `executionPlan.metrics` 继续记录完整 current scope；single / multi 的选择改用 `reviewBatches[]` 实际派发集合关联出的 reviewItem、target 和 rule 数量。
-- 实际派发 `reviewItems <= 12`、`targets <= 8`，且用户未要求并发时，默认 `single_batch`。
-- 实际派发 `reviewItems > 30`、`targets > 20`，或用户要求并发且至少有两个实际重审 reviewItem 时，非人工覆盖必须 `multi_batch`。
-- 实际只有一个重审 reviewItem 时必须使用 `single_batch`；普通 `userRequestedConcurrency = true` 是无法兑现的 best-effort 信号，不阻塞，也不得制造额外重审。`humanOverride.requestedMode = "multi_batch"` 在不足两个实际重审 reviewItem 时阻塞。
-- 中间区间由 AI 判断，但必须记录非空 `reason`。
-- 用户强制 single agent 时允许 `selectedBy = "human_override"`，但必须记录 `humanOverride.risk`。
-- validator 只复算指标和硬阈值，不判断 `reason` 是否语义正确，也不判断拆分是否最优。
-
-`reviewBatches[]` 至少包含：
-
-- `reviewBatchId`
-- `ruleSetId`
-- `reviewItemIds[]`
-- `taskRef`
-- `shardRef`
-- `returnStatus`
-- `aggregateStatus`
-
-`reviewBatchId` 必须是安全 token；`taskRef` 必须精确等于 `tasks/<reviewBatchId>.json`。`shardRef` 只能为 `null` 或精确等于 `shards/<reviewBatchId>.json`，`returnStatus = "returned"` 时必须使用后者。不得使用绝对路径、`.` / `..`、反斜杠、跨目录类别或其它 batch 名。
-
-状态 enum：
+## 7. 绑定正式提交
 
 ```text
-returnStatus: not_started / started / returned / not_returned / format_invalid / untrusted
-aggregateStatus: aggregated / not_aggregated
+node scripts/validate.js --mode bind-commit \
+  --dir .rules-review-tmp/<run-id> \
+  --commit <commit>
 ```
 
-每个 `reviewBatch` 必须包含至少一个 `reviewItemId`，同一 ID 不得重复分派。full 的 batches 必须覆盖全部 current reviewItems；incremental 的 batches 必须是 current reviewItems 真子集，未分派项只能由 validator 从合法 base 结果复用。最终完成门禁要求全部 current reviewItems（包括 `required = false`）在运行时 effectiveResults 中恰有一个结果，但不证明 reviewer 的业务判断正确。
+绑定只验证：
 
-### task.json
+- 参数能唯一解析为 commit。
+- `boundCommit^{tree} == targetTree`。
 
-`task.json` 是 batch 输入包，只能由 `validate.js --mode build-tasks --dispatch dispatch.json --out tasks/` 从 `dispatch.json` 投影生成；它只能包含当前 `reviewBatchId` 所需内容：
+不检查父提交数量、直接父、祖先关系或 merge 拓扑；tree 不同立即 blocked。
 
-- `kind = "rules-review-task"`
-- `schemaVersion = 3`
-- `runId`
-- `reviewBatchId`
-- `ruleSetId`
-- 展开后的 `reviewItems[]`
-- 本 batch 所需 `rules[]` 快照
-- 本 batch 所需 `targets[]`
-- 本 batch 所需 `applicabilityMatrix[]`
-- `outputContract`
-
-`rules[].sourceHash` 和 `rules[].ruleLevel` 必须存在，并与 `dispatch.ruleSet.ruleSources[]` 中对应 `ruleRef` 或 `namespace + sourceFile` 的 `sourceHash`、`ruleLevel` 一致。reviewer 不再自由读取另一套规则，也不得在 `reviewItem` 中重复存储或改写规则级别。
-
-`rules[]` 必须保留 `dispatch.ruleSet.ruleSources[]` 中对应规则的 `summary` 或 `ruleText`；`failureConditions[]` 和 `requiredContext[]` 必须与 dispatch 中对应规则快照一致；`targets[]` 必须包含本 batch 每个 `reviewItems[].targetId`，并与 dispatch 中对应 target 的 `targetKind`、`loc`、`source`、`summary` 快照一致。
-
-`task.applicabilityMatrix[]` 只能包含本 batch `reviewItems[]` 对应的 `applicable` 行，并必须与 dispatch 中同一行完全一致。reviewer 不得自行补、删或改适用性矩阵。
-
-`outputContract` 固定为：
-
-```json
-{
-  "format": "strict_json",
-  "schemaRef": "schemas/shard.schema.json"
-}
-```
-
-### shard.json
-
-`shard.json` 是 reviewer 返回结果：
-
-- `kind = "rules-review-shard"`
-- `schemaVersion = 3`
-- `runId`
-- `reviewBatchId`
-- `results[]`
-
-`results[]` 每条结果必须绑定 `reviewItemId`，且只能返回该 `reviewBatchId` 对应 `reviewBatches[].reviewItemIds` 内的项目。跨 batch 返回 `reviewItemId` 是越权返回，`protocolGate = blocked`。
-
-`results[]` 必须覆盖 task 分配的全部 `reviewItems[]`；空 shard 或漏回任一 assigned item 都不是合法完成。
-
-结果状态 enum：
+## 8. 命令顺序
 
 ```text
-passed / finding / observation / not_applicable / cannot_verify
+seal-dispatch
+dispatch
+build-tasks
+task
+shard
+aggregate-final
+render-final
+run
+render-response
 ```
 
-字段门禁：
-
-- `finding` 不得携带 `findingId`，必须有 `origin` 和非空 `evidence[]`；`findingId` 由 aggregator 从完整 finding 集合统一生成。
-- `observation` 必须有 `origin`，并包含 `reason` 或非空 `evidence[]`；MUST / SHOULD 规则以 `exposed_by_change` 或 `pre_existing` 返回 observation 时必须有非空 `evidence[]`。不再增加第二套 observation status/result。
-- `passed` 必须有非空 `evidence[]` 和非空 `failureChecks[]`。
-- `not_applicable` 仅允许用于 `required = false` 的 reviewItem，必须有 `reason`，可选 `evidence[]`。若 reviewer 认为 required reviewItem 的适用性判断有误，必须返回 `cannot_verify` 并说明依据。主 agent 能据此形成更可靠 dispatch 时，修正后重新生成 task；无法消除争议时，保留 `cannot_verify` 作为终态并按现有 `recommendation` 派生规则收口，不得改写为 `passed` 或 `not_applicable`。
-- `cannot_verify` 必须有 `reason` 或非空 `evidence[]`。
-
-`evidence[]` 不是任意非空数组。每个 evidence item 至少包含非空 `summary`，并包含 `loc` 或 `source` 之一，保证后续可定位复核；validator 不判断证据内容是否充分。
-
-`failureChecks[]` 是 `passed` 的失败条件回答，每项至少包含：
-
-- `condition`：本次回答的失败条件。
-- `outcome`: `checked_no_violation / not_triggered`
-- `evidence[]`
-- 可选 `conditionId`：当规则快照声明了 `failureConditions[]` 时必须覆盖对应 ID。
-
-validator 只检查 `failureChecks[]` 是否存在、结构是否闭合、是否覆盖已声明的 `conditionId`；不判断自然语言回答是否真的充分。
-
-`origin` enum 固定为：
+主要命令：
 
 ```text
-introduced_by_change / worsened_by_change / exposed_by_change / pre_existing
+node scripts/validate.js --mode dispatch --input dispatch.json
+node scripts/validate.js --mode build-tasks --dispatch dispatch.json --out tasks/
+node scripts/validate.js --mode task --input tasks/<reviewBatchId>.json
+node scripts/validate.js --mode shard --task tasks/<reviewBatchId>.json --input shards/<reviewBatchId>.json
+node scripts/validate.js --mode aggregate-final --dir .rules-review-tmp/<run-id> --output finalReview.json
+node scripts/validate.js --mode render-final --input finalReview.json --dispatch dispatch.json --output final.md
+node scripts/validate.js --mode run --dir .rules-review-tmp/<run-id>
+node scripts/validate.js --mode render-response --dir .rules-review-tmp/<run-id>
 ```
 
-默认 result 映射固定为：
+任何阶段的 Git identity、hash、mode、范围、引用或状态不闭合都 fail closed。不得静默生成替代 tree、降级成当前文件或把不完整结果写成通过。
 
-```text
-MUST 或 SHOULD + introduced_by_change / worsened_by_change => finding
-MUST 或 SHOULD + exposed_by_change / pre_existing => observation
-ADVISORY + 任意 origin => observation
-```
+## 9. 机器边界
 
-从默认 `observation` 升级为 `finding` 时，必须提供 `upgradeReason`；`origin = pre_existing` 的升级还必须提供 `originReason`。从默认 `finding` 降级为 `observation` 不允许。MUST / SHOULD 规则使用 `exposed_by_change` 或 `pre_existing` 维持 observation 时，必须用 `evidence[]` 支撑来源判断。
+validator 检查：
 
-finding priority 由 `ruleLevel` 派生：
+- schemaVersion、固定字段、路径与 strict JSON。
+- commit/tree/blob 存在，baseCommit/tree、boundCommit/tree 身份一致。
+- 文件和规则声明分区完整互斥。
+- input/rule snapshot 的 mode、hash、内容与 targetTree 一致。
+- task 投影、batch 引用和当前结果唯一覆盖。
+- finalReview、Markdown 与当前结果的机械派生一致。
 
-```text
-MUST => must_fix
-SHOULD / ADVISORY => should_fix
-```
+validator 明确不检查：
 
-`MUST` finding 的 priority 固定为 `must_fix`，rules-review 内不接受 `acceptedRisk` 或其它 waiver。风险接受由用户在本轮 review 之外单独决定，不改写本轮 finding priority。
+- BASE 选择是否符合业务意图。
+- 候选规则发现、适用性结论和 finding 是否语义正确。
+- evidence 强度或可信度。
+- target、inputRefs 与 hunk 的业务归属。
+- review 是否足够深入。
 
-非 `MUST` finding 覆盖默认 priority 时必须提供 `priorityReason`；validator 只检查字段存在，不判断理由是否充分。
+这些判断由 controller/reviewer 记录依据并承担责任，不能写成关键词启发式或规模阈值冒充语义审查。
 
-### finalReview.json
+## 10. 输出
 
-`finalReview.json` 是最终聚合产物，只能由 `validate.js --mode aggregate-final --dir .rules-review-tmp/<run-id> --output finalReview.json` 从当前 dispatch、当前 shards 与 validator 递归解析的合法 base effectiveResults 生成；其 gate 字段必须由 validator 重新计算并校验后才可信。它至少包含：
-
-- `kind = "rules-review-final-review"`
-- `schemaVersion = 3`
-- `runId`
-- `protocolGate`: `passed / incomplete / blocked`
-- `scopeMode`: `full / scoped`
-- `coverageClaim`: `full_complete / scoped_complete / incomplete / blocked`
-- `semanticVerdict`: `clean / issues / unknown`
-- `excludedRuleRefs[]`
-- `findings[]`
-- `observations[]`
-- `issueSummary`
-- `recommendation`
-- `validationResults[]`
-
-aggregator 先按 `reviewItemId` 升序为完整 finding 集合生成 `F001...F1000...`，再按 `priority` 稳定展示：`must_fix` 在前，`should_fix` 在后；同一 `priority` 内按 `findingId` 数值后缀升序。
-
-`coverageClaim` 只表示本轮 selected 范围内的协议覆盖：全部 current reviewItems 是否都有合法 effective result，以及 scoped/full 范围声明是否闭合。它不表示 candidateRuleRefs 全量都已审查，也不表示所有结果都可实质验证；实质验证缺口必须通过 `issueSummary.cannotVerify` 和 `cannotVerifyItems[]` 展示。
-
-`issueSummary` 至少包含：
-
-- `findings`: result 中 `status = "finding"` 的数量。
-- `mustFix`: finding 中 `priority = "must_fix"` 的数量。
-- `shouldFix`: finding 中 `priority = "should_fix"` 的数量。
-- `cannotVerify`: result 中 `status = "cannot_verify"` 的数量。
-- `observations`: result 中 `status = "observation"` 的数量。
-
-当 `cannotVerify > 0` 时，`cannotVerifyItems[]` 必须包含每个 `status = "cannot_verify"` result 的派生明细：
-
-- `reviewItemId`
-- `ruleRef`
-- `targetId`
-- `reason`
-
-`recommendation` enum：
-
-```text
-ready_for_merge / must_fix_before_merge / should_review_before_merge / manual_verification_required / review_incomplete / review_blocked
-```
-
-推荐派生规则：
-
-- `protocolGate = "blocked"` => `review_blocked`
-- `protocolGate = "incomplete"` => `review_incomplete`
-- `protocolGate = "passed"` 且 `issueSummary.mustFix > 0` => `must_fix_before_merge`
-- `protocolGate = "passed"` 且 `issueSummary.cannotVerify > 0` => `manual_verification_required`
-- `protocolGate = "passed"` 且 `issueSummary.shouldFix > 0` => `should_review_before_merge`
-- `protocolGate = "passed"` 且无 finding、无 cannot_verify => `ready_for_merge`
-
-当 `validate.js --mode run` 派生 `recommendation = "should_review_before_merge"` 时，输出的 `gate.shouldSetHash` 绑定当前 run 全部 `priority = "should_fix"` 的完整 finding 对象；其它 recommendation 不得输出该字段。算法固定为：按 findingId 的十进制数值后缀排序，使用数字字符串长度与字典序比较以避免 `Number` 溢出；对象键按代码单元递归排序，数组保持原顺序；对紧凑 JSON 的 UTF-8 字节计算 SHA-256。该值是 validator 派生输出，不新增 `finalReview.json` schema / artifact 字段，也不改变 finding、priority 或 recommendation。
-
-`validationResults[]` 不是人工自述，至少必须包含 `mode = "run"` 的 validator 摘要：
-
-- `ok`
-- `protocolGate`
-- `semanticVerdict`
-- `issueSummary`
-- `recommendation`
-
-validator 必须复算并校验 `validationResults[mode=run]` 与当前 run 结果一致；不一致时进入 `blocked`。
-
-`finalReview.json` 中已有字段只是被校验对象，不能作为事实源。validator 必须从当前 shards 与合法 base 链运行时推导完整 effectiveResults，再重新计算 `protocolGate`、`coverageClaim`、`semanticVerdict`、`issueSummary`、`recommendation`、`cannotVerifyItems[]` 和 `validationResults[mode=run]`；effectiveResults 不写入任何工件。声明值与计算值不一致时，`protocolGate = blocked`。`finalReview.findings[]` 必须与完整 effectiveResults 和 dispatch reviewItem 派生事实一致：`findingId`、`reviewItemId`、`ruleRef`、`targetId`、`ruleLevel`、`origin`、`priority` 和 `evidence` 不得伪造、改写或额外添加；`finalReview.observations[]` 必须与 `status = "observation"` 的 effective result 派生事实一致；`evidence` 按 `summary`、`loc`、`source` 结构比较，不依赖 JSON key 顺序。
-
----
-
-## 4. 多 agent / reviewBatch
-
-只有用户明确说 `多 agent`、`多agent`、`并行 review`、`并行审查`、`使用 subagent`、`subagent review`，或当前目标需要拆成多个 `reviewBatch` 时，才读取 [subagent-all-aspects.md](references/subagent-all-aspects.md) 并允许启动 subagent。
-
-分派原则：
-
-- 主 agent 先形成完整 `dispatch.json`，再分派。
-- 每个 subagent 只接收一个 `task.json`，不得依赖主线程历史补齐 `reviewItem`、规则或目标。
-- 子 agent 只输出 `shard.json`，不输出最终 Markdown，不生成全局结论。
-- 主 agent 只聚合通过 validator 权威门禁的 shard。
-- 未返回的 batch 不得写成已完成；格式不合规、不可信、已返回但无法聚合或越权的 batch 必须进入 `blocked`。
-
----
-
-## 5. validator 门禁
-
-脚本路径：
-
-```text
-scripts/validate.js
-```
-
-支持模式：
-
-```text
-validate.js --mode seal-dispatch --input dispatch.json
-validate.js --mode bind-commit --dir .rules-review-tmp/<run-id> --commit <commit>
-validate.js --mode dispatch --input dispatch.json
-validate.js --mode task --input tasks/<reviewBatchId>.json
-validate.js --mode retry-task --input retries/<reviewBatchId>-retry-<n>.json
-validate.js --mode shard --task tasks/<reviewBatchId>.json --input shards/<reviewBatchId>.json
-validate.js --mode final-review --input finalReview.json
-validate.js --mode build-tasks --dispatch dispatch.json --out tasks/
-validate.js --mode aggregate-final --dir .rules-review-tmp/<run-id> --output finalReview.json
-validate.js --mode render-final --input finalReview.json --dispatch dispatch.json --output final.md
-validate.js --mode render-response --dir .rules-review-tmp/<run-id>
-validate.js --mode final-md --final-review finalReview.json --dispatch dispatch.json --input final.md
-validate.js --mode run --dir .rules-review-tmp/<run-id>
-```
-
-硬门禁：
-
-- dispatch、task、retry-task、shard、validation output 与 finalReview 必须统一使用 `schemaVersion = 3`；v2 不进入当前运行协议，也不能作为 incremental base。
-- `runId` / `baseRunId` 必须是安全 token；incremental base 只能解析为当前 Git worktree `.rules-review-tmp/` 下的不同真实 sibling。
-- `reviewBatchId` 必须是安全 token；每个 batch 的 `taskRef` / `shardRef` 必须精确绑定当前 run 的 `tasks/<reviewBatchId>.json` / `shards/<reviewBatchId>.json`，不得跨目录或跨 batch 引用。
-- `inputSource.kind = "worktree"` 或 legacy 缺席时，当前 `changedFiles[]` 必须仍属于 Git worktree inventory，代码、规则索引与规则源原始字节 SHA-256 必须与 dispatch 一致。
-- `inputSource.kind = "commit"` 时，`baseCommit` / `headCommit` 必须是规范化完整 SHA，`headCommit` 必须只有 `baseCommit` 一个父提交；过滤后的 commit 文件集合必须精确等于 `changedFiles[]`，commit 中代码 blob、规则索引与规则源 hash 必须等于 `inputSnapshot` / `ruleSet`。
-- `bind-commit` 拒绝 merge commit、错误父提交、文件缺失 / 多带、内容或规则变化以及改绑其它 commit；全部检查通过后才原子更新 `dispatch.inputSource`。
-- 全部 current `reviewItem`（包括 `required = false`）必须在运行时 effectiveResults 中有且只有一个 result。
-- `selectedRuleRefs[]` 必须是 `candidateRuleRefs[]` 的子集。
-- 每个 `selectedRuleRefs[]` 中的规则必须分类到 `requiredRuleRefs[]`、`excludedRuleRefs[]` 或 `globallyNotApplicableRuleRefs[]`。
-- `selectedRuleRefs = requiredRuleRefs ∪ excludedRuleRefs ∪ globallyNotApplicableRuleRefs`，三组分类不闭合时不得进入可信执行计划。
-- 每个 `requiredRuleRefs[]` 中的规则必须至少生成一个 `required: true` 的 `reviewItem`。
-- `applicabilityMatrix[]` 必须覆盖每个 `requiredRuleRefs[] x (changedUnits[] + candidates[])` 组合。
-- `applicability = applicable` 的矩阵行必须绑定匹配的 required `reviewItemId`；`not_applicable` 行必须有 `reason` 且不得绑定 `reviewItemId`。
-- `task.applicabilityMatrix[]` 必须等于本 batch `reviewItems[]` 对应的 dispatch 矩阵行。
-- `contextExpansions[].reason` 必须是非空字符串。
-- 规则快照声明 `requiredContext[]` 时，`contextExpansions[].requiredContextRefs[]` 必须承接对应 `contextId`。
-- 带 `requiredContextRefs[]` 的 `contextExpansions[]` 必须包含非空 `addedTargetIds[]`。
-- `dispatch.json` 不得包含 `priorReviewCheck`，也不得直接引用既有 `.rules-review-tmp/` review 产物；唯一历史入口是只含 `baseRunId` 的 `continuation`，由 validator 安全解析。
-- result 必须引用已分派的 `reviewItemId`。
-- 同一 `reviewItemId` 多个 result => `blocked`。
-- 同一 `reviewItemId` 不得跨 `reviewBatch` 重复分派。
-- full 必须省略 `continuation`、包含非空 `fullReason`，并在 current reviewItems 非空时分派全部项目。
-- incremental 必须省略 `fullReason`、至少复用一个合法 base 结果，且 batches 只能覆盖 current reviewItems 真子集；无复用或全量重审仍声称 incremental => `blocked`。
-- incremental 必须覆盖机器 mandatory recheck 下界；base `finding / cannot_verify`、变化 target、新 target/item 和变化规则的受影响项不得漏派。
-- 每个祖先 run 必须重新校验协议、结果覆盖和 finalReview；祖先缺失、损坏、v2、路径不安全、symlink、自引用或循环时 incremental => `blocked`。
-- 既有 target/reviewItem 身份和 `ruleRef x targetId` tuple 必须跨完整链稳定；新 T/RI 编号必须大于祖先历史最大编号。full 新链根不扫描旧链。
-- 直接 base finding / cannot_verify 消失 => `blocked`；observation 消失必须有规则退出 selected scope、当前 rule-target `not_applicable` 或文件级 target 删除的结构依据；passed / reviewer not_applicable 可在当前 scope 结构闭合后淘汰。
-- `executionPlan` 必须存在，且 `metrics` 必须等于 `dispatch` 中的可复算事实。
-- `mode = "no_batch"` 时 `reviewBatches.length` 必须等于 0；`mode = "single_batch"` 时必须等于 1；`mode = "multi_batch"` 时必须大于等于 2。
-- single / multi 的硬阈值按实际派发 reviewItem 与 target 计算；单项派发时普通并发信号不强制 multi，人工强制 multi 则阻塞。
-- `no_batch` 必须由 AI 选择且禁止 human override；full 只在 current reviewItems 为空时使用，incremental 只在全部项目可复用时使用。
-- `selectedBy = "human_override"` 时必须记录 `humanOverride.requestedMode` 和 `humanOverride.risk`。
-- `ruleSet.ruleSources[].ruleLevel` 和 `task.rules[].ruleLevel` 必须存在，且 task 中的值必须匹配 dispatch 快照。
-- shard 的 `finding` 不得携带 `findingId`，必须有 `origin` 和 `evidence[]`；finalReview 中的 `findingId` 由 aggregator 统一生成。
-- `observation` 必须有 `origin`，并包含 `reason` 或 `evidence[]`。
-- `finding / observation` 的 `status` 必须符合 `ruleLevel + origin` 默认映射；默认 `observation` 升级为 `finding` 必须有 `upgradeReason`，`pre_existing` 升级还必须有 `originReason`；MUST / SHOULD 的 `exposed_by_change` / `pre_existing` observation 必须有 `evidence[]`。
-- `MUST` finding 必须是 `must_fix`，且不得包含 `acceptedRisk`；`SHOULD / ADVISORY` finding 默认是 `should_fix`，覆盖 priority 必须有 `priorityReason`。
-- `passed` 必须有 `evidence[]` 和 `failureChecks[]`；规则快照声明 `failureConditions[]` 时，`failureChecks[].conditionId` 必须覆盖对应 ID。
-- `not_applicable` 仅允许用于 `required = false` 的 reviewItem，且必须有 `reason`；required reviewItem 的适用性争议必须返回 `cannot_verify` 并说明依据。主 agent 能形成更可靠 dispatch 时重新分派，无法消除争议时保留 `cannot_verify` 作为终态。
-- `cannot_verify` 必须有 `reason` 或 `evidence[]`。
-- `ruleSet.sourceIndexHash`、`ruleSet.ruleSources[].sourceHash`、`task.rules[].sourceHash` 缺失 => `blocked`。
-- `ruleSet.ruleSources[]` 与 `task.rules[]` 缺少 `summary` / `ruleText` => `blocked`。
-- `task.rules[].failureConditions` 和 `task.rules[].requiredContext` 必须匹配 dispatch 规则快照。
-- `task.targets[]` 未覆盖本 task 的 `reviewItems[].targetId` => `blocked`。
-- 被 `reviewItem` 引用的 target 缺少非空 `summary`，或同时缺少 `loc` / `source` => `blocked`。
-- `shard.results[]` 未覆盖本 task 的 `reviewItems[]` => `blocked`。
-- `evidence[]` 必须由可复核 evidence item 组成：非空 `summary` + `loc` 或 `source`。
-- task / shard 缺失且 batch 可定位为未返回 => `incomplete`；schema 错误、JSON 错误、格式不合规、不可信、已返回但无法聚合或不可复现 => `blocked`。
-- `contextExpansions[].addedTargetIds[]` 必须存在于 `targets.candidates[]`。
-- `reviewItem.targetId` 必须存在于 `targets.changedUnits[]` 或 `targets.candidates[]`。
-- `finalReview.findings[]` 必须匹配 result + dispatch 派生事实，且不得包含 shard `results[]` 中不存在的 finding。
-- `finalReview.observations[]` 必须匹配 `observation` result + dispatch reviewItem 派生事实。
-- `finalReview.cannotVerifyItems[]` 必须匹配 `cannot_verify` result + dispatch reviewItem 派生事实。
-- `finalReview.validationResults[mode=run]` 必须匹配本次 validator 复算结果。
-- scoped 模式必须有 `excludedRuleRefs`，且不得声明 `coverageClaim = "full_complete"`。
-- `.rules-review-tmp/<run-id>/` 只能包含协议工件：`dispatch.json`、`finalReview.json`、`final.md`、`response.md`，以及 `tasks/`、`retries/`、`shards/`、`validations/` 下的一层 JSON 文件；出现临时脚本或其它非协议文件 => `blocked`。
-- `validate.js --mode run` 在读取任一 run artifact 前确定性检查整棵 run tree；run 根或任意嵌套目录 / 文件为 symlink、任一 realpath 逃出 run 根或出现非普通文件时立即 `blocked`，且不继续读取该树中的 artifact。
-- `retries/*.json` 必须只包含 retry schema 的固定字段，通过 `retry-task` 校验，并且 `runId`、`originalTaskRef` 分别匹配当前 dispatch 和其中一个 task。
-
-validator 只校验可确定、可复现的结构、Git 身份、文件集合、路径、hash、引用、状态和运行时结果闭合。`bind-commit` 不判断审查结论是否正确，也不代表重新执行语义 review。机器不证明 target 的语义身份、current scope / inputRefs 的语义完整性、`baseRunId` 是时间上的真正直接前驱，也不提供祖先工件被同步改写后的历史防篡改证明，不判断主 agent 的语义扩审是否充分；这些仍是主 agent、调用方与 reviewer 的人工责任，不得用关键词启发式或静默回退 full 伪装为已验证。
-
-`semanticVerdict` 派生规则：
-
-- 任意合法 result `status = "finding"` => `issues`
-- 否则任意合法 result `status = "cannot_verify"` => `unknown`
-- 否则 `protocolGate = "passed"` => `clean`
-- `protocolGate = "incomplete"` 或 `"blocked"` 时必须是 `unknown`
-
-`finding` 不导致 `protocolGate` 失败。`protocolGate` 只表示审查协议是否闭合；`semanticVerdict` 才表示是否发现问题。人类输出不得把 `protocolGate = "passed"` 单独写成“通过”，必须写成“协议通过”，并同时展示审查结论、问题数、无法验证数量和修复建议。
-
-`validate.js --mode run` 输出 gate 计算结果；`protocolGate !== "passed"` 时自动化 gate 不视为通过。JSON 输出保留英文 enum，并在 `gate.issueSummary` 与 `gate.recommendation` 中给出派生结论；仅 `should_review_before_merge` 追加 validator 计算的 `gate.shouldSetHash`。human-readable 摘要必须使用“协议门禁通过；审查结论：...；问题数：...；必须修复：...；建议修复：...；无法验证：...”这类组合表达，不得把 passed 简化为“通过”。
-
-退出码：
-
-```text
-0：ok=true
-1：ok=false，有校验违规
-2：用法 / IO / JSON parse / schema 文件缺失等执行错误
-```
-
-stdout 一律输出 strict JSON，并包含 `schemaVersion = 3`。
-
----
-
-## 6. 输出
-
-最终用户可见报告由 `finalReview.json` 渲染，Markdown 不作为事实源。
-
-渲染规则：
-
-- 先运行 `validate.js --mode aggregate-final --dir .rules-review-tmp/<run-id> --output finalReview.json` 生成聚合产物。
-- 优先运行 `validate.js --mode render-final --input finalReview.json --dispatch dispatch.json --output final.md`。
-- 最终回复必须运行 `validate.js --mode render-response --dir .rules-review-tmp/<run-id>`，并直接复用生成的 `response.md` 内容；不得由 agent 自行改写、重排、摘要或新增另一套章节。
-- `render-response` 必须先执行并通过同一 run gate；run gate FAIL 时不得生成最终聊天回复。
-- 协议门禁中文映射：`passed => 协议通过`，`incomplete => 协议未完成`，`blocked => 协议阻塞`。
-- 其它 enum 中文映射示例：`full_complete => 本轮范围协议覆盖完整`，`scoped_complete => 本轮限定范围协议覆盖完整`，`issues => 发现问题`。
-- `final.md` 第一屏必须使用包含协议状态的组合标题，例如：
-  - `rules-review：协议通过，发现 X 项问题，Y 项无法验证`
-  - `rules-review：协议通过，发现 X 项问题`
-  - `rules-review：协议通过，未发现明确问题，但 Y 项无法验证`
-  - `rules-review：协议通过，未发现问题`
-  - `rules-review：审查未完成，协议未闭合`
-  - `rules-review：审查阻塞，协议输入或结果不可用`
-- `response.md` 是最终用户界面摘要，只保留标题、结论、问题和报告四块；当协议通过时标题不得写“协议通过”，例如：
-  - `rules-review：发现 X 项问题，Y 项无法验证`
-  - `rules-review：发现 X 项问题`
-  - `rules-review：未发现明确问题，但 Y 项无法验证`
-  - `rules-review：未发现问题`
-  - `rules-review：审查未完成`
-  - `rules-review：审查阻塞`
-- `response.md` 的问题列表使用两行版：第一行展示 `findingId` 和问题证据摘要，第二行展示规则、目标和来源；不要把内部 `reviewItemId` 放进用户摘要。
-- `response.md` 的报告区必须显式展示当前 `runId`，作为下一轮可验证的 `baseRunId` 候选；能否使用仍由下一轮 validator 校验。
-- `final.md` 顶部必须包含固定结论区：协议门禁、审查结论、修复建议、问题数、必须修复、建议修复、无法验证、观察项。
-- `final.md` 必须包含审计区，展示 `runId`、`ruleSetId`、`sourceIndexHash`、规则/目标/reviewItem/reviewBatch 计数、context expansion 数量、验证命令和 validator run 摘要。
+最终回复直接复用 `render-response` 生成的 `response.md`。第一眼同时展示审查结论、问题数、无法验证数量与修复建议；不得把 `protocolGate = "passed"` 简写成“代码通过”。
