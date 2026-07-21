@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
@@ -21,7 +22,7 @@ const MODES = new Set([
   'run',
 ]);
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const RETURN_STATUSES = ['not_started', 'started', 'returned', 'not_returned', 'format_invalid', 'untrusted'];
 const AGGREGATE_STATUSES = ['aggregated', 'not_aggregated'];
 const RESULT_STATUSES = ['passed', 'finding', 'observation', 'not_applicable', 'cannot_verify'];
@@ -44,7 +45,7 @@ const REVIEW_ITEM_RE = /^RI\d{3,}$/;
 const TARGET_RE = /^T\d{3,}$/;
 const FINDING_RE = /^F\d{3,}$/;
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
-const COMMIT_SHA_RE = /^[0-9a-f]{40}$/;
+const GIT_OID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 const LABELS = {
@@ -181,10 +182,7 @@ function run(args) {
       bindCommitMode(args, result);
     } else if (mode === 'dispatch') {
       const dispatch = readJson(args.input, args.input, result, 'D001');
-      if (dispatch) {
-        validateDispatch(dispatch, args.input, result, args.input);
-        if (result.violations.length === 0) validateIncrementalPlan(path.dirname(path.resolve(args.input)), dispatch, result);
-      }
+      if (dispatch) validateDispatch(dispatch, args.input, result, args.input);
     } else if (mode === 'task') {
       const task = readJson(args.input, args.input, result, 'T001');
       if (task) validateTask(task, args.input, result);
@@ -278,35 +276,75 @@ function sealDispatchMode(args, result) {
 
   let sealed;
   try {
-    const worktree = loadCurrentWorktree(args.input);
+    const { root, dispatchPath } = loadRepository(args.input);
+    if (!isNonEmptyString(args.base)) throw new Error('seal-dispatch requires --base <revision>');
+    const selectors = [
+      ['current', args.current === true],
+      ['staged', args.staged === true],
+      ['target-commit', isNonEmptyString(args['target-commit'])],
+      ['target-tree', isNonEmptyString(args['target-tree'])],
+    ].filter(([, selected]) => selected);
+    if (selectors.length !== 1) throw new Error('seal-dispatch requires exactly one target selector');
+    if ((args.current !== undefined && args.current !== true) || (args.staged !== undefined && args.staged !== true)) {
+      throw new Error('--current and --staged do not accept values');
+    }
+
+    const baseCommit = resolveCommit(root, args.base);
+    const baseTree = resolveTree(root, `${baseCommit}^{tree}`);
+    const [selector] = selectors[0];
+    let seedCommit;
+    let candidateTree;
+    if (selector === 'current') {
+      seedCommit = resolveCommit(root, 'HEAD');
+      candidateTree = writeCurrentTree(root, seedCommit, dispatchPath);
+    } else if (selector === 'staged') {
+      seedCommit = resolveCommit(root, 'HEAD');
+      candidateTree = writeIndexTree(root);
+    } else if (selector === 'target-commit') {
+      const targetCommit = resolveCommit(root, args['target-commit']);
+      candidateTree = resolveTree(root, `${targetCommit}^{tree}`);
+    } else {
+      candidateTree = resolveTreeObject(root, args['target-tree']);
+    }
+
     sealed = JSON.parse(JSON.stringify(draft));
-    sealed.inputSource = { kind: 'worktree', baseCommit: worktree.baseCommit };
-    sealed.changedFiles = selectChangedFiles(worktree.changedFiles, sealed.changedFiles);
+    const excludedFiles = validateSealingExcludedFiles(sealed.reviewRange && sealed.reviewRange.excludedFiles);
+    const candidateFiles = listTreeChangedFiles(root, baseTree, candidateTree);
+    assertRegularChangedEntries(root, baseTree, candidateTree, candidateFiles);
+    const targetTree = excludeTreeFiles(root, candidateTree, baseTree, excludedFiles);
+    const includedFiles = listTreeChangedFiles(root, baseTree, targetTree);
+    validateFilePartition(candidateFiles, includedFiles, excludedFiles);
+    sealed.reviewRange = { baseCommit, baseTree, ...(seedCommit ? { seedCommit } : {}), targetTree, excludedFiles };
     sealed.inputSnapshot = {
       files: collectDeclaredInputRefs(sealed)
         .sort(compareStrings)
-        .map((repoPath) => snapshotRepoInput(worktree.root, repoPath)),
+        .map((repoPath) => snapshotTreeInput(root, targetTree, repoPath)),
     };
 
     if (!isObject(sealed.ruleSet)) throw new Error('dispatch.ruleSet must be an object before sealing');
-    sealed.ruleSet.sourceIndexHash = hashRepoFile(worktree.root, '.agents/rules/index.md');
     if (!Array.isArray(sealed.ruleSet.ruleSources)) throw new Error('dispatch.ruleSet.ruleSources must be an array before sealing');
-    const sourceHashes = new Map();
+    const rulePaths = ['.agents/rules/index.md'];
     sealed.ruleSet.ruleSources.forEach((source, index) => {
       if (!isNonEmptyString(source && source.sourceFile)) throw new Error(`ruleSources[${index}].sourceFile must be a non-empty repository path`);
       assertSafeRepoRelativePath(source.sourceFile);
-      if (!sourceHashes.has(source.sourceFile)) sourceHashes.set(source.sourceFile, hashRepoFile(worktree.root, source.sourceFile));
-      source.sourceHash = sourceHashes.get(source.sourceFile);
+      rulePaths.push(source.sourceFile);
+    });
+    sealed.ruleSnapshot = {
+      files: [...new Set(rulePaths)].sort(compareStrings).map((repoPath) => snapshotRuleFile(root, targetTree, repoPath)),
+    };
+    const ruleSnapshotByPath = new Map(sealed.ruleSnapshot.files.map((entry) => [entry.path, entry]));
+    sealed.ruleSet.sourceIndexHash = ruleSnapshotByPath.get('.agents/rules/index.md').contentHash;
+    sealed.ruleSet.ruleSources.forEach((source) => {
+      source.sourceHash = ruleSnapshotByPath.get(source.sourceFile).contentHash;
     });
   } catch (error) {
-    addViolation(result, 'SD002', args.input, null, `seal-dispatch failed closed: ${error.message}`, 'current Git worktree files and inventory', error.message, 2);
+    addViolation(result, 'SD002', args.input, null, `seal-dispatch failed closed: ${error.message}`, 'unambiguous Git base and immutable target tree', error.message, 2);
     return;
   }
 
   validateDispatch(sealed, args.input, result, args.input);
-  if (result.violations.length === 0) validateIncrementalPlan(path.dirname(path.resolve(args.input)), sealed, result);
   if (result.violations.length > 0) return;
-  fs.writeFileSync(args.input, `${JSON.stringify(sealed, null, 2)}\n`);
+  atomicWriteFile(args.input, `${JSON.stringify(sealed, null, 2)}\n`);
   result.rendered = args.input;
 }
 
@@ -329,30 +367,18 @@ function bindCommitMode(args, result) {
   let bound;
   try {
     const { root } = loadRepository(dispatchPath);
-    const headCommit = resolveCommit(root, args.commit);
-    const parents = commitParents(root, headCommit);
-    if (parents.length !== 1) throw new Error('bind-commit requires a non-merge commit with exactly one parent');
-    const baseCommit = parents[0];
-    const source = dispatch.inputSource;
-    if (source !== undefined && (!isObject(source) || !['worktree', 'commit'].includes(source.kind))) {
-      throw new Error('dispatch.inputSource must be absent, worktree, or commit');
+    validateDispatch(dispatch, rel(runDir, dispatchPath), result, dispatchPath);
+    if (result.violations.length > 0) return;
+    const boundCommit = resolveCommit(root, args.commit);
+    const boundTree = resolveTree(root, `${boundCommit}^{tree}`);
+    if (boundTree !== dispatch.reviewRange.targetTree) {
+      throw new Error(`boundCommit tree ${boundTree} does not match targetTree ${dispatch.reviewRange.targetTree}`);
     }
-    if (source && source.kind === 'worktree' && source.baseCommit !== baseCommit) {
-      throw new Error(`commit parent does not match sealed baseCommit ${source.baseCommit}`);
-    }
-    if (source && source.kind === 'commit' && source.headCommit !== headCommit) {
-      throw new Error(`dispatch is already bound to another commit ${source.headCommit}`);
-    }
-    if (source && source.kind === 'commit' && source.baseCommit !== baseCommit) {
-      throw new Error(`bound baseCommit does not match the unique parent of ${headCommit}`);
-    }
-
     bound = JSON.parse(JSON.stringify(dispatch));
-    bound.inputSource = { kind: 'commit', baseCommit, headCommit };
+    bound.reviewRange.boundCommit = boundCommit;
     validateDispatch(bound, rel(runDir, dispatchPath), result, dispatchPath);
-    if (result.violations.length === 0) validateIncrementalPlan(path.resolve(runDir), bound, result);
   } catch (error) {
-    addViolation(result, 'BC003', rel(runDir, dispatchPath), '/inputSource', `bind-commit failed closed: ${error.message}`, 'matching non-merge Git commit', error.message, 2);
+    addViolation(result, 'BC003', rel(runDir, dispatchPath), '/reviewRange/boundCommit', `bind-commit failed closed: ${error.message}`, 'commit whose tree equals targetTree', error.message, 2);
     return;
   }
   if (result.violations.length > 0) return;
@@ -374,6 +400,107 @@ function atomicWriteFile(filePath, content) {
       if (error.code !== 'ENOENT') throw error;
     }
   }
+}
+
+function withTemporaryIndex(root, callback) {
+  const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rules-review-index-'));
+  const indexPath = path.join(temporaryDir, 'index');
+  const env = { ...process.env, GIT_INDEX_FILE: indexPath };
+  try {
+    return callback(indexPath, env);
+  } finally {
+    fs.rmSync(temporaryDir, { recursive: true, force: true });
+  }
+}
+
+function git(root, args, options = {}) {
+  return execFileSync('git', ['-C', root, ...args], {
+    maxBuffer: 64 * 1024 * 1024,
+    ...options,
+  });
+}
+
+function assertIndexIsUnambiguous(root) {
+  const unmerged = git(root, ['ls-files', '--unmerged', '-z']);
+  if (unmerged.length > 0) throw new Error('unmerged index entries are not supported');
+}
+
+function writeCurrentTree(root, seedCommit, dispatchPath) {
+  assertIndexIsUnambiguous(root);
+  const dispatchInput = path.relative(root, dispatchPath).split(path.sep).join('/');
+  assertSafeRepoRelativePath(dispatchInput);
+  return withTemporaryIndex(root, (_indexPath, env) => {
+    git(root, ['read-tree', seedCommit], { env });
+    git(root, ['add', '-A', '--', '.', `:(exclude,literal)${dispatchInput}`], { env });
+    return normalizeGitOid(git(root, ['write-tree'], { env, encoding: 'utf8' }).trim(), 'current target tree');
+  });
+}
+
+function writeIndexTree(root) {
+  assertIndexIsUnambiguous(root);
+  const rawIndexPath = git(root, ['rev-parse', '--git-path', 'index'], { encoding: 'utf8' }).trim();
+  if (!rawIndexPath || rawIndexPath.includes('\n')) throw new Error('unable to resolve a single Git index path');
+  const sourceIndexPath = path.isAbsolute(rawIndexPath) ? rawIndexPath : path.resolve(root, rawIndexPath);
+  const stat = fs.lstatSync(sourceIndexPath);
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('Git index must be a regular non-symlink file');
+  return withTemporaryIndex(root, (indexPath, env) => {
+    fs.copyFileSync(sourceIndexPath, indexPath);
+    return normalizeGitOid(git(root, ['write-tree'], { env, encoding: 'utf8' }).trim(), 'staged target tree');
+  });
+}
+
+function excludeTreeFiles(root, candidateTree, baseTree, excludedFiles) {
+  if (excludedFiles.length === 0) return candidateTree;
+  return withTemporaryIndex(root, (_indexPath, env) => {
+    git(root, ['read-tree', candidateTree], { env });
+    excludedFiles.forEach((repoPath) => {
+      const baseEntry = readTreeEntry(root, baseTree, repoPath);
+      if (baseEntry.state === 'deleted') {
+        git(root, ['update-index', '--force-remove', '--', repoPath], { env });
+      } else {
+        git(root, ['update-index', '--add', '--cacheinfo', baseEntry.mode, baseEntry.objectId, repoPath], { env });
+      }
+    });
+    return normalizeGitOid(git(root, ['write-tree'], { env, encoding: 'utf8' }).trim(), 'scoped target tree');
+  });
+}
+
+function validateSealingExcludedFiles(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error('reviewRange.excludedFiles must be an array');
+  const seen = new Set();
+  return value.map((repoPath) => {
+    assertSafeRepoRelativePath(repoPath);
+    if (seen.has(repoPath)) throw new Error(`reviewRange.excludedFiles contains duplicate path ${repoPath}`);
+    seen.add(repoPath);
+    return repoPath;
+  }).sort(compareStrings);
+}
+
+function validateFilePartition(candidateFiles, includedFiles, excludedFiles) {
+  const candidates = new Set(candidateFiles);
+  const included = new Set(includedFiles);
+  const excluded = new Set(excludedFiles);
+  included.forEach((repoPath) => {
+    if (!candidates.has(repoPath)) throw new Error(`targetTree contains non-candidate change ${repoPath}`);
+    if (excluded.has(repoPath)) throw new Error(`candidate change appears in targetTree and excludedFiles: ${repoPath}`);
+  });
+  excluded.forEach((repoPath) => {
+    if (!candidates.has(repoPath)) throw new Error(`excludedFiles contains non-candidate path ${repoPath}`);
+  });
+  candidates.forEach((repoPath) => {
+    if (!included.has(repoPath) && !excluded.has(repoPath)) throw new Error(`candidate change is missing from targetTree and excludedFiles: ${repoPath}`);
+  });
+}
+
+function assertRegularChangedEntries(root, baseTree, targetTree, changedFiles) {
+  changedFiles.forEach((repoPath) => {
+    [readTreeEntry(root, baseTree, repoPath), readTreeEntry(root, targetTree, repoPath)].forEach((entry) => {
+      if (entry.state === 'present' && !['100644', '100755'].includes(entry.mode)) {
+        throw new Error(`changed path must be a regular blob: ${repoPath}`);
+      }
+    });
+  });
 }
 
 function validateDispatchSchemaVersion(dispatch, artifact, result) {
@@ -402,19 +529,6 @@ function collectDeclaredInputRefs(dispatch) {
   return [...refs];
 }
 
-function loadCurrentWorktree(dispatchPath) {
-  const { root } = loadRepository(dispatchPath);
-  const status = execFileSync('git', ['-C', root, '-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-uall'], {
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  const changedFiles = [...new Set(parseGitStatus(status)
-    .map((entry) => entry.file)
-    .filter((repoPath) => !isRulesReviewProtocolPath(repoPath) && !isRuleInputPath(repoPath)))]
-    .sort(compareStrings);
-  return { root, changedFiles, baseCommit: resolveCommit(root, 'HEAD') };
-}
-
 function loadRepository(dispatchPath) {
   if (!isNonEmptyString(dispatchPath)) throw new Error('dispatch path is required');
   const absoluteDispatchPath = path.resolve(dispatchPath);
@@ -429,81 +543,6 @@ function loadRepository(dispatchPath) {
   const root = fs.realpathSync(rootOutput);
   assertPathInsideRoot(root, realDispatchPath, 'dispatch input');
   return { root, dispatchPath: realDispatchPath };
-}
-
-function selectChangedFiles(inventory, declared) {
-  if (declared === undefined) return inventory;
-  if (!Array.isArray(declared)) throw new Error('changedFiles must be an array');
-  const inventorySet = new Set(inventory);
-  const seen = new Set();
-  return declared.map((repoPath) => {
-    assertSafeRepoRelativePath(repoPath);
-    if (seen.has(repoPath)) throw new Error(`changedFiles contains duplicate path ${repoPath}`);
-    if (!inventorySet.has(repoPath)) throw new Error(`changedFile does not belong to current Git inventory: ${repoPath}`);
-    seen.add(repoPath);
-    return repoPath;
-  });
-}
-
-function parseGitStatus(output) {
-  if (typeof output !== 'string') throw new Error('Git inventory output must be text');
-  const lines = output.split('\n');
-  if (lines.at(-1) === '') lines.pop();
-  return lines.flatMap((rawLine, index) => {
-    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
-    if (line.length < 4 || line[2] !== ' ') throw new Error(`unable to parse Git inventory line ${index + 1}`);
-    const status = line.slice(0, 2);
-    if (!/^[ MADRCUT?!]{2}$/.test(status) || status === '  ') throw new Error(`invalid Git status code on inventory line ${index + 1}`);
-    if ((status.includes('?') && status !== '??') || (status.includes('!') && status !== '!!')) {
-      throw new Error(`invalid Git status pair on inventory line ${index + 1}`);
-    }
-    const rawPath = line.slice(3);
-    const renamed = /[RC]/.test(status);
-    let pathTokens = [rawPath];
-    if (renamed) {
-      const separator = rawPath.indexOf(' -> ');
-      if (separator < 0 || separator !== rawPath.lastIndexOf(' -> ')) throw new Error(`unable to parse rename/copy inventory line ${index + 1}`);
-      pathTokens = [rawPath.slice(0, separator), rawPath.slice(separator + 4)];
-    }
-    return pathTokens.map((token) => {
-      const file = decodeGitPath(token);
-      assertSafeRepoRelativePath(file);
-      return { file, untracked: status === '??' };
-    });
-  });
-}
-
-function decodeGitPath(value) {
-  if (!value.startsWith('"')) {
-    if (!value) throw new Error('Git inventory path must not be empty');
-    return value;
-  }
-  if (value.length < 2 || !value.endsWith('"')) throw new Error('unterminated quoted Git inventory path');
-  const body = value.slice(1, -1);
-  let decoded = '';
-  for (let index = 0; index < body.length; index += 1) {
-    const char = body[index];
-    if (char !== '\\') {
-      decoded += char;
-      continue;
-    }
-    index += 1;
-    if (index >= body.length) throw new Error('unterminated Git path escape');
-    const escaped = body[index];
-    if (/[0-7]/.test(escaped)) {
-      let octal = escaped;
-      while (octal.length < 3 && /[0-7]/.test(body[index + 1] || '')) {
-        index += 1;
-        octal += body[index];
-      }
-      decoded += String.fromCharCode(Number.parseInt(octal, 8));
-      continue;
-    }
-    const escapes = { a: '\x07', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\x0b', '\\': '\\', '"': '"' };
-    if (!(escaped in escapes)) throw new Error(`unsupported Git path escape \\${escaped}`);
-    decoded += escapes[escaped];
-  }
-  return decoded;
 }
 
 function assertSafeRepoRelativePath(repoPath) {
@@ -522,90 +561,55 @@ function assertPathInsideRoot(root, candidate, labelText) {
   }
 }
 
-function inspectRepoInput(root, repoPath, allowMissing) {
-  assertSafeRepoRelativePath(repoPath);
-  const absolute = path.resolve(root, ...repoPath.split('/'));
-  assertPathInsideRoot(root, absolute, repoPath);
-  let current = root;
-  const segments = repoPath.split('/');
-  for (let index = 0; index < segments.length; index += 1) {
-    current = path.join(current, segments[index]);
-    let stat;
-    try {
-      stat = fs.lstatSync(current);
-    } catch (error) {
-      if (allowMissing && error.code === 'ENOENT') return { state: 'deleted', absolute };
-      throw new Error(`required repository file is missing: ${repoPath}`);
-    }
-    if (stat.isSymbolicLink()) throw new Error(`symlink repository input is forbidden: ${repoPath}`);
-    if (index < segments.length - 1 && !stat.isDirectory()) throw new Error(`repository path ancestor is not a directory: ${repoPath}`);
-    if (index === segments.length - 1 && !stat.isFile()) throw new Error(`repository input must be a regular file: ${repoPath}`);
-  }
-  return { state: 'present', absolute };
-}
-
-function snapshotRepoInput(root, repoPath) {
-  const inspected = inspectRepoInput(root, repoPath, true);
-  if (inspected.state === 'deleted') return { inputRef: repoPath, state: 'deleted' };
-  return { inputRef: repoPath, state: 'present', contentHash: hashBytes(fs.readFileSync(inspected.absolute)) };
-}
-
-function hashRepoFile(root, repoPath) {
-  const inspected = inspectRepoInput(root, repoPath, false);
-  return hashBytes(fs.readFileSync(inspected.absolute));
-}
-
 function hashBytes(bytes) {
   return `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
 }
 
+function normalizeGitOid(value, labelText) {
+  if (!GIT_OID_RE.test(value || '')) throw new Error(`${labelText} did not resolve to one normalized Git object ID`);
+  return value;
+}
+
 function resolveCommit(root, revision) {
   if (!isNonEmptyString(revision)) throw new Error('Git commit must be a non-empty revision');
-  const output = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--end-of-options', `${revision}^{commit}`], {
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-  }).trim();
-  if (!COMMIT_SHA_RE.test(output)) throw new Error(`Git commit did not resolve to one full SHA: ${revision}`);
-  return output;
+  return normalizeGitOid(git(root, ['rev-parse', '--verify', '--end-of-options', `${revision}^{commit}`], { encoding: 'utf8' }).trim(), `Git commit ${revision}`);
 }
 
-function commitParents(root, headCommit) {
-  const fields = execFileSync('git', ['-C', root, 'rev-list', '--parents', '-n', '1', headCommit], {
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-  }).trim().split(/\s+/);
-  if (fields[0] !== headCommit || fields.some((field) => !COMMIT_SHA_RE.test(field))) {
-    throw new Error(`unable to resolve commit parents for ${headCommit}`);
-  }
-  return fields.slice(1);
+function resolveTree(root, revision) {
+  if (!isNonEmptyString(revision)) throw new Error('Git tree revision must be non-empty');
+  const tree = normalizeGitOid(git(root, ['rev-parse', '--verify', '--end-of-options', revision], { encoding: 'utf8' }).trim(), `Git tree ${revision}`);
+  if (git(root, ['cat-file', '-t', tree], { encoding: 'utf8' }).trim() !== 'tree') throw new Error(`${revision} is not a Git tree`);
+  return tree;
 }
 
-function listCommitChangedFiles(root, baseCommit, headCommit) {
-  const output = execFileSync('git', ['-C', root, 'diff', '--name-only', '--no-renames', '-z', baseCommit, headCommit, '--'], {
-    maxBuffer: 16 * 1024 * 1024,
-  });
+function resolveTreeObject(root, revision) {
+  const objectId = normalizeGitOid(git(root, ['rev-parse', '--verify', '--end-of-options', revision], { encoding: 'utf8' }).trim(), `Git object ${revision}`);
+  if (git(root, ['cat-file', '-t', objectId], { encoding: 'utf8' }).trim() !== 'tree') throw new Error(`target-tree must resolve directly to a tree object: ${revision}`);
+  return objectId;
+}
+
+function listTreeChangedFiles(root, baseTree, targetTree) {
+  const output = git(root, ['diff', '--name-only', '--no-renames', '-z', baseTree, targetTree, '--']);
   const bytes = Buffer.from(output);
-  if (bytes.length > 0 && bytes.at(-1) !== 0) throw new Error('Git commit file inventory is not NUL terminated');
+  if (bytes.length > 0 && bytes.at(-1) !== 0) throw new Error('Git tree file inventory is not NUL terminated');
   const files = bytes.length === 0 ? [] : bytes.subarray(0, -1).toString('utf8').split('\0');
   return [...new Set(files.map((repoPath) => {
     assertSafeRepoRelativePath(repoPath);
     return repoPath;
-  }).filter((repoPath) => !isRulesReviewProtocolPath(repoPath) && !isRuleInputPath(repoPath)))]
-    .sort(compareStrings);
+  }).filter((repoPath) => !isRulesReviewProtocolPath(repoPath)))].sort(compareStrings);
 }
 
-function snapshotCommitInput(root, commit, repoPath) {
+function readTreeEntry(root, tree, repoPath) {
   assertSafeRepoRelativePath(repoPath);
-  const output = Buffer.from(execFileSync('git', [
-    '-C', root,
+  const output = Buffer.from(git(root, [
     '--literal-pathspecs',
     'ls-tree',
     '-z',
-    commit,
+    tree,
     '--',
     repoPath,
-  ], { maxBuffer: 16 * 1024 * 1024 }));
-  if (output.length === 0) return { inputRef: repoPath, state: 'deleted' };
+  ]));
+  if (output.length === 0) return { state: 'deleted' };
   if (output.at(-1) !== 0 || output.subarray(0, -1).includes(0)) throw new Error(`Git tree lookup returned multiple entries for ${repoPath}`);
   const record = output.subarray(0, -1);
   const tab = record.indexOf(9);
@@ -613,49 +617,34 @@ function snapshotCommitInput(root, commit, repoPath) {
   const [mode, type, objectId] = record.subarray(0, tab).toString('ascii').split(' ');
   const actualPath = record.subarray(tab + 1).toString('utf8');
   if (actualPath !== repoPath) throw new Error(`Git tree lookup path mismatch for ${repoPath}`);
-  if (!['100644', '100755'].includes(mode) || type !== 'blob') throw new Error(`Git input must be a regular file at ${repoPath}`);
-  const content = execFileSync('git', ['-C', root, 'cat-file', 'blob', objectId], { maxBuffer: 64 * 1024 * 1024 });
-  return { inputRef: repoPath, state: 'present', contentHash: hashBytes(content) };
+  return { state: 'present', mode, type, objectId: normalizeGitOid(objectId, `Git entry ${repoPath}`) };
 }
 
-function hashCommitFile(root, commit, repoPath) {
-  const snapshot = snapshotCommitInput(root, commit, repoPath);
-  if (snapshot.state !== 'present') throw new Error(`required repository file is missing from commit: ${repoPath}`);
-  return snapshot.contentHash;
+function readTreeBlob(root, tree, repoPath) {
+  const entry = readTreeEntry(root, tree, repoPath);
+  if (entry.state !== 'present') throw new Error(`required tree input is missing: ${repoPath}`);
+  if (!['100644', '100755'].includes(entry.mode) || entry.type !== 'blob') throw new Error(`Git tree input must be a regular file at ${repoPath}`);
+  return { ...entry, content: git(root, ['cat-file', 'blob', entry.objectId]) };
 }
 
-function validateInputSource(inputSource, artifact, result) {
-  if (inputSource === undefined) return;
-  if (!isObject(inputSource)) {
-    addViolation(result, 'D230', artifact, '/inputSource', 'inputSource must be an object when present', 'worktree or commit input source', inputSource);
-    return;
-  }
-  if (!['worktree', 'commit'].includes(inputSource.kind)) {
-    addViolation(result, 'D231', artifact, '/inputSource/kind', 'inputSource kind must be worktree or commit', ['worktree', 'commit'], inputSource.kind);
-    return;
-  }
-  const expectedFields = inputSource.kind === 'worktree' ? ['kind', 'baseCommit'] : ['kind', 'baseCommit', 'headCommit'];
-  rejectUnsupportedFields(inputSource, artifact, result, 'D232', '/inputSource', expectedFields, 'inputSource');
-  requireFields(inputSource, artifact, result, 'D233', '/inputSource', expectedFields);
-  for (const field of expectedFields.filter((field) => field.endsWith('Commit'))) {
-    if (!COMMIT_SHA_RE.test(inputSource[field] || '')) {
-      addViolation(result, 'D234', artifact, `/inputSource/${field}`, `${field} must be a normalized full Git SHA`, '40 lowercase hex', inputSource[field]);
-    }
-  }
+function snapshotTreeInput(root, tree, repoPath) {
+  const entry = readTreeEntry(root, tree, repoPath);
+  if (entry.state === 'deleted') return { inputRef: repoPath, state: 'deleted' };
+  const blob = readTreeBlob(root, tree, repoPath);
+  return { inputRef: repoPath, state: 'present', mode: blob.mode, contentHash: hashBytes(blob.content) };
 }
 
-function validateCurrentInputShape(dispatch, reviewItems, artifact, result) {
-  validateInputSource(dispatch.inputSource, artifact, result);
-  const changedFiles = validateRepoPathArray(dispatch.changedFiles, artifact, result, 'D200', '/changedFiles');
-  changedFiles.forEach((repoPath, index) => {
-    if (isRulesReviewProtocolPath(repoPath) || isRuleInputPath(repoPath)) {
-      addViolation(result, 'D201', artifact, `/changedFiles/${index}`, 'changedFiles must exclude rules-review protocol and rule input paths', 'non-protocol non-rule path', repoPath);
-    }
-  });
+function snapshotRuleFile(root, tree, repoPath) {
+  const blob = readTreeBlob(root, tree, repoPath);
+  const content = blob.content.toString('utf8');
+  if (!Buffer.from(content, 'utf8').equals(blob.content)) throw new Error(`rule snapshot must be valid UTF-8 text: ${repoPath}`);
+  return { path: repoPath, content, contentHash: hashBytes(blob.content) };
+}
 
+function validateSealedInputShape(dispatch, reviewItems, artifact, result) {
+  validateReviewRangeShape(dispatch.reviewRange, artifact, result);
   const referencedTargetIds = new Set([...reviewItems.values()].map((item) => item && item.targetId).filter(Boolean));
   const allInputRefs = new Set();
-  const changedUnitInputRefs = new Set();
   const targetGroups = [
     ['changedUnits', asArray(dispatch.targets && dispatch.targets.changedUnits)],
     ['candidates', asArray(dispatch.targets && dispatch.targets.candidates)],
@@ -671,7 +660,6 @@ function validateCurrentInputShape(dispatch, reviewItems, artifact, result) {
           addViolation(result, 'D217', artifact, pointer, 'inputRefs must exclude rules-review protocol and rule input paths', 'code/config/contract path', repoPath);
         }
         allInputRefs.add(repoPath);
-        if (group === 'changedUnits') changedUnitInputRefs.add(repoPath);
       });
     });
   });
@@ -693,13 +681,16 @@ function validateCurrentInputShape(dispatch, reviewItems, artifact, result) {
     if (snapshotPaths.has(repoPath)) addViolation(result, 'D208', artifact, `${pointer}/inputRef`, 'inputSnapshot inputRef must be unique', 'unique inputRef', repoPath);
     snapshotPaths.add(repoPath);
     if (!['present', 'deleted'].includes(entry.state)) addViolation(result, 'D209', artifact, `${pointer}/state`, 'snapshot state must be present or deleted', ['present', 'deleted'], entry.state);
-    if (entry.state === 'present' && !SHA256_RE.test(entry.contentHash || '')) addViolation(result, 'D210', artifact, `${pointer}/contentHash`, 'present snapshot requires sha256 contentHash', 'sha256:<64hex>', entry.contentHash);
-    if (entry.state === 'deleted' && Object.prototype.hasOwnProperty.call(entry, 'contentHash')) addViolation(result, 'D211', artifact, `${pointer}/contentHash`, 'deleted snapshot forbids contentHash', 'field absent', entry.contentHash);
+    if (entry.state === 'present') {
+      if (!['100644', '100755'].includes(entry.mode)) addViolation(result, 'D210', artifact, `${pointer}/mode`, 'present snapshot requires regular blob mode', ['100644', '100755'], entry.mode);
+      if (!SHA256_RE.test(entry.contentHash || '')) addViolation(result, 'D210', artifact, `${pointer}/contentHash`, 'present snapshot requires sha256 contentHash', 'sha256:<64hex>', entry.contentHash);
+    }
+    if (entry.state === 'deleted') {
+      if (Object.prototype.hasOwnProperty.call(entry, 'mode')) addViolation(result, 'D211', artifact, `${pointer}/mode`, 'deleted snapshot forbids mode', 'field absent', entry.mode);
+      if (Object.prototype.hasOwnProperty.call(entry, 'contentHash')) addViolation(result, 'D211', artifact, `${pointer}/contentHash`, 'deleted snapshot forbids contentHash', 'field absent', entry.contentHash);
+    }
   });
   if (!setsEqual(allInputRefs, snapshotPaths)) addViolation(result, 'D212', artifact, '/inputSnapshot/files', 'inputSnapshot inputRefs must exactly equal declared target inputRefs', [...allInputRefs].sort(compareStrings), [...snapshotPaths].sort(compareStrings));
-  changedFiles.forEach((repoPath) => {
-    if (!changedUnitInputRefs.has(repoPath)) addViolation(result, 'D213', artifact, '/targets/changedUnits', 'each changedFile must be covered by changedUnits.inputRefs', repoPath, [...changedUnitInputRefs]);
-  });
 
   if (!SHA256_RE.test((dispatch.ruleSet && dispatch.ruleSet.sourceIndexHash) || '')) addViolation(result, 'D214', artifact, '/ruleSet/sourceIndexHash', 'sourceIndexHash must use sha256:<64hex>', 'sha256:<64hex>', dispatch.ruleSet && dispatch.ruleSet.sourceIndexHash);
   const sourceHashes = new Map();
@@ -716,6 +707,62 @@ function validateCurrentInputShape(dispatch, reviewItems, artifact, result) {
       } else if (sourceHashes.get(source.sourceFile) !== source.sourceHash) {
         addViolation(result, 'D218', artifact, `/ruleSet/ruleSources/${index}/sourceHash`, 'ruleSources with the same sourceFile must use the same sourceHash', sourceHashes.get(source.sourceFile), source.sourceHash);
       }
+    }
+  });
+  validateRuleSnapshotShape(dispatch, artifact, result);
+}
+
+function validateReviewRangeShape(reviewRange, artifact, result) {
+  if (!isObject(reviewRange)) {
+    addViolation(result, 'D230', artifact, '/reviewRange', 'reviewRange must be an object', 'object', reviewRange);
+    return;
+  }
+  const required = ['baseCommit', 'baseTree', 'targetTree', 'excludedFiles'];
+  const allowed = [...required, 'seedCommit', 'boundCommit'];
+  requireFields(reviewRange, artifact, result, 'D231', '/reviewRange', required);
+  rejectUnsupportedFields(reviewRange, artifact, result, 'D232', '/reviewRange', allowed, 'reviewRange');
+  ['baseCommit', 'baseTree', 'seedCommit', 'targetTree', 'boundCommit'].forEach((field) => {
+    if (reviewRange[field] !== undefined && !GIT_OID_RE.test(reviewRange[field])) {
+      addViolation(result, 'D233', artifact, `/reviewRange/${field}`, `${field} must be a normalized Git object ID`, '40 or 64 lowercase hex', reviewRange[field]);
+    }
+  });
+  validateRepoPathArray(reviewRange.excludedFiles, artifact, result, 'D234', '/reviewRange/excludedFiles');
+}
+
+function validateRuleSnapshotShape(dispatch, artifact, result) {
+  const snapshot = dispatch && dispatch.ruleSnapshot;
+  if (!isObject(snapshot) || !Array.isArray(snapshot.files)) {
+    addViolation(result, 'D235', artifact, '/ruleSnapshot/files', 'ruleSnapshot.files must be an array', 'array', snapshot && snapshot.files);
+    return;
+  }
+  const expectedPaths = new Set(['.agents/rules/index.md', ...asArray(dispatch.ruleSet && dispatch.ruleSet.ruleSources).map((source) => source && source.sourceFile).filter(Boolean)]);
+  const actualPaths = new Set();
+  snapshot.files.forEach((entry, index) => {
+    const pointer = `/ruleSnapshot/files/${index}`;
+    requireFields(entry, artifact, result, 'D236', pointer, ['path', 'content', 'contentHash']);
+    try {
+      assertSafeRepoRelativePath(entry && entry.path);
+    } catch (error) {
+      addViolation(result, 'D237', artifact, `${pointer}/path`, error.message, 'safe repository path', entry && entry.path);
+      return;
+    }
+    if (actualPaths.has(entry.path)) addViolation(result, 'D238', artifact, `${pointer}/path`, 'ruleSnapshot paths must be unique', 'unique path', entry.path);
+    actualPaths.add(entry.path);
+    if (typeof entry.content !== 'string') addViolation(result, 'D239', artifact, `${pointer}/content`, 'ruleSnapshot content must be text', 'string', entry.content);
+    const contentHash = typeof entry.content === 'string' ? hashBytes(Buffer.from(entry.content, 'utf8')) : null;
+    if (!SHA256_RE.test(entry.contentHash || '') || entry.contentHash !== contentHash) {
+      addViolation(result, 'D239', artifact, `${pointer}/contentHash`, 'ruleSnapshot contentHash must match content bytes', contentHash, entry.contentHash);
+    }
+  });
+  if (!setsEqual(expectedPaths, actualPaths)) addViolation(result, 'D242', artifact, '/ruleSnapshot/files', 'ruleSnapshot must exactly cover the rule index and rule source files', [...expectedPaths].sort(compareStrings), [...actualPaths].sort(compareStrings));
+  const byPath = new Map(snapshot.files.map((entry) => [entry && entry.path, entry]));
+  if (dispatch.ruleSet && byPath.get('.agents/rules/index.md') && dispatch.ruleSet.sourceIndexHash !== byPath.get('.agents/rules/index.md').contentHash) {
+    addViolation(result, 'D243', artifact, '/ruleSet/sourceIndexHash', 'sourceIndexHash must equal sealed rule index snapshot', byPath.get('.agents/rules/index.md').contentHash, dispatch.ruleSet.sourceIndexHash);
+  }
+  asArray(dispatch.ruleSet && dispatch.ruleSet.ruleSources).forEach((source, index) => {
+    const file = byPath.get(source && source.sourceFile);
+    if (file && source.sourceHash !== file.contentHash) {
+      addViolation(result, 'D244', artifact, `/ruleSet/ruleSources/${index}/sourceHash`, 'sourceHash must equal sealed rule source snapshot', file.contentHash, source.sourceHash);
     }
   });
 }
@@ -745,83 +792,47 @@ function validateRepoPathArray(value, artifact, result, code, pointer, optional 
   return valid;
 }
 
-function verifyCurrentDispatchInputs(dispatch, currentInputPath, artifact, result) {
-  try {
-    const worktree = loadCurrentWorktree(currentInputPath);
-    const inventory = new Set(worktree.changedFiles);
-    asArray(dispatch.changedFiles).forEach((repoPath) => {
-      if (!inventory.has(repoPath)) throw new Error(`changedFile no longer belongs to current Git inventory: ${repoPath}`);
-    });
-
-    asArray(dispatch.inputSnapshot && dispatch.inputSnapshot.files).forEach((entry) => {
-      if (!entry || !isNonEmptyString(entry.inputRef)) throw new Error('inputSnapshot contains an invalid inputRef');
-      const actual = snapshotRepoInput(worktree.root, entry.inputRef);
-      if (actual.state !== entry.state || actual.contentHash !== entry.contentHash) {
-        throw new Error(`current input snapshot mismatch for ${entry.inputRef}`);
-      }
-    });
-
-    const actualIndexHash = hashRepoFile(worktree.root, '.agents/rules/index.md');
-    if (dispatch.ruleSet.sourceIndexHash !== actualIndexHash) throw new Error('current rule index hash does not match sourceIndexHash');
-    const sourceHashes = new Map();
-    asArray(dispatch.ruleSet && dispatch.ruleSet.ruleSources).forEach((source) => {
-      if (!sourceHashes.has(source.sourceFile)) sourceHashes.set(source.sourceFile, hashRepoFile(worktree.root, source.sourceFile));
-      if (source.sourceHash !== sourceHashes.get(source.sourceFile)) throw new Error(`current rule source hash mismatch for ${source.sourceFile}`);
-    });
-  } catch (error) {
-    addViolation(result, 'D240', artifact, null, `current Git worktree input verification failed closed: ${error.message}`, 'sealed current worktree inputs', error.message, 2);
-  }
-}
-
-function verifyCommitDispatchInputs(dispatch, currentInputPath, artifact, result) {
+function verifyTreeDispatchInputs(dispatch, currentInputPath, artifact, result) {
   try {
     const { root } = loadRepository(currentInputPath);
-    const source = dispatch.inputSource;
-    const baseCommit = resolveCommit(root, source.baseCommit);
-    const headCommit = resolveCommit(root, source.headCommit);
-    if (baseCommit !== source.baseCommit || headCommit !== source.headCommit) {
-      throw new Error('inputSource commits must be normalized full SHAs');
-    }
-    const parents = commitParents(root, headCommit);
-    if (parents.length !== 1 || parents[0] !== baseCommit) {
-      throw new Error('headCommit must have baseCommit as its unique parent');
+    const range = dispatch.reviewRange;
+    const baseCommit = resolveCommit(root, range.baseCommit);
+    const baseTree = resolveTree(root, range.baseTree);
+    const targetTree = resolveTreeObject(root, range.targetTree);
+    if (baseCommit !== range.baseCommit || baseTree !== range.baseTree || targetTree !== range.targetTree) throw new Error('reviewRange objects must use normalized IDs');
+    if (resolveTree(root, `${baseCommit}^{tree}`) !== baseTree) throw new Error('baseCommit tree does not match baseTree');
+    if (range.seedCommit && resolveCommit(root, range.seedCommit) !== range.seedCommit) throw new Error('seedCommit is missing or not normalized');
+    if (range.boundCommit) {
+      const boundCommit = resolveCommit(root, range.boundCommit);
+      if (resolveTree(root, `${boundCommit}^{tree}`) !== targetTree) throw new Error('boundCommit tree does not match targetTree');
     }
 
-    const actualChangedFiles = listCommitChangedFiles(root, baseCommit, headCommit);
-    if (!setsEqual(new Set(asArray(dispatch.changedFiles)), new Set(actualChangedFiles))) {
-      throw new Error(`commit changed file set does not match dispatch.changedFiles: ${actualChangedFiles.join(', ')}`);
-    }
+    const changedFiles = listTreeChangedFiles(root, baseTree, targetTree);
+    assertRegularChangedEntries(root, baseTree, targetTree, changedFiles);
+    const excludedFiles = new Set(asArray(range.excludedFiles));
+    changedFiles.forEach((repoPath) => {
+      if (excludedFiles.has(repoPath)) throw new Error(`excluded file remains changed in targetTree: ${repoPath}`);
+    });
+    const changedUnitRefs = new Set(asArray(dispatch.targets && dispatch.targets.changedUnits).flatMap((target) => asArray(target && target.inputRefs)));
+    changedFiles.filter((repoPath) => !isRuleInputPath(repoPath)).forEach((repoPath) => {
+      if (!changedUnitRefs.has(repoPath)) throw new Error(`targetTree changed file is not covered by changedUnits.inputRefs: ${repoPath}`);
+    });
 
     asArray(dispatch.inputSnapshot && dispatch.inputSnapshot.files).forEach((entry) => {
       if (!entry || !isNonEmptyString(entry.inputRef)) throw new Error('inputSnapshot contains an invalid inputRef');
-      const actual = snapshotCommitInput(root, headCommit, entry.inputRef);
-      if (actual.state !== entry.state || actual.contentHash !== entry.contentHash) {
-        throw new Error(`commit input snapshot mismatch for ${entry.inputRef}`);
+      const actual = snapshotTreeInput(root, targetTree, entry.inputRef);
+      if (canonicalStringify(actual) !== canonicalStringify(entry)) {
+        throw new Error(`targetTree input snapshot mismatch for ${entry.inputRef}`);
       }
     });
 
-    const actualIndexHash = hashCommitFile(root, headCommit, '.agents/rules/index.md');
-    if (dispatch.ruleSet.sourceIndexHash !== actualIndexHash) throw new Error('commit rule index hash does not match sourceIndexHash');
-    const sourceHashes = new Map();
-    asArray(dispatch.ruleSet && dispatch.ruleSet.ruleSources).forEach((sourceEntry) => {
-      if (!sourceHashes.has(sourceEntry.sourceFile)) {
-        sourceHashes.set(sourceEntry.sourceFile, hashCommitFile(root, headCommit, sourceEntry.sourceFile));
-      }
-      if (sourceEntry.sourceHash !== sourceHashes.get(sourceEntry.sourceFile)) {
-        throw new Error(`commit rule source hash mismatch for ${sourceEntry.sourceFile}`);
-      }
+    asArray(dispatch.ruleSnapshot && dispatch.ruleSnapshot.files).forEach((entry) => {
+      const actual = snapshotRuleFile(root, targetTree, entry.path);
+      if (canonicalStringify(actual) !== canonicalStringify(entry)) throw new Error(`targetTree rule snapshot mismatch for ${entry.path}`);
     });
   } catch (error) {
-    addViolation(result, 'D241', artifact, null, `Git commit input verification failed closed: ${error.message}`, 'sealed commit inputs', error.message, 2);
+    addViolation(result, 'D240', artifact, null, `Git tree input verification failed closed: ${error.message}`, 'sealed baseTree, targetTree, blobs, and snapshots', error.message, 2);
   }
-}
-
-function verifyDispatchInputs(dispatch, currentInputPath, artifact, result) {
-  if (dispatch && dispatch.inputSource && dispatch.inputSource.kind === 'commit') {
-    verifyCommitDispatchInputs(dispatch, currentInputPath, artifact, result);
-    return;
-  }
-  verifyCurrentDispatchInputs(dispatch, currentInputPath, artifact, result);
 }
 
 function isRulesReviewProtocolPath(repoPath) {
@@ -836,50 +847,23 @@ function compareStrings(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function validateDispatch(dispatch, artifact, result, currentInputPath = artifact, historical = false) {
+function validateDispatch(dispatch, artifact, result, currentInputPath = artifact) {
   expectKind(dispatch, artifact, result, 'D002', 'rules-review-dispatch');
   validateDispatchSchemaVersion(dispatch, artifact, result);
-  const requiredFields = ['kind', 'schemaVersion', 'runId', 'ruleSet', 'targets', 'applicabilityMatrix', 'reviewItems', 'executionPlan', 'reviewBatches', 'changedFiles', 'inputSnapshot'];
+  const requiredFields = ['kind', 'schemaVersion', 'runId', 'reviewRange', 'ruleSnapshot', 'inputSnapshot', 'ruleSet', 'targets', 'applicabilityMatrix', 'reviewItems', 'executionPlan', 'reviewBatches'];
   requireFields(dispatch, artifact, result, 'D004', '', requiredFields);
-  rejectUnsupportedFields(dispatch, artifact, result, 'D006', '', [...requiredFields, 'fullReason', 'continuation', 'priorReviewCheck', 'inputSource'], 'dispatch');
+  rejectUnsupportedFields(dispatch, artifact, result, 'D006', '', requiredFields, 'dispatch');
   if (!isSafeToken(dispatch && dispatch.runId)) addViolation(result, 'D005', artifact, '/runId', 'runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', dispatch && dispatch.runId);
-  validateNoPriorReviewInputs(dispatch, artifact, result);
 
   const ruleSet = validateRuleSet(dispatch.ruleSet, artifact, result);
   const targets = validateTargets(dispatch.targets, artifact, result);
   const reviewItems = validateReviewItems(dispatch.reviewItems, ruleSet, targets, artifact, result);
   validateApplicabilityMatrix(dispatch.applicabilityMatrix, ruleSet, targets, reviewItems, artifact, result);
   validateRequiredContextCoverage(ruleSet, dispatch.targets, artifact, result);
-  validateReviewMode(dispatch, reviewItems, artifact, result);
   validateReviewBatches(dispatch, ruleSet, reviewItems, artifact, result);
   validateExecutionPlan(dispatch.executionPlan, dispatch, ruleSet, reviewItems, artifact, result);
-  validateCurrentInputShape(dispatch, reviewItems, artifact, result);
-  if (!historical || (dispatch.inputSource && dispatch.inputSource.kind === 'commit')) {
-    verifyDispatchInputs(dispatch, currentInputPath, artifact, result);
-  }
-}
-
-function validateReviewMode(dispatch, reviewItems, artifact, result) {
-  const hasContinuation = isObject(dispatch && dispatch.continuation);
-  const hasFullReason = Object.prototype.hasOwnProperty.call(dispatch || {}, 'fullReason');
-  if (hasContinuation) {
-    const fields = Object.keys(dispatch.continuation);
-    if (fields.length !== 1 || fields[0] !== 'baseRunId') {
-      addViolation(result, 'D220', artifact, '/continuation', 'continuation may only contain baseRunId', ['baseRunId'], fields);
-    }
-    if (!isSafeToken(dispatch.continuation.baseRunId)) {
-      addViolation(result, 'D221', artifact, '/continuation/baseRunId', 'baseRunId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', dispatch.continuation.baseRunId);
-    }
-    if (hasFullReason) addViolation(result, 'D222', artifact, '/fullReason', 'incremental dispatch forbids fullReason', 'field absent', dispatch.fullReason);
-    if (reviewItems.size === 0) addViolation(result, 'D223', artifact, '/reviewItems', 'incremental dispatch requires at least one current reviewItem', 'non-empty reviewItems', []);
-    return;
-  }
-  if (Object.prototype.hasOwnProperty.call(dispatch || {}, 'continuation')) {
-    addViolation(result, 'D224', artifact, '/continuation', 'continuation must be an object containing only baseRunId', { baseRunId: 'safe run id' }, dispatch.continuation);
-  }
-  if (!hasFullReason || !isNonEmptyString(dispatch && dispatch.fullReason)) {
-    addViolation(result, 'D225', artifact, '/fullReason', 'full dispatch requires non-empty fullReason', 'non-empty string', dispatch && dispatch.fullReason);
-  }
+  validateSealedInputShape(dispatch, reviewItems, artifact, result);
+  verifyTreeDispatchInputs(dispatch, currentInputPath, artifact, result);
 }
 
 function validateRuleSet(ruleSet, artifact, result) {
@@ -918,16 +902,16 @@ function validateRuleSet(ruleSet, artifact, result) {
 
   requireSubset(selectedRuleRefs, candidateRuleRefs, artifact, result, 'D038', '/ruleSet/selectedRuleRefs', 'selectedRuleRefs must be subset of candidateRuleRefs');
   requireSubset(requiredRuleRefs, selectedRuleRefs, artifact, result, 'D018', '/ruleSet/requiredRuleRefs', 'requiredRuleRefs must be subset of selectedRuleRefs');
-  requireSubset(excludedRuleRefs, selectedRuleRefs, artifact, result, 'D019', '/ruleSet/excludedRuleRefs', 'excludedRuleRefs must be subset of selectedRuleRefs');
-  requireSubset(globallyNotApplicableRuleRefs, selectedRuleRefs, artifact, result, 'D020', '/ruleSet/globallyNotApplicableRuleRefs', 'globallyNotApplicableRuleRefs must be subset of selectedRuleRefs');
-  requireDisjoint(requiredRuleRefs, excludedRuleRefs, artifact, result, 'D021', '/ruleSet', 'requiredRuleRefs and excludedRuleRefs must not overlap');
-  requireDisjoint(requiredRuleRefs, globallyNotApplicableRuleRefs, artifact, result, 'D022', '/ruleSet', 'requiredRuleRefs and globallyNotApplicableRuleRefs must not overlap');
+  requireSubset(excludedRuleRefs, candidateRuleRefs, artifact, result, 'D019', '/ruleSet/excludedRuleRefs', 'excludedRuleRefs must be subset of candidateRuleRefs');
+  requireSubset(globallyNotApplicableRuleRefs, candidateRuleRefs, artifact, result, 'D020', '/ruleSet/globallyNotApplicableRuleRefs', 'globallyNotApplicableRuleRefs must be subset of candidateRuleRefs');
+  requireDisjoint(selectedRuleRefs, excludedRuleRefs, artifact, result, 'D021', '/ruleSet', 'selectedRuleRefs and excludedRuleRefs must not overlap');
+  requireDisjoint(selectedRuleRefs, globallyNotApplicableRuleRefs, artifact, result, 'D022', '/ruleSet', 'selectedRuleRefs and globallyNotApplicableRuleRefs must not overlap');
   requireDisjoint(excludedRuleRefs, globallyNotApplicableRuleRefs, artifact, result, 'D023', '/ruleSet', 'excludedRuleRefs and globallyNotApplicableRuleRefs must not overlap');
 
-  const classifiedRuleRefs = new Set([...requiredRuleRefs, ...excludedRuleRefs, ...globallyNotApplicableRuleRefs]);
-  selectedRuleRefs.forEach((ruleRef) => {
+  const classifiedRuleRefs = new Set([...selectedRuleRefs, ...excludedRuleRefs, ...globallyNotApplicableRuleRefs]);
+  candidateRuleRefs.forEach((ruleRef) => {
     if (!classifiedRuleRefs.has(ruleRef)) {
-      addViolation(result, 'D033', artifact, '/ruleSet/selectedRuleRefs', 'selectedRuleRef must be classified as required, excluded, or globallyNotApplicable', 'requiredRuleRefs | excludedRuleRefs | globallyNotApplicableRuleRefs', ruleRef);
+      addViolation(result, 'D033', artifact, '/ruleSet/candidateRuleRefs', 'candidateRuleRef must be classified as selected, excluded, or globallyNotApplicable', 'selectedRuleRefs | excludedRuleRefs | globallyNotApplicableRuleRefs', ruleRef);
     }
   });
 
@@ -1041,7 +1025,7 @@ function validateReviewItems(reviewItems, ruleSet, targets, artifact, result) {
     requireFields(item, artifact, result, 'D061', pointer, ['reviewItemId', 'ruleRef', 'targetKind', 'targetId', 'required']);
     if (!REVIEW_ITEM_RE.test(item && item.reviewItemId)) addViolation(result, 'D062', artifact, `${pointer}/reviewItemId`, 'reviewItemId must match RIxxx', 'RIxxx', item && item.reviewItemId);
     if (itemMap.has(item && item.reviewItemId)) addViolation(result, 'D063', artifact, `${pointer}/reviewItemId`, 'reviewItemId must be unique', 'unique RIxxx', item && item.reviewItemId);
-    if (!ruleSet.candidateRuleRefs.has(item && item.ruleRef)) addViolation(result, 'D064', artifact, `${pointer}/ruleRef`, 'reviewItem.ruleRef must exist in candidateRuleRefs', Array.from(ruleSet.candidateRuleRefs), item && item.ruleRef);
+    if (!ruleSet.selectedRuleRefs.has(item && item.ruleRef)) addViolation(result, 'D064', artifact, `${pointer}/ruleRef`, 'reviewItem.ruleRef must exist in selectedRuleRefs', Array.from(ruleSet.selectedRuleRefs), item && item.ruleRef);
     if (item && item.required !== true && item.required !== false) addViolation(result, 'D065', artifact, `${pointer}/required`, 'required must be boolean', 'boolean', item && item.required);
     if (item && item.required === true && !ruleSet.requiredRuleRefs.has(item.ruleRef)) addViolation(result, 'D066', artifact, `${pointer}/ruleRef`, 'required reviewItem ruleRef must be in requiredRuleRefs', Array.from(ruleSet.requiredRuleRefs), item.ruleRef);
     if (item && item.required === true && ruleSet.globallyNotApplicableRuleRefs.has(item.ruleRef)) {
@@ -1180,29 +1164,6 @@ function validateRequiredContextCoverage(ruleSet, targets, artifact, result) {
   });
 }
 
-function validateNoPriorReviewInputs(dispatch, artifact, result) {
-  if (Object.prototype.hasOwnProperty.call(dispatch, 'priorReviewCheck')) {
-    addViolation(result, 'D180', artifact, '/priorReviewCheck', 'priorReviewCheck is forbidden; rules-review must not consume prior review results', 'field absent', dispatch.priorReviewCheck);
-  }
-  validateNoPriorReviewArtifactRefs(dispatch, artifact, result, '');
-}
-
-function validateNoPriorReviewArtifactRefs(value, artifact, result, pointer) {
-  if (typeof value === 'string') {
-    if (value.includes('.rules-review-tmp/') || value.includes('.rules-review-tmp\\')) {
-      addViolation(result, 'D181', artifact, pointer || '/', 'dispatch must not reference prior review artifacts', 'no prior review artifact reference', value);
-    }
-    return;
-  }
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => validateNoPriorReviewArtifactRefs(item, artifact, result, `${pointer}/${index}`));
-    return;
-  }
-  if (isObject(value)) {
-    Object.entries(value).forEach(([key, item]) => validateNoPriorReviewArtifactRefs(item, artifact, result, `${pointer}/${escapeJsonPointer(key)}`));
-  }
-}
-
 function escapeJsonPointer(value) {
   return String(value).replace(/~/g, '~0').replace(/\//g, '~1');
 }
@@ -1251,15 +1212,11 @@ function validateReviewBatches(dispatch, ruleSet, reviewItems, artifact, result)
       addViolation(result, 'D091', artifact, '/reviewBatches', 'reviewItemId must not be assigned to multiple reviewBatches', 'single reviewBatch assignment', { reviewItemId, reviewBatchIds: batchIdsForItem });
     }
   });
-  const incremental = isObject(dispatch && dispatch.continuation);
   reviewItems.forEach((_item, reviewItemId) => {
-    if (!incremental && !assignment.has(reviewItemId)) {
+    if (!assignment.has(reviewItemId)) {
       addViolation(result, 'D092', artifact, '/reviewBatches', 'reviewItem must be assigned to one reviewBatch', reviewItemId, Array.from(assignment.keys()));
     }
   });
-  if (incremental && assignment.size >= reviewItems.size) {
-    addViolation(result, 'D094', artifact, '/reviewBatches', 'incremental reviewBatches must be a true subset of current reviewItems', `< ${reviewItems.size}`, assignment.size);
-  }
 }
 
 function validateExecutionPlan(executionPlan, dispatch, ruleSet, reviewItems, artifact, result) {
@@ -1292,8 +1249,8 @@ function validateExecutionPlan(executionPlan, dispatch, ruleSet, reviewItems, ar
     addViolation(result, 'D105', artifact, '/executionPlan/reason', 'executionPlan.reason must be non-empty string', 'non-empty reason', executionPlan.reason);
   }
   if (executionPlan.mode === 'no_batch') {
-    if (!isObject(dispatch && dispatch.continuation) && reviewItems.size !== 0) {
-      addViolation(result, 'D106', artifact, '/reviewItems', 'full no_batch requires empty current reviewItems', [], asArray(dispatch && dispatch.reviewItems));
+    if (reviewItems.size !== 0) {
+      addViolation(result, 'D106', artifact, '/reviewItems', 'no_batch requires empty reviewItems', [], asArray(dispatch && dispatch.reviewItems));
     }
     if (executionPlan.selectedBy !== 'ai') {
       addViolation(result, 'D107', artifact, '/executionPlan/selectedBy', 'no_batch must be selected by ai', 'ai', executionPlan.selectedBy);
@@ -1410,10 +1367,10 @@ function validateExecutionModeAgainstPolicy(executionPlan, dispatch, artifact, r
   }
 }
 
-function validateTask(task, artifact, result) {
+function validateTask(task, artifact, result, currentInputPath = artifact) {
   expectKind(task, artifact, result, 'T002', 'rules-review-task');
   validateSchemaVersion(task, artifact, result, 'T003');
-  const requiredFields = ['kind', 'schemaVersion', 'runId', 'reviewBatchId', 'ruleSetId', 'reviewItems', 'rules', 'targets', 'applicabilityMatrix', 'outputContract'];
+  const requiredFields = ['kind', 'schemaVersion', 'runId', 'reviewBatchId', 'ruleSetId', 'reviewRange', 'inputSnapshot', 'reviewItems', 'rules', 'targets', 'applicabilityMatrix', 'outputContract'];
   requireFields(task, artifact, result, 'T004', '', requiredFields);
   rejectUnsupportedFields(task, artifact, result, 'T042', '', requiredFields, 'task');
   if (!isSafeToken(task && task.runId)) addViolation(result, 'T022', artifact, '/runId', 'task runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', task && task.runId);
@@ -1422,6 +1379,8 @@ function validateTask(task, artifact, result) {
   if (!Array.isArray(task.rules)) addViolation(result, 'T006', artifact, '/rules', 'rules must be array', 'array', task.rules);
   if (!Array.isArray(task.targets)) addViolation(result, 'T007', artifact, '/targets', 'targets must be array', 'array', task.targets);
   if (!Array.isArray(task.applicabilityMatrix)) addViolation(result, 'T018', artifact, '/applicabilityMatrix', 'applicabilityMatrix must be array', 'array', task.applicabilityMatrix);
+  validateReviewRangeShape(task.reviewRange, artifact, result);
+  validateTaskTreeInputs(task, currentInputPath, artifact, result);
 
   asArray(task.reviewItems).forEach((item, index) => {
     const pointer = `/reviewItems/${index}`;
@@ -1452,6 +1411,30 @@ function validateTask(task, artifact, result) {
     if (task.outputContract.schemaRef !== 'schemas/shard.schema.json') addViolation(result, 'T015', artifact, '/outputContract/schemaRef', 'schemaRef must point to shard schema', 'schemas/shard.schema.json', task.outputContract.schemaRef);
   }
   validateTaskApplicabilityMatrix(task, artifact, result);
+}
+
+function validateTaskTreeInputs(task, currentInputPath, artifact, result) {
+  if (!isObject(task && task.inputSnapshot) || !Array.isArray(task.inputSnapshot.files)) {
+    addViolation(result, 'T044', artifact, '/inputSnapshot/files', 'task inputSnapshot.files must be an array', 'array', task && task.inputSnapshot && task.inputSnapshot.files);
+    return;
+  }
+  try {
+    const { root } = loadRepository(currentInputPath);
+    const baseCommit = resolveCommit(root, task.reviewRange.baseCommit);
+    const baseTree = resolveTree(root, task.reviewRange.baseTree);
+    const targetTree = resolveTreeObject(root, task.reviewRange.targetTree);
+    if (resolveTree(root, `${baseCommit}^{tree}`) !== baseTree) throw new Error('task baseCommit tree does not match baseTree');
+    if (task.reviewRange.seedCommit) resolveCommit(root, task.reviewRange.seedCommit);
+    if (task.reviewRange.boundCommit && resolveTree(root, `${resolveCommit(root, task.reviewRange.boundCommit)}^{tree}`) !== targetTree) {
+      throw new Error('task boundCommit tree does not match targetTree');
+    }
+    task.inputSnapshot.files.forEach((entry) => {
+      const actual = snapshotTreeInput(root, targetTree, entry.inputRef);
+      if (canonicalStringify(actual) !== canonicalStringify(entry)) throw new Error(`task targetTree input snapshot mismatch for ${entry.inputRef}`);
+    });
+  } catch (error) {
+    addViolation(result, 'T045', artifact, '/reviewRange', `task Git tree verification failed closed: ${error.message}`, 'available immutable range and blobs', error.message, 2);
+  }
 }
 
 function validateTaskApplicabilityMatrix(task, artifact, result) {
@@ -1727,12 +1710,12 @@ function validateRun(runDir, result) {
 
   const runState = dispatch ? validateRunArtifacts(runDir, dispatch, result) : { results: [], resultOwners: new Map() };
   if (dispatch) validateCurrentBatchResults(dispatch, runState.results, runState.resultOwners, result);
-  const effectiveResults = dispatch ? resolveEffectiveResults(runDir, dispatch, runState.results, result) : [];
-  if (dispatch) validateEffectiveResults(dispatch, effectiveResults, result);
+  const currentResults = dispatch ? runState.results : [];
+  if (dispatch) validateCompleteResults(dispatch, currentResults, result);
 
-  const beforeFinalGate = calculateGate(dispatch, effectiveResults, result);
-  if (finalReview && dispatch) validateFinalReviewAgainstComputed(finalReview, dispatch, effectiveResults, beforeFinalGate, rel(runDir, finalReviewPath), result);
-  result.gate = calculateGate(dispatch, effectiveResults, result);
+  const beforeFinalGate = calculateGate(dispatch, currentResults, result);
+  if (finalReview && dispatch) validateFinalReviewAgainstComputed(finalReview, dispatch, currentResults, beforeFinalGate, rel(runDir, finalReviewPath), result);
+  result.gate = calculateGate(dispatch, currentResults, result);
   if (finalReview && result.gate.recommendation === 'should_review_before_merge') {
     result.gate.shouldSetHash = calculateShouldSetHash(finalReview);
   }
@@ -1856,7 +1839,7 @@ function validateRunArtifacts(runDir, dispatch, result) {
 
     const task = readJson(taskPath, taskArtifact, result, 'T001');
     if (!task) return;
-    validateTask(task, taskArtifact, result);
+    validateTask(task, taskArtifact, result, taskPath);
     validateTaskAgainstDispatch(task, dispatch, batch, reviewItems, taskArtifact, result);
 
     const completeBatch = batch.returnStatus === 'returned' && batch.aggregateStatus === 'aggregated';
@@ -1897,259 +1880,12 @@ function validateRunArtifacts(runDir, dispatch, result) {
   return { results, resultOwners };
 }
 
-function validateIncrementalPlan(runDir, dispatch, result, ancestry = new Set()) {
-  if (!isObject(dispatch && dispatch.continuation)) return null;
-  const base = loadBaseRun(runDir, dispatch, result, ancestry);
-  if (!base) return null;
-
-  validateCrossRunIdentity(dispatch, base.dispatch, base.history, result);
-  validateDisappearedBaseResults(dispatch, base.dispatch, base.results, result);
-  const mandatory = calculateMandatoryRecheck(dispatch, base.dispatch, base.results);
-  const recheckedIds = new Set(asArray(dispatch.reviewBatches).flatMap((batch) => asArray(batch && batch.reviewItemIds)));
-  if (asArray(dispatch.reviewItems).length > 0 && mandatory.size === asArray(dispatch.reviewItems).length) {
-    addViolation(result, 'INC024', rel(runDir, 'dispatch.json'), '/continuation', 'incremental dispatch cannot recheck every current reviewItem; use full', 'at least one reusable current reviewItem', 0);
-  }
-  const missingMandatory = [...mandatory].filter((reviewItemId) => !recheckedIds.has(reviewItemId));
-  if (missingMandatory.length > 0) {
-    addViolation(result, 'INC020', rel(runDir, 'dispatch.json'), '/reviewBatches', 'incremental reviewBatches must include every machine-mandatory recheck item', [...mandatory].sort(compareStrings), missingMandatory.sort(compareStrings));
-  }
-
-  const baseResults = new Map(base.results.map((reviewResult) => [reviewResult.reviewItemId, reviewResult]));
-  const baseItems = new Map(asArray(base.dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
-  const reusableStatuses = new Set(['passed', 'observation', 'not_applicable']);
-  const reused = [];
-  asArray(dispatch.reviewItems).forEach((item) => {
-    if (recheckedIds.has(item.reviewItemId)) return;
-    const baseItem = baseItems.get(item.reviewItemId);
-    const baseResult = baseResults.get(item.reviewItemId);
-    if (!baseItem || !baseResult || !reusableStatuses.has(baseResult.status)) {
-      addViolation(result, 'INC021', rel(runDir, 'dispatch.json'), `/reviewItems/${item.reviewItemId}`, 'unbatched incremental reviewItem must have one reusable passed/observation/not_applicable base result', 'reusable base result', baseResult || null);
-      return;
-    }
-    if (baseItem.ruleRef !== item.ruleRef || baseItem.targetId !== item.targetId || baseItem.targetKind !== item.targetKind || baseItem.required !== item.required) {
-      addViolation(result, 'INC022', rel(runDir, 'dispatch.json'), `/reviewItems/${item.reviewItemId}`, 'reused reviewItem identity fields must match the base', baseItem, item);
-      return;
-    }
-    if (mandatory.has(item.reviewItemId)) return;
-    reused.push(baseResult);
-  });
-  if (reused.length === 0) {
-    addViolation(result, 'INC023', rel(runDir, 'dispatch.json'), '/continuation', 'incremental dispatch must reuse at least one base result', '>= 1 reusable result', 0);
-  }
-  return { ...base, reused, recheckedIds, mandatory };
-}
-
-function resolveEffectiveRun(runDir, dispatch, currentResults, result, ancestry = new Set()) {
-  if (!isObject(dispatch && dispatch.continuation)) return { results: currentResults, history: [dispatch] };
-  const plan = validateIncrementalPlan(runDir, dispatch, result, ancestry);
-  if (!plan) return { results: currentResults, history: [dispatch] };
-  const resultsById = new Map([...plan.reused, ...currentResults]
-    .map((reviewResult) => [reviewResult.reviewItemId, reviewResult]));
-  const results = asArray(dispatch.reviewItems)
-    .map((item) => resultsById.get(item.reviewItemId))
-    .filter(Boolean);
-  return { results, history: [...plan.history, dispatch] };
-}
-
-function resolveEffectiveResults(runDir, dispatch, currentResults, result, ancestry = new Set()) {
-  return resolveEffectiveRun(runDir, dispatch, currentResults, result, ancestry).results;
-}
-
-function loadBaseRun(runDir, dispatch, result, ancestry) {
-  const artifact = rel(runDir, 'dispatch.json');
-  const baseRunId = dispatch.continuation.baseRunId;
-  if (baseRunId === dispatch.runId) {
-    addViolation(result, 'INC001', artifact, '/continuation/baseRunId', 'incremental base must not reference the current run', 'different runId', baseRunId);
-    return null;
-  }
-
-  let baseDir;
-  let nextAncestry;
-  try {
-    const repository = loadRepository(path.join(runDir, 'dispatch.json'));
-    const runRoot = path.join(repository.root, '.rules-review-tmp');
-    const runRootStat = fs.lstatSync(runRoot);
-    if (runRootStat.isSymbolicLink() || !runRootStat.isDirectory()) throw new Error('.rules-review-tmp must be a real directory');
-    const currentStat = fs.lstatSync(runDir);
-    if (currentStat.isSymbolicLink() || !currentStat.isDirectory()) throw new Error('incremental current run must be a real directory');
-    const realRunRoot = fs.realpathSync(runRoot);
-    const realCurrent = fs.realpathSync(runDir);
-    if (path.dirname(realCurrent) !== realRunRoot) throw new Error('incremental current run must be an immediate child of .rules-review-tmp');
-    nextAncestry = new Set(ancestry || []);
-    if (nextAncestry.has(realCurrent)) throw new Error('continuation cycle detected');
-    nextAncestry.add(realCurrent);
-    baseDir = path.join(realRunRoot, baseRunId);
-    const stat = fs.lstatSync(baseDir);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('base run must be a real sibling directory');
-    const realBase = fs.realpathSync(baseDir);
-    if (path.dirname(realBase) !== realRunRoot || realBase === realCurrent) throw new Error('base run must resolve to a different sibling under .rules-review-tmp');
-    if (nextAncestry.has(realBase)) throw new Error('continuation cycle detected');
-    baseDir = realBase;
-  } catch (error) {
-    addViolation(result, 'INC002', artifact, '/continuation/baseRunId', `incremental base resolution failed closed: ${error.message}`, 'safe sibling v3 run without a cycle', baseRunId, 2);
-    return null;
-  }
-
-  const baseResult = createResult('base-run', baseDir);
-  if (!validateRunDirectoryFiles(baseDir, baseResult)) {
-    mergeValidationResult(result, baseResult);
-    return null;
-  }
-  const baseDispatchPath = path.join(baseDir, 'dispatch.json');
-  const baseFinalPath = path.join(baseDir, 'finalReview.json');
-  const baseDispatch = readJson(baseDispatchPath, rel(baseDir, baseDispatchPath), baseResult, 'D001');
-  const baseFinal = readJson(baseFinalPath, rel(baseDir, baseFinalPath), baseResult, 'FR001');
-  if (!baseDispatch || baseDispatch.schemaVersion !== SCHEMA_VERSION) {
-    addViolation(baseResult, 'INC003', rel(baseDir, baseDispatchPath), '/schemaVersion', 'incremental base must use schemaVersion 3', SCHEMA_VERSION, baseDispatch && baseDispatch.schemaVersion);
-  }
-  if (baseDispatch && baseDispatch.runId !== baseRunId) {
-    addViolation(baseResult, 'INC004', rel(baseDir, baseDispatchPath), '/runId', 'base dispatch runId must match continuation.baseRunId', baseRunId, baseDispatch.runId);
-  }
-  if (baseDispatch && baseDispatch.schemaVersion === SCHEMA_VERSION) {
-    validateDispatch(baseDispatch, rel(baseDir, baseDispatchPath), baseResult, baseDispatchPath, true);
-  }
-  if (baseFinal) validateFinalReviewShape(baseFinal, rel(baseDir, baseFinalPath), baseResult);
-  const baseState = baseDispatch && baseDispatch.schemaVersion === SCHEMA_VERSION
-    ? validateRunArtifacts(baseDir, baseDispatch, baseResult)
-    : { results: [], resultOwners: new Map() };
-  if (baseDispatch && baseDispatch.schemaVersion === SCHEMA_VERSION) {
-    validateCurrentBatchResults(baseDispatch, baseState.results, baseState.resultOwners, baseResult);
-    const baseResolved = resolveEffectiveRun(baseDir, baseDispatch, baseState.results, baseResult, nextAncestry);
-    validateEffectiveResults(baseDispatch, baseResolved.results, baseResult);
-    const computed = calculateGate(baseDispatch, baseResolved.results, baseResult);
-    if (baseFinal) validateFinalReviewAgainstComputed(baseFinal, baseDispatch, baseResolved.results, computed, rel(baseDir, baseFinalPath), baseResult);
-    const finalGate = calculateGate(baseDispatch, baseResolved.results, baseResult);
-    if (finalGate.protocolGate !== 'passed' || !baseFinal || baseFinal.protocolGate !== 'passed') {
-      addViolation(baseResult, 'INC006', rel(baseDir, baseFinalPath), '/protocolGate', 'incremental base protocol must revalidate as passed', 'passed', baseFinal && baseFinal.protocolGate);
-    } else {
-      validateFinalMarkdown(baseFinal, path.join(baseDir, 'final.md'), baseResult, baseDispatch);
-    }
-    if (baseResult.violations.length === 0) {
-      return { dir: baseDir, dispatch: baseDispatch, results: baseResolved.results, history: baseResolved.history };
-    }
-  }
-  if (baseResult.violations.length > 0) {
-    mergeValidationResult(result, baseResult);
-    return null;
-  }
-  return null;
-}
-
 function mergeValidationResult(target, source) {
   target.violations.push(...source.violations);
   target.skipped.push(...source.skipped);
   target.gateImpact.blocked ||= source.gateImpact.blocked;
   target.gateImpact.incomplete ||= source.gateImpact.incomplete;
   target.exitCode = Math.max(target.exitCode, source.exitCode);
-}
-
-function validateCrossRunIdentity(dispatch, baseDispatch, history, result) {
-  const artifact = 'dispatch.json';
-  const currentTargets = buildDispatchTargetMap(dispatch);
-  const baseTargets = buildDispatchTargetMap(baseDispatch);
-  const historicalTargetIds = new Set(asArray(history).flatMap((ancestor) => [...buildDispatchTargetMap(ancestor).keys()]));
-  const maxTargetId = maxNumericId(historicalTargetIds, TARGET_RE);
-  currentTargets.forEach((_target, targetId) => {
-    if (!baseTargets.has(targetId) && numericId(targetId, TARGET_RE) <= maxTargetId) {
-      addViolation(result, 'INC011', artifact, `/targets/${targetId}`, 'new targetId must be greater than every targetId in the base chain', `> ${maxTargetId}`, targetId);
-    }
-  });
-
-  const historicalItemsById = new Map();
-  const historicalItemsByTuple = new Map();
-  asArray(history).forEach((ancestor) => {
-    asArray(ancestor && ancestor.reviewItems).forEach((item) => {
-      const tuple = reviewItemTuple(item);
-      if (!historicalItemsById.has(item.reviewItemId)) historicalItemsById.set(item.reviewItemId, item);
-      if (!historicalItemsByTuple.has(tuple)) historicalItemsByTuple.set(tuple, item);
-    });
-  });
-  const currentItemsById = new Map(asArray(dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
-  const maxReviewItemId = maxNumericId(historicalItemsById.keys(), REVIEW_ITEM_RE);
-  currentItemsById.forEach((item, reviewItemId) => {
-    const historicalById = historicalItemsById.get(reviewItemId);
-    const historicalByTuple = historicalItemsByTuple.get(reviewItemTuple(item));
-    if (historicalById && reviewItemTuple(historicalById) !== reviewItemTuple(item)) {
-      addViolation(result, 'INC013', artifact, `/reviewItems/${reviewItemId}`, 'reviewItemId must keep the same ruleRef x targetId tuple across the incremental chain', reviewItemTuple(historicalById), reviewItemTuple(item));
-    }
-    if (!historicalById && historicalByTuple) {
-      addViolation(result, 'INC014', artifact, `/reviewItems/${reviewItemId}`, 'an existing ruleRef x targetId tuple must keep its historical reviewItemId', historicalByTuple.reviewItemId, reviewItemId);
-    }
-    if (!historicalById && !historicalByTuple && numericId(reviewItemId, REVIEW_ITEM_RE) <= maxReviewItemId) {
-      addViolation(result, 'INC015', artifact, `/reviewItems/${reviewItemId}`, 'new reviewItemId must be greater than every reviewItemId in the base chain', `> ${maxReviewItemId}`, reviewItemId);
-    }
-  });
-}
-
-function validateDisappearedBaseResults(dispatch, baseDispatch, baseResults, result) {
-  const artifact = 'dispatch.json';
-  const currentItemIds = new Set(asArray(dispatch.reviewItems).map((item) => item.reviewItemId));
-  const resultsById = new Map(asArray(baseResults).map((reviewResult) => [reviewResult.reviewItemId, reviewResult]));
-  asArray(baseDispatch.reviewItems).forEach((baseItem) => {
-    if (currentItemIds.has(baseItem.reviewItemId)) return;
-    const baseResult = resultsById.get(baseItem.reviewItemId);
-    if (!baseResult) {
-      addViolation(result, 'INC025', artifact, '/reviewItems', 'disappeared base reviewItem must have one effective base result', baseItem.reviewItemId, null);
-      return;
-    }
-    if (['finding', 'cannot_verify'].includes(baseResult.status)) {
-      addViolation(result, 'INC026', artifact, '/reviewItems', 'disappeared base finding/cannot_verify requires full review', 'full without continuation', { reviewItemId: baseItem.reviewItemId, status: baseResult.status });
-      return;
-    }
-    if (baseResult.status === 'observation' && !observationCanDisappear(dispatch, baseItem)) {
-      addViolation(result, 'INC027', artifact, '/reviewItems', 'disappeared base observation requires a machine-visible structural reason or full review', 'rule exits selected scope, current not_applicable row, or file-level target deletion', baseItem.reviewItemId);
-    }
-  });
-}
-
-function observationCanDisappear(dispatch, baseItem) {
-  const selectedRuleRefs = new Set(asArray(dispatch.ruleSet && dispatch.ruleSet.selectedRuleRefs));
-  if (!selectedRuleRefs.has(baseItem.ruleRef)) return true;
-
-  return asArray(dispatch.applicabilityMatrix).some((row) => row
-    && row.ruleRef === baseItem.ruleRef
-    && row.targetId === baseItem.targetId
-    && row.applicability === 'not_applicable'
-    && !Object.prototype.hasOwnProperty.call(row, 'reviewItemId'));
-}
-
-function calculateMandatoryRecheck(dispatch, baseDispatch, baseResults) {
-  const mandatory = new Set();
-  const currentItems = asArray(dispatch.reviewItems);
-  const baseItems = new Map(asArray(baseDispatch.reviewItems).map((item) => [item.reviewItemId, item]));
-  const baseTargets = buildDispatchTargetMap(baseDispatch);
-  const currentTargets = buildDispatchTargetMap(dispatch);
-  const baseSnapshots = new Map(asArray(baseDispatch.inputSnapshot && baseDispatch.inputSnapshot.files).map((entry) => [entry.inputRef, entry]));
-  const currentSnapshots = new Map(asArray(dispatch.inputSnapshot && dispatch.inputSnapshot.files).map((entry) => [entry.inputRef, entry]));
-  const changedTargets = new Set();
-  currentTargets.forEach((target, targetId) => {
-    const baseTarget = baseTargets.get(targetId);
-    if (!baseTarget || targetInputsChanged(target, baseTarget, currentSnapshots, baseSnapshots)) changedTargets.add(targetId);
-  });
-
-  const baseRules = new Map(asArray(baseDispatch.ruleSet && baseDispatch.ruleSet.ruleSources).map((source) => [source.ruleRef, source]));
-  const changedRules = new Set(asArray(dispatch.ruleSet && dispatch.ruleSet.ruleSources)
-    .filter((source) => canonicalStringify(source) !== canonicalStringify(baseRules.get(source.ruleRef)))
-    .map((source) => source.ruleRef));
-  const allRulesChanged = dispatch.ruleSet.sourceIndexHash !== baseDispatch.ruleSet.sourceIndexHash;
-  const baseStatuses = new Map(asArray(baseResults).map((reviewResult) => [reviewResult.reviewItemId, reviewResult.status]));
-  currentItems.forEach((item) => {
-    if (!baseItems.has(item.reviewItemId)
-      || ['finding', 'cannot_verify'].includes(baseStatuses.get(item.reviewItemId))
-      || changedTargets.has(item.targetId)
-      || allRulesChanged
-      || changedRules.has(item.ruleRef)) {
-      mandatory.add(item.reviewItemId);
-    }
-  });
-  return mandatory;
-}
-
-function targetInputsChanged(currentTarget, baseTarget, currentSnapshots, baseSnapshots) {
-  const currentRefs = new Set(asArray(currentTarget && currentTarget.inputRefs));
-  const baseRefs = new Set(asArray(baseTarget && baseTarget.inputRefs));
-  if (!setsEqual(currentRefs, baseRefs)) return true;
-  return [...currentRefs].some((inputRef) => canonicalStringify(currentSnapshots.get(inputRef)) !== canonicalStringify(baseSnapshots.get(inputRef)));
 }
 
 function reviewItemTuple(item) {
@@ -2190,6 +1926,16 @@ function validateTaskAgainstDispatch(task, dispatch, batch, reviewItems, artifac
   if (task.runId !== dispatch.runId) addViolation(result, 'RUN020', artifact, '/runId', 'task runId must match dispatch runId', dispatch.runId, task.runId);
   if (task.reviewBatchId !== batch.reviewBatchId) addViolation(result, 'RUN021', artifact, '/reviewBatchId', 'task reviewBatchId must match reviewBatchId', batch.reviewBatchId, task.reviewBatchId);
   if (task.ruleSetId !== dispatch.ruleSet.ruleSetId) addViolation(result, 'RUN022', artifact, '/ruleSetId', 'task ruleSetId must match dispatch ruleSetId', dispatch.ruleSet.ruleSetId, task.ruleSetId);
+  const dispatchTaskRange = { ...dispatch.reviewRange };
+  const taskRange = { ...task.reviewRange };
+  delete dispatchTaskRange.boundCommit;
+  delete taskRange.boundCommit;
+  if (canonicalStringify(taskRange) !== canonicalStringify(dispatchTaskRange)) {
+    addViolation(result, 'RUN038', artifact, '/reviewRange', 'task reviewRange must equal dispatch reviewRange except post-review boundCommit', dispatchTaskRange, taskRange);
+  }
+  if (canonicalStringify(task.inputSnapshot) !== canonicalStringify(dispatch.inputSnapshot)) {
+    addViolation(result, 'RUN039', artifact, '/inputSnapshot', 'task inputSnapshot must equal dispatch inputSnapshot', dispatch.inputSnapshot, task.inputSnapshot);
+  }
 
   const expectedItemIds = asArray(batch.reviewItemIds);
   const actualItemIds = asArray(task.reviewItems).map((item) => item.reviewItemId);
@@ -2300,13 +2046,13 @@ function validateCurrentBatchResults(dispatch, results, resultOwners, result) {
   });
 }
 
-function validateEffectiveResults(dispatch, effectiveResults, result) {
+function validateCompleteResults(dispatch, currentResults, result) {
   const currentIds = new Set(asArray(dispatch && dispatch.reviewItems).map((item) => item && item.reviewItemId).filter(Boolean));
   const counts = new Map();
-  asArray(effectiveResults).forEach((reviewResult, index) => {
+  asArray(currentResults).forEach((reviewResult, index) => {
     const reviewItemId = reviewResult && reviewResult.reviewItemId;
     if (!currentIds.has(reviewItemId)) {
-      addViolation(result, 'RUN043', result.artifact, `/effectiveResults/${index}/reviewItemId`, 'effective result must belong to current reviewItems', [...currentIds], reviewItemId);
+      addViolation(result, 'RUN043', result.artifact, `/currentResults/${index}/reviewItemId`, 'current result must belong to current reviewItems', [...currentIds], reviewItemId);
       return;
     }
     counts.set(reviewItemId, (counts.get(reviewItemId) || 0) + 1);
@@ -2318,8 +2064,8 @@ function validateEffectiveResults(dispatch, effectiveResults, result) {
         result,
         'RUN044',
         result.artifact,
-        `/effectiveResults/${reviewItemId}`,
-        'every current reviewItem must have exactly one effective result',
+        `/currentResults/${reviewItemId}`,
+        'every current reviewItem must have exactly one current result',
         1,
         count,
         1,
@@ -2331,7 +2077,10 @@ function validateEffectiveResults(dispatch, effectiveResults, result) {
 
 function calculateGate(dispatch, results, result) {
   const protocolGate = result.gateImpact.blocked ? 'blocked' : result.gateImpact.incomplete ? 'incomplete' : 'passed';
-  const scopeMode = dispatch && dispatch.ruleSet && asArray(dispatch.ruleSet.excludedRuleRefs).length > 0 ? 'scoped' : 'full';
+  const scopeMode = dispatch && (
+    asArray(dispatch.reviewRange && dispatch.reviewRange.excludedFiles).length > 0
+    || asArray(dispatch.ruleSet && dispatch.ruleSet.excludedRuleRefs).length > 0
+  ) ? 'scoped' : 'full';
   const coverageClaim = protocolGate === 'blocked'
     ? 'blocked'
     : protocolGate === 'incomplete'
@@ -2489,7 +2238,6 @@ function buildTasksMode(args, result) {
   const dispatch = readJson(args.dispatch, args.dispatch, result, 'D001');
   if (!dispatch) return;
   validateDispatch(dispatch, args.dispatch, result);
-  if (result.violations.length === 0) validateIncrementalPlan(path.dirname(path.resolve(args.dispatch)), dispatch, result);
   if (!args.out || args.out === true) {
     addViolation(result, 'BT001', null, '/out', 'build-tasks requires --out', 'output directory', args.out || null, 2);
     return;
@@ -2537,6 +2285,8 @@ function buildTasks(dispatch) {
         runId: dispatch.runId,
         reviewBatchId: batch.reviewBatchId,
         ruleSetId: dispatch.ruleSet.ruleSetId,
+        reviewRange: dispatch.reviewRange,
+        inputSnapshot: dispatch.inputSnapshot,
         reviewItems,
         rules: asArray(dispatch.ruleSet.ruleSources).filter((source) => source && ruleRefs.has(source.ruleRef) && ruleSourcesByRuleRef.has(source.ruleRef)),
         targets: [...asArray(dispatch.targets && dispatch.targets.changedUnits), ...asArray(dispatch.targets && dispatch.targets.candidates)]
@@ -2574,15 +2324,15 @@ function aggregateFinalMode(args, result) {
   if (!dispatch || result.violations.length > 0) return;
   const runState = dispatch ? validateRunArtifacts(runDir, dispatch, result) : { results: [], resultOwners: new Map() };
   if (dispatch) validateCurrentBatchResults(dispatch, runState.results, runState.resultOwners, result);
-  const effectiveResults = dispatch ? resolveEffectiveResults(runDir, dispatch, runState.results, result) : [];
-  if (dispatch) validateEffectiveResults(dispatch, effectiveResults, result);
-  const gate = calculateGate(dispatch, effectiveResults, result);
+  const currentResults = dispatch ? runState.results : [];
+  if (dispatch) validateCompleteResults(dispatch, currentResults, result);
+  const gate = calculateGate(dispatch, currentResults, result);
   result.gate = gate;
-  const finalReview = buildFinalReview(dispatch, effectiveResults, gate);
+  const finalReview = buildFinalReview(dispatch, currentResults, gate);
   fs.mkdirSync(path.dirname(args.output), { recursive: true });
   fs.writeFileSync(args.output, `${JSON.stringify(finalReview, null, 2)}\n`);
   validateFinalReviewShape(finalReview, args.output, result);
-  validateFinalReviewAgainstComputed(finalReview, dispatch, effectiveResults, gate, args.output, result);
+  validateFinalReviewAgainstComputed(finalReview, dispatch, currentResults, gate, args.output, result);
   result.rendered = args.output;
 }
 
@@ -2595,6 +2345,7 @@ function buildFinalReview(dispatch, results, gate) {
     scopeMode: gate.scopeMode,
     coverageClaim: gate.coverageClaim,
     semanticVerdict: gate.semanticVerdict,
+    excludedFiles: asArray(dispatch.reviewRange && dispatch.reviewRange.excludedFiles),
     excludedRuleRefs: asArray(dispatch.ruleSet && dispatch.ruleSet.excludedRuleRefs),
     findings: deriveFindingItems(results, dispatch),
     observations: deriveObservationItems(results, dispatch),
@@ -2627,6 +2378,7 @@ function validateFinalReviewShape(finalReview, artifact, result) {
     'scopeMode',
     'coverageClaim',
     'semanticVerdict',
+    'excludedFiles',
     'excludedRuleRefs',
     'findings',
     'observations',
@@ -2643,6 +2395,7 @@ function validateFinalReviewShape(finalReview, artifact, result) {
   if (!SEMANTIC_VERDICTS.includes(finalReview.semanticVerdict)) addViolation(result, 'FR008', artifact, '/semanticVerdict', 'semanticVerdict must be valid', SEMANTIC_VERDICTS, finalReview.semanticVerdict);
   validateIssueSummary(finalReview.issueSummary, artifact, result, 'FR015', '/issueSummary');
   if (!RECOMMENDATIONS.includes(finalReview.recommendation)) addViolation(result, 'FR016', artifact, '/recommendation', 'recommendation must be valid', RECOMMENDATIONS, finalReview.recommendation);
+  validateRepoPathArray(finalReview.excludedFiles, artifact, result, 'FR079', '/excludedFiles');
   validateStringSet(finalReview.excludedRuleRefs, artifact, result, 'FR009', '/excludedRuleRefs');
   if (!Array.isArray(finalReview.findings)) addViolation(result, 'FR010', artifact, '/findings', 'findings must be array', 'array', finalReview.findings);
   if (!Array.isArray(finalReview.observations)) addViolation(result, 'FR058', artifact, '/observations', 'observations must be array', 'array', finalReview.observations);
@@ -2679,12 +2432,16 @@ function validateFinalReviewShape(finalReview, artifact, result) {
 function validateFinalReviewAgainstComputed(finalReview, dispatch, results, computed, artifact, result) {
   if (finalReview.runId !== dispatch.runId) addViolation(result, 'FR020', artifact, '/runId', 'finalReview runId must match dispatch runId', dispatch.runId, finalReview.runId);
 
+  const excludedFiles = asArray(dispatch.reviewRange && dispatch.reviewRange.excludedFiles);
+  if (!setsEqual(new Set(asArray(finalReview.excludedFiles)), new Set(excludedFiles))) {
+    addViolation(result, 'FR080', artifact, '/excludedFiles', 'finalReview excludedFiles must match dispatch reviewRange.excludedFiles', excludedFiles, finalReview.excludedFiles);
+  }
   const excluded = asArray(dispatch.ruleSet.excludedRuleRefs);
   if (!setsEqual(new Set(asArray(finalReview.excludedRuleRefs)), new Set(excluded))) {
     addViolation(result, 'FR021', artifact, '/excludedRuleRefs', 'finalReview excludedRuleRefs must match dispatch ruleSet.excludedRuleRefs', excluded, finalReview.excludedRuleRefs);
   }
-  if (finalReview.scopeMode === 'scoped' && asArray(finalReview.excludedRuleRefs).length === 0) {
-    addViolation(result, 'FR022', artifact, '/excludedRuleRefs', 'scoped scopeMode requires excludedRuleRefs', 'non-empty excludedRuleRefs', finalReview.excludedRuleRefs);
+  if (finalReview.scopeMode === 'scoped' && asArray(finalReview.excludedFiles).length === 0 && asArray(finalReview.excludedRuleRefs).length === 0) {
+    addViolation(result, 'FR022', artifact, '/scopeMode', 'scoped scopeMode requires excludedFiles or excludedRuleRefs', 'non-empty excludedFiles or excludedRuleRefs', { excludedFiles: finalReview.excludedFiles, excludedRuleRefs: finalReview.excludedRuleRefs });
   }
   if (finalReview.scopeMode === 'scoped' && finalReview.coverageClaim === 'full_complete') {
     addViolation(result, 'FR023', artifact, '/coverageClaim', 'scoped mode must not declare coverageClaim=full_complete', 'scoped_complete/incomplete/blocked', finalReview.coverageClaim);
@@ -2744,11 +2501,11 @@ function renderFinalMode(args, result) {
     const computedResult = createResult('render-final-computation', runDir);
     const runState = validateRunArtifacts(runDir, dispatch, computedResult);
     validateCurrentBatchResults(dispatch, runState.results, runState.resultOwners, computedResult);
-    const effectiveResults = resolveEffectiveResults(runDir, dispatch, runState.results, computedResult);
-    validateEffectiveResults(dispatch, effectiveResults, computedResult);
-    const gate = calculateGate(dispatch, effectiveResults, computedResult);
+    const currentResults = runState.results;
+    validateCompleteResults(dispatch, currentResults, computedResult);
+    const gate = calculateGate(dispatch, currentResults, computedResult);
     mergeValidationResult(result, computedResult);
-    validateFinalReviewAgainstComputed(finalReview, dispatch, effectiveResults, gate, args.input, result);
+    validateFinalReviewAgainstComputed(finalReview, dispatch, currentResults, gate, args.input, result);
   }
   if (result.violations.length > 0) return;
   const runDir = path.dirname(path.resolve(args.input));
@@ -2826,9 +2583,9 @@ function validateFinalMarkdown(finalReview, markdownPath, result, dispatch) {
       `selectedRuleRefs：${asArray(dispatch.ruleSet && dispatch.ruleSet.selectedRuleRefs).length}`,
       `reviewItems：${asArray(dispatch.reviewItems).length}`,
       `reviewBatches：${asArray(dispatch.reviewBatches).length}`,
+      `baseTree：${dispatch.reviewRange && dispatch.reviewRange.baseTree}`,
+      `targetTree：${dispatch.reviewRange && dispatch.reviewRange.targetTree}`,
     );
-    if (isObject(dispatch.continuation)) required.push(`baseRunId：${dispatch.continuation.baseRunId}`);
-    else required.push(`fullReason：${dispatch.fullReason}`);
   }
   required.forEach((token, index) => {
     if (!markdown.includes(token)) addViolation(result, `FM00${index + 2}`, markdownPath, null, 'final Markdown must include rendered finalReview status labels', token, markdown);
@@ -2880,6 +2637,7 @@ function renderFinalMarkdown(finalReview, dispatch, runDir) {
     '## 范围',
     `- 范围模式：${label(finalReview.scopeMode)}`,
     `- 覆盖声明：${label(finalReview.coverageClaim)}`,
+    `- 排除文件：${formatList(finalReview.excludedFiles)}`,
     `- 排除规则：${formatList(finalReview.excludedRuleRefs)}`,
     '',
     '## 审计',
@@ -3357,9 +3115,12 @@ function formatAuditLines(finalReview, dispatch, runDir) {
     `- applicabilityMatrix：${asArray(dispatch && dispatch.applicabilityMatrix).length}`,
     `- reviewItems：${asArray(dispatch && dispatch.reviewItems).length}`,
     `- reviewBatches：${asArray(dispatch && dispatch.reviewBatches).length}`,
+    `- baseCommit：${dispatch && dispatch.reviewRange && dispatch.reviewRange.baseCommit || '未知'}`,
+    `- baseTree：${dispatch && dispatch.reviewRange && dispatch.reviewRange.baseTree || '未知'}`,
+    `- targetTree：${dispatch && dispatch.reviewRange && dispatch.reviewRange.targetTree || '未知'}`,
+    `- boundCommit：${dispatch && dispatch.reviewRange && dispatch.reviewRange.boundCommit || '无'}`,
+    `- excludedFiles：${asArray(dispatch && dispatch.reviewRange && dispatch.reviewRange.excludedFiles).length}`,
   ];
-  if (isObject(dispatch && dispatch.continuation)) lines.push(`- baseRunId：${dispatch.continuation.baseRunId}`);
-  else lines.push(`- fullReason：${dispatch && dispatch.fullReason || '未知'}`);
   lines.push(
     `- 验证命令：\`${formatRunCommand(runDir)}\``,
     `- 验证摘要：protocolGate=${validation.protocolGate || '未知'}，semanticVerdict=${validation.semanticVerdict || '未知'}，findings=${formatMetric(validation.issueSummary && validation.issueSummary.findings)}，mustFix=${formatMetric(validation.issueSummary && validation.issueSummary.mustFix)}，shouldFix=${formatMetric(validation.issueSummary && validation.issueSummary.shouldFix)}，cannotVerify=${formatMetric(validation.issueSummary && validation.issueSummary.cannotVerify)}，observations=${formatMetric(validation.issueSummary && validation.issueSummary.observations)}，recommendation=${validation.recommendation || '未知'}`,

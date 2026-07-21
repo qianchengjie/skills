@@ -4,18 +4,34 @@
   "title": "rules-review dispatch",
   "type": "object",
   "additionalProperties": false,
-  "required": ["kind", "schemaVersion", "runId", "ruleSet", "targets", "applicabilityMatrix", "reviewItems", "executionPlan", "reviewBatches", "changedFiles", "inputSnapshot"],
+  "required": ["kind", "schemaVersion", "runId", "reviewRange", "ruleSnapshot", "inputSnapshot", "ruleSet", "targets", "applicabilityMatrix", "reviewItems", "executionPlan", "reviewBatches"],
   "properties": {
     "kind": { "const": "rules-review-dispatch" },
-    "schemaVersion": { "const": 3 },
+    "schemaVersion": { "const": 4 },
     "runId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
-    "fullReason": { "type": "string", "minLength": 1 },
-    "continuation": {
+    "reviewRange": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["baseRunId"],
+      "required": ["baseCommit", "baseTree", "targetTree", "excludedFiles"],
       "properties": {
-        "baseRunId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" }
+        "baseCommit": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+        "baseTree": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+        "seedCommit": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+        "targetTree": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+        "boundCommit": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+        "excludedFiles": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "ruleSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files"],
+      "properties": {
+        "files": { "type": "array", "items": { "$ref": "#/$defs/ruleSnapshotFile" } }
       }
     },
     "ruleSet": {
@@ -45,54 +61,15 @@
     "reviewItems": { "type": "array", "items": { "$ref": "#/$defs/reviewItem" } },
     "executionPlan": { "$ref": "#/$defs/executionPlan" },
     "reviewBatches": { "type": "array", "items": { "$ref": "#/$defs/reviewBatch" } },
-    "changedFiles": {
-      "type": "array",
-      "items": { "type": "string", "minLength": 1 },
-      "uniqueItems": true
-    },
     "inputSnapshot": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["files"],
       "properties": {
         "files": { "type": "array", "items": { "$ref": "#/$defs/inputSnapshotFile" } }
       }
-    },
-    "inputSource": {
-      "oneOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "baseCommit"],
-          "properties": {
-            "kind": { "const": "worktree" },
-            "baseCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "baseCommit", "headCommit"],
-          "properties": {
-            "kind": { "const": "commit" },
-            "baseCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
-            "headCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
-          }
-        }
-      ]
-    },
-    "priorReviewCheck": false
-  },
-  "oneOf": [
-    {
-      "required": ["fullReason"],
-      "not": { "required": ["continuation"] }
-    },
-    {
-      "required": ["continuation"],
-      "not": { "required": ["fullReason"] },
-      "properties": { "reviewItems": { "minItems": 1 } }
     }
-  ],
+  },
   "allOf": [
     {
       "if": {
@@ -289,22 +266,39 @@
     },
     "inputSnapshotFile": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["inputRef", "state"],
       "properties": {
         "inputRef": { "type": "string", "minLength": 1 },
         "state": { "enum": ["present", "deleted"] },
+        "mode": { "enum": ["100644", "100755"] },
         "contentHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
       },
       "allOf": [
         {
           "if": { "properties": { "state": { "const": "present" } } },
-          "then": { "required": ["contentHash"] }
+          "then": { "required": ["mode", "contentHash"] }
         },
         {
           "if": { "properties": { "state": { "const": "deleted" } } },
-          "then": { "not": { "required": ["contentHash"] } }
+          "then": {
+            "allOf": [
+              { "not": { "required": ["mode"] } },
+              { "not": { "required": ["contentHash"] } }
+            ]
+          }
         }
       ]
+    },
+    "ruleSnapshotFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "content", "contentHash"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "content": { "type": "string" },
+        "contentHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
     },
     "evidence": {
       "type": "object",

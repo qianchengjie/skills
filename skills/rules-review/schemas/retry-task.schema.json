@@ -7,7 +7,7 @@
   "required": ["kind", "schemaVersion", "runId", "retryAttempt", "reason", "originalTaskRef", "violations", "outputContract"],
   "properties": {
     "kind": { "const": "rules-review-retry-task" },
-    "schemaVersion": { "const": 3 },
+    "schemaVersion": { "const": 4 },
     "runId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "retryAttempt": { "type": "integer", "minimum": 1 },
     "reason": { "type": "string", "minLength": 1 },

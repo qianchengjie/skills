@@ -19,10 +19,11 @@
 
 每轮派发顺序固定为：
 
-1. 把本轮实现依据写回真源。首轮使用当前切片、Claims 和门禁记录；返修把失败硬门禁写入 `#### 门禁记录`，或把当前 General Review A*（含待修的 open / blocked G*）/ 项目规则审查 A*（含 `rulesReviewReport`）写回 `audits.md` 并关联当前切片。需要调整执行边界时，先按授权边界规则完成预检和写回。
+1. 把本轮实现依据写回真源。首轮使用当前切片、Claims 和门禁记录；返修把失败硬门禁写入 `#### 门禁记录`，或把当前 General Review A*（含完整 `openFindings`）/ 项目规则审查 A*（含 `rulesReviewReport`）写回 `audits.md` 并关联当前切片。需要调整执行边界时，先按授权边界规则完成预检和写回。
 2. 运行 `task-brief`，重新生成 `task-briefs/<S-id>.md`。
 3. 运行 `task-report-template`，覆盖 `task-reports/<S-id>.json` 为默认 `blocked`、空 `changedFiles`、空 `validation` 的本轮报告。
-4. 派发 subagent。旧的 `ready-for-review` 报告不得沿用；implementer 未更新的默认 `blocked` 报告不得通过接收门禁。
+4. 运行 `workspace-tree --seed <seedCommit>` 临时记录 `workspaceBeforeTree`。它只用于本轮 delta 隔离，不进入 rules-review dispatch，也不建立 anchor。
+5. 派发 subagent。旧的 `ready-for-review` 报告不得沿用；implementer 未更新的默认 `blocked` 报告不得通过接收门禁。
 
 ### 首轮派发
 
@@ -59,6 +60,9 @@ subagent 返回后，控制器先做接收门禁：
 - 读取本轮重置后由 implementer 更新的 `task-reports/<S-id>.json`，确认 `conclusion: ready-for-review` 且最小 handoff 字段已填写。
 - 检查实际改动文件落在 task brief 的 `允许修改` 范围内，且未命中 `禁止修改`。
 - 确认 subagent 未报告 blocked、新分叉、风险升级、验证方式变化或越界需求。
+- 再次运行 `workspace-tree --seed <seedCommit>` 得到 `workspaceAfterTree`，并确认 `workspaceBeforeTree → workspaceAfterTree` 的 delta 文件集合与 task report、`允许修改`、`禁止修改` 精确一致。
+
+接收门禁通过后运行 `seal-target`。首轮把 delta patch 应用到 `seedCommit^{tree}`；修复轮应用到上一 `targetTree`。脚本随后把 `previousTargetTree → workspaceBeforeTree` 的残余基线 patch 应用到新 target，并要求结果精确等于 `workspaceAfterTree`。同路径非重叠 hunk 可以隔离；patch 不唯一、hunk 重叠、必须带入基线内容或组合 identity 不一致时立即阻塞，禁止降级为整文件覆盖。hunk 的业务归属由 controller 判断，脚本只验证 patch、路径和 tree identity。
 
 接收门禁通过后，控制器再运行硬门禁；subagent 的验证结果只作为辅助证据，不能替代控制器硬门禁。接收门禁不通过时，不生成 review-package；写入前 `blocked` 报告的清单不足由控制器按拟扩范围重跑受影响的上下文预检，确认无需新的执行确认后才能补 brief 并重新派发。实际 diff 已越过旧 brief 时先判接收门禁失败并由控制器确认归属，只有确认由本轮 subagent 写入越界文件时才记录接收违约，不得回填清单使本轮通过；派发前脏文件漏记时不得事后补入 `基线脏文件`。
 
