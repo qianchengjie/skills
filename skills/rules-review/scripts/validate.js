@@ -277,6 +277,9 @@ function sealDispatchMode(args, result) {
   let sealed;
   try {
     const { root, dispatchPath } = loadRepository(args.input);
+    if (draft.reviewRange && Object.prototype.hasOwnProperty.call(draft.reviewRange, 'targetTree')) {
+      throw new Error('sealed dispatch cannot be resealed; create a fresh run for a new TARGET');
+    }
     if (!isNonEmptyString(args.base)) throw new Error('seal-dispatch requires --base <revision>');
     const selectors = [
       ['current', args.current === true],
@@ -583,7 +586,9 @@ function resolveTree(root, revision) {
 }
 
 function resolveTreeObject(root, revision) {
+  if (!GIT_OID_RE.test(revision || '')) throw new Error('target-tree must be a normalized 40 or 64 character lowercase object ID');
   const objectId = normalizeGitOid(git(root, ['rev-parse', '--verify', '--end-of-options', revision], { encoding: 'utf8' }).trim(), `Git object ${revision}`);
+  if (objectId !== revision) throw new Error('target-tree must use its normalized object ID');
   if (git(root, ['cat-file', '-t', objectId], { encoding: 'utf8' }).trim() !== 'tree') throw new Error(`target-tree must resolve directly to a tree object: ${revision}`);
   return objectId;
 }
@@ -596,7 +601,7 @@ function listTreeChangedFiles(root, baseTree, targetTree) {
   return [...new Set(files.map((repoPath) => {
     assertSafeRepoRelativePath(repoPath);
     return repoPath;
-  }).filter((repoPath) => !isRulesReviewProtocolPath(repoPath)))].sort(compareStrings);
+  }))].sort(compareStrings);
 }
 
 function readTreeEntry(root, tree, repoPath) {
@@ -656,8 +661,8 @@ function validateSealedInputShape(dispatch, reviewItems, artifact, result) {
       const refs = validateRepoPathArray(target && target.inputRefs, artifact, result, 'D202', pointer, !required);
       if (required && refs.length === 0) addViolation(result, 'D203', artifact, pointer, 'changedUnits and reviewItem targets require non-empty inputRefs', 'non-empty inputRefs', target && target.inputRefs);
       refs.forEach((repoPath) => {
-        if (isRulesReviewProtocolPath(repoPath) || isRuleInputPath(repoPath)) {
-          addViolation(result, 'D217', artifact, pointer, 'inputRefs must exclude rules-review protocol and rule input paths', 'code/config/contract path', repoPath);
+        if (isRuleInputPath(repoPath)) {
+          addViolation(result, 'D217', artifact, pointer, 'inputRefs must exclude rule input paths', 'code/config/contract path', repoPath);
         }
         allInputRefs.add(repoPath);
       });
@@ -833,10 +838,6 @@ function verifyTreeDispatchInputs(dispatch, currentInputPath, artifact, result) 
   } catch (error) {
     addViolation(result, 'D240', artifact, null, `Git tree input verification failed closed: ${error.message}`, 'sealed baseTree, targetTree, blobs, and snapshots', error.message, 2);
   }
-}
-
-function isRulesReviewProtocolPath(repoPath) {
-  return repoPath === '.rules-review-tmp' || repoPath.startsWith('.rules-review-tmp/');
 }
 
 function isRuleInputPath(repoPath) {
@@ -1370,16 +1371,31 @@ function validateExecutionModeAgainstPolicy(executionPlan, dispatch, artifact, r
 function validateTask(task, artifact, result, currentInputPath = artifact) {
   expectKind(task, artifact, result, 'T002', 'rules-review-task');
   validateSchemaVersion(task, artifact, result, 'T003');
-  const requiredFields = ['kind', 'schemaVersion', 'runId', 'reviewBatchId', 'ruleSetId', 'reviewRange', 'inputSnapshot', 'reviewItems', 'rules', 'targets', 'applicabilityMatrix', 'outputContract'];
+  const requiredFields = ['kind', 'schemaVersion', 'runId', 'reviewBatchId', 'taskHash', 'ruleSetId', 'reviewRange', 'ruleSnapshot', 'inputSnapshot', 'reviewItems', 'rules', 'targets', 'applicabilityMatrix', 'outputContract'];
   requireFields(task, artifact, result, 'T004', '', requiredFields);
   rejectUnsupportedFields(task, artifact, result, 'T042', '', requiredFields, 'task');
   if (!isSafeToken(task && task.runId)) addViolation(result, 'T022', artifact, '/runId', 'task runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', task && task.runId);
   if (!isSafeToken(task && task.reviewBatchId)) addViolation(result, 'T025', artifact, '/reviewBatchId', 'task reviewBatchId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', task && task.reviewBatchId);
+  const expectedTaskHash = calculateTaskHash(task);
+  if (!SHA256_RE.test((task && task.taskHash) || '')) {
+    addViolation(result, 'T047', artifact, '/taskHash', 'taskHash must use sha256:<64hex>', 'sha256:<64hex>', task && task.taskHash);
+  } else if (task.taskHash !== expectedTaskHash) {
+    addViolation(result, 'T048', artifact, '/taskHash', 'taskHash must equal the canonical task content excluding taskHash', expectedTaskHash, task.taskHash);
+  }
   if (!Array.isArray(task.reviewItems)) addViolation(result, 'T005', artifact, '/reviewItems', 'reviewItems must be array', 'array', task.reviewItems);
   if (!Array.isArray(task.rules)) addViolation(result, 'T006', artifact, '/rules', 'rules must be array', 'array', task.rules);
   if (!Array.isArray(task.targets)) addViolation(result, 'T007', artifact, '/targets', 'targets must be array', 'array', task.targets);
   if (!Array.isArray(task.applicabilityMatrix)) addViolation(result, 'T018', artifact, '/applicabilityMatrix', 'applicabilityMatrix must be array', 'array', task.applicabilityMatrix);
   validateReviewRangeShape(task.reviewRange, artifact, result);
+  const ruleIndexSnapshot = asArray(task && task.ruleSnapshot && task.ruleSnapshot.files)
+    .find((entry) => entry && entry.path === '.agents/rules/index.md');
+  validateRuleSnapshotShape({
+    ruleSnapshot: task && task.ruleSnapshot,
+    ruleSet: {
+      sourceIndexHash: ruleIndexSnapshot && ruleIndexSnapshot.contentHash,
+      ruleSources: asArray(task && task.rules),
+    },
+  }, artifact, result);
   validateTaskTreeInputs(task, currentInputPath, artifact, result);
 
   asArray(task.reviewItems).forEach((item, index) => {
@@ -1418,6 +1434,10 @@ function validateTaskTreeInputs(task, currentInputPath, artifact, result) {
     addViolation(result, 'T044', artifact, '/inputSnapshot/files', 'task inputSnapshot.files must be an array', 'array', task && task.inputSnapshot && task.inputSnapshot.files);
     return;
   }
+  if (!isObject(task && task.ruleSnapshot) || !Array.isArray(task.ruleSnapshot.files)) {
+    addViolation(result, 'T046', artifact, '/ruleSnapshot/files', 'task ruleSnapshot.files must be an array', 'array', task && task.ruleSnapshot && task.ruleSnapshot.files);
+    return;
+  }
   try {
     const { root } = loadRepository(currentInputPath);
     const baseCommit = resolveCommit(root, task.reviewRange.baseCommit);
@@ -1431,6 +1451,10 @@ function validateTaskTreeInputs(task, currentInputPath, artifact, result) {
     task.inputSnapshot.files.forEach((entry) => {
       const actual = snapshotTreeInput(root, targetTree, entry.inputRef);
       if (canonicalStringify(actual) !== canonicalStringify(entry)) throw new Error(`task targetTree input snapshot mismatch for ${entry.inputRef}`);
+    });
+    task.ruleSnapshot.files.forEach((entry) => {
+      const actual = snapshotRuleFile(root, targetTree, entry.path);
+      if (canonicalStringify(actual) !== canonicalStringify(entry)) throw new Error(`task targetTree rule snapshot mismatch for ${entry.path}`);
     });
   } catch (error) {
     addViolation(result, 'T045', artifact, '/reviewRange', `task Git tree verification failed closed: ${error.message}`, 'available immutable range and blobs', error.message, 2);
@@ -1519,12 +1543,17 @@ function validateRetryTask(retryTask, artifact, result) {
 function validateShard(shard, task, artifact, result) {
   expectKind(shard, artifact, result, 'S002', 'rules-review-shard');
   validateSchemaVersion(shard, artifact, result, 'S003');
-  requireFields(shard, artifact, result, 'S004', '', ['kind', 'schemaVersion', 'runId', 'reviewBatchId', 'results']);
+  requireFields(shard, artifact, result, 'S004', '', ['kind', 'schemaVersion', 'runId', 'reviewBatchId', 'targetTree', 'taskHash', 'results']);
   if (!isSafeToken(shard && shard.runId)) addViolation(result, 'S023', artifact, '/runId', 'shard runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', shard && shard.runId);
   if (!isSafeToken(shard && shard.reviewBatchId)) addViolation(result, 'S024', artifact, '/reviewBatchId', 'shard reviewBatchId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', shard && shard.reviewBatchId);
+  if (!GIT_OID_RE.test((shard && shard.targetTree) || '')) addViolation(result, 'S025', artifact, '/targetTree', 'shard targetTree must be a normalized Git object ID', '40 or 64 lowercase hex', shard && shard.targetTree);
+  if (!SHA256_RE.test((shard && shard.taskHash) || '')) addViolation(result, 'S027', artifact, '/taskHash', 'shard taskHash must use sha256:<64hex>', 'sha256:<64hex>', shard && shard.taskHash);
   if (task) {
     if (shard.runId !== task.runId) addViolation(result, 'S005', artifact, '/runId', 'shard runId must match task runId', task.runId, shard.runId);
     if (shard.reviewBatchId !== task.reviewBatchId) addViolation(result, 'S006', artifact, '/reviewBatchId', 'shard reviewBatchId must match task reviewBatchId', task.reviewBatchId, shard.reviewBatchId);
+    if (shard.targetTree !== (task.reviewRange && task.reviewRange.targetTree)) addViolation(result, 'S026', artifact, '/targetTree', 'shard targetTree must match task targetTree', task.reviewRange && task.reviewRange.targetTree, shard.targetTree);
+    const expectedTaskHash = calculateTaskHash(task);
+    if (shard.taskHash !== expectedTaskHash) addViolation(result, 'S028', artifact, '/taskHash', 'shard taskHash must match the canonical task identity', expectedTaskHash, shard.taskHash);
   }
   if (!Array.isArray(shard.results)) {
     addViolation(result, 'S007', artifact, '/results', 'results must be array', 'array', shard.results);
@@ -1744,6 +1773,12 @@ function canonicalStringify(value) {
     .join(',')}}`;
 }
 
+function calculateTaskHash(task) {
+  const content = { ...task };
+  delete content.taskHash;
+  return hashBytes(Buffer.from(canonicalStringify(content), 'utf8'));
+}
+
 function calculateShouldSetHash(finalReview) {
   const findings = asArray(finalReview && finalReview.findings)
     .filter((finding) => finding && finding.priority === 'should_fix')
@@ -1935,6 +1970,10 @@ function validateTaskAgainstDispatch(task, dispatch, batch, reviewItems, artifac
   }
   if (canonicalStringify(task.inputSnapshot) !== canonicalStringify(dispatch.inputSnapshot)) {
     addViolation(result, 'RUN039', artifact, '/inputSnapshot', 'task inputSnapshot must equal dispatch inputSnapshot', dispatch.inputSnapshot, task.inputSnapshot);
+  }
+  const expectedRuleSnapshot = projectRuleSnapshot(dispatch.ruleSnapshot, task.rules);
+  if (canonicalStringify(task.ruleSnapshot) !== canonicalStringify(expectedRuleSnapshot)) {
+    addViolation(result, 'RUN052', artifact, '/ruleSnapshot', 'task ruleSnapshot must equal the sealed dispatch snapshot for its rules', expectedRuleSnapshot, task.ruleSnapshot);
   }
 
   const expectedItemIds = asArray(batch.reviewItemIds);
@@ -2253,12 +2292,24 @@ function buildTasksMode(args, result) {
       return;
     }
   }
+  const reviewItems = new Map(asArray(dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
+  const outputs = tasks.map(({ batch, task }) => {
+    const outputPath = path.join(outputDir, path.basename(batch.taskRef || `${batch.reviewBatchId}.json`));
+    return { batch, task, outputPath, content: `${JSON.stringify(task, null, 2)}\n` };
+  });
+  const conflict = outputs.find(({ outputPath, content }) => {
+    if (!fs.existsSync(outputPath)) return false;
+    const stat = fs.lstatSync(outputPath);
+    return stat.isSymbolicLink() || !stat.isFile() || fs.readFileSync(outputPath, 'utf8') !== content;
+  });
+  if (conflict) {
+    addViolation(result, 'BT003', conflict.outputPath, '/out', 'build-tasks refuses to overwrite an existing task with different bytes', 'absent task or byte-identical task', conflict.outputPath, 2);
+    return;
+  }
   fs.mkdirSync(outputDir, { recursive: true });
   const written = [];
-  const reviewItems = new Map(asArray(dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
-  tasks.forEach(({ batch, task }) => {
-    const outputPath = path.join(outputDir, path.basename(batch.taskRef || `${batch.reviewBatchId}.json`));
-    fs.writeFileSync(outputPath, `${JSON.stringify(task, null, 2)}\n`);
+  outputs.forEach(({ batch, task, outputPath, content }) => {
+    if (!fs.existsSync(outputPath)) fs.writeFileSync(outputPath, content);
     validateTask(task, outputPath, result);
     validateTaskAgainstDispatch(task, dispatch, batch, reviewItems, outputPath, result);
     written.push(outputPath);
@@ -2277,7 +2328,8 @@ function buildTasks(dispatch) {
     const targetIds = new Set(reviewItems.map((item) => item.targetId));
     const applicabilityRows = asArray(dispatch.applicabilityMatrix)
       .filter((entry) => entry && entry.reviewItemId && itemIds.includes(entry.reviewItemId));
-    return {
+    const rules = asArray(dispatch.ruleSet.ruleSources).filter((source) => source && ruleRefs.has(source.ruleRef) && ruleSourcesByRuleRef.has(source.ruleRef));
+    const output = {
       batch,
       task: {
         kind: 'rules-review-task',
@@ -2286,9 +2338,10 @@ function buildTasks(dispatch) {
         reviewBatchId: batch.reviewBatchId,
         ruleSetId: dispatch.ruleSet.ruleSetId,
         reviewRange: dispatch.reviewRange,
+        ruleSnapshot: projectRuleSnapshot(dispatch.ruleSnapshot, rules),
         inputSnapshot: dispatch.inputSnapshot,
         reviewItems,
-        rules: asArray(dispatch.ruleSet.ruleSources).filter((source) => source && ruleRefs.has(source.ruleRef) && ruleSourcesByRuleRef.has(source.ruleRef)),
+        rules,
         targets: [...asArray(dispatch.targets && dispatch.targets.changedUnits), ...asArray(dispatch.targets && dispatch.targets.candidates)]
           .filter((target) => target && targetIds.has(target.targetId) && targetsById.has(target.targetId))
           .map((target) => {
@@ -2303,7 +2356,14 @@ function buildTasks(dispatch) {
         },
       },
     };
+    output.task.taskHash = calculateTaskHash(output.task);
+    return output;
   });
+}
+
+function projectRuleSnapshot(ruleSnapshot, rules) {
+  const paths = new Set(['.agents/rules/index.md', ...asArray(rules).map((rule) => rule && rule.sourceFile).filter(Boolean)]);
+  return { files: asArray(ruleSnapshot && ruleSnapshot.files).filter((entry) => entry && paths.has(entry.path)) };
 }
 
 function aggregateFinalMode(args, result) {

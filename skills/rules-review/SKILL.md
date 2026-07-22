@@ -34,7 +34,7 @@ node scripts/validate.js --mode seal-dispatch \
   [--current | --staged | --target-commit <revision> | --target-tree <oid>]
 ```
 
-四个 TARGET selector 必须恰好出现一个。`seal-dispatch` 使用临时 index 构造 tree，不修改真实 index、工作文件、staged/unstaged 状态或 worktree 列表。作为命令控制输入的当前 `dispatch.json` 不属于 TARGET；除此之外，包括 `.rules-review-tmp/` 兄弟路径在内的当前变更都按 Git `current` 输入封印，不做目录级静默排除。
+四个 TARGET selector 必须恰好出现一个。`--target-tree` 只接受参数自身就是规范 40/64 位小写 object ID 的 tree，不接受 ref 或 revision 表达式。`seal-dispatch` 使用临时 index 构造 tree，不修改真实 index、工作文件、staged/unstaged 状态或 worktree 列表。作为命令控制输入的当前 `dispatch.json` 不属于 TARGET；除此之外，包括 `.rules-review-tmp/` 兄弟路径在内的当前变更都按 Git `current` 输入封印，不做目录级静默排除。已经带有 `targetTree` 的 dispatch 不得原地重封；新 TARGET 必须创建新 run。
 
 ## 2. 不可变输入
 
@@ -159,8 +159,8 @@ ruleRef x targetId = reviewItem
 所有 agent 间工件必须是 strict JSON。
 
 - `dispatch.json`：controller 的规则、目标、适用性、固定 range 和分派计划；不得含审查结论。
-- `tasks/*.json`：由 `build-tasks` 从 dispatch 机械投影，携带相同 `reviewRange` 与 `inputSnapshot`。
-- `shards/*.json`：reviewer 对本 batch 的当前结果；是产生 `passed / finding / observation / not_applicable / cannot_verify` 的唯一位置。
+- `tasks/*.json`：由 `build-tasks` 从 dispatch 机械投影，携带相同 `reviewRange`、`inputSnapshot`，以及规则索引和本批规则的 `ruleSnapshot`；`taskHash` 是删除自身字段后整份 task 的 canonical JSON SHA-256。
+- `shards/*.json`：reviewer 对本 batch 的当前结果，必须回显 task 的 `targetTree` 与 `taskHash`；是产生 `passed / finding / observation / not_applicable / cannot_verify` 的唯一位置。
 - `finalReview.json`：由 `aggregate-final` 仅从当前 run 的 shards 聚合。
 - `final.md`、`response.md`：展示层，不是事实源。
 

@@ -1911,6 +1911,7 @@ async function sealSliceTarget(planDir, sliceId, options) {
       throw gateError('seal-target cannot change BASE or seedCommit within one slice review chain');
     }
     if (existing.targetTree !== previousTargetTree) throw gateError('repair previousTargetTree must equal the prior sealed targetTree');
+    await assertPriorTargetRulesReviewClosed(planDir, sliceId, existing);
   } else if (commitTree(root, seedCommit) !== previousTargetTree) {
     throw gateError('initial previousTargetTree must equal seedCommit tree');
   }
@@ -3377,6 +3378,16 @@ function readGeneralReviewAuditSnapshot(auditId, audits, { visited = new Set() }
     }
   }
 
+  if (previousReview.value === '无' && reviewType.value !== 'full') {
+    errors.push(`audits.md:${auditId}: first General Review must be full`);
+  }
+  if (previousSnapshot) {
+    const expectedReviewType = deriveNextGeneralReviewType(previousSnapshot);
+    if (reviewType.value !== expectedReviewType) {
+      errors.push(`audits.md:${auditId}: reviewType must be ${expectedReviewType} after direct previousReview ${previousReview.value}`);
+    }
+  }
+
   if (reviewType.value === 'repair' && previousSnapshot && !repairResults.invalid && !repairResults.missing && !findings.invalid && !findings.missing) {
     const previousIds = new Set(previousSnapshot.findings.items.map((item) => item.id));
     const resultById = new Map();
@@ -3425,6 +3436,72 @@ function readGeneralReviewAuditSnapshot(auditId, audits, { visited = new Set() }
   };
 }
 
+function deriveNextGeneralReviewType(snapshot) {
+  const hasOpenFindings = snapshot.findings.items.length > 0;
+  const fullHasNegativeVerdict = snapshot.reviewType === 'full'
+    && snapshot.verdicts.items.some((item) => item.status !== 'passed');
+  if (snapshot.reviewType === 'repair' && !hasOpenFindings) return 'full';
+  return hasOpenFindings || fullHasNegativeVerdict ? 'repair' : 'full';
+}
+
+function resolveGeneralReviewAuditTip(sliceId, sliceBody, audits) {
+  const errors = [];
+  const association = parseAssociationItems(sliceBody);
+  const associated = new Map(association.items.map((item) => [item.id, item.status]));
+  const auditIds = [];
+  for (const [auditId, audit] of audits) {
+    const isGeneralReview = parseSingleTopLevelField(audit.body, 'reviewType').values.length > 0
+      || hasSubsection(audit.body, GENERAL_REVIEW_FINDINGS_SECTION)
+      || hasSubsection(audit.body, GENERAL_REVIEW_REPAIR_RESULTS_SECTION);
+    if (!isGeneralReview) continue;
+    const relatesToSlice = extractIds(getListFieldValue(audit.body, '关联'), SLICE_REF_RE).includes(sliceId);
+    const isAssociated = associated.has(auditId);
+    if (!relatesToSlice && !isAssociated) continue;
+    auditIds.push(auditId);
+    if (!relatesToSlice) errors.push(`audits.md:${auditId}: General Review audit must belong to ${sliceId}`);
+    if (associated.get(auditId) !== 'done') {
+      errors.push(`plan.md:${sliceId}: General Review audit ${auditId} must be associated as done`);
+    }
+  }
+  const auditIdSet = new Set(auditIds);
+  const previousByAudit = new Map(auditIds.map((auditId) => [
+    auditId,
+    parseSingleTopLevelField(audits.get(auditId).body, 'previousReview').value,
+  ]));
+  for (const [auditId, previous] of previousByAudit) {
+    if (previous && previous !== '无' && !auditIdSet.has(previous)) {
+      errors.push(`audits.md:${auditId}: previousReview ${previous} must belong to General Review audits for ${sliceId}`);
+    }
+  }
+  const referenced = new Set([...previousByAudit.values()].filter((previous) => auditIdSet.has(previous)));
+  const tips = auditIds.filter((auditId) => !referenced.has(auditId));
+  if (auditIds.length > 0 && tips.length !== 1) {
+    errors.push(`plan.md:${sliceId}: General Review audits must have exactly one latest direct-chain tip, got ${tips.join(', ') || 'none'}`);
+  }
+  if (tips.length === 1) {
+    const visited = new Set();
+    let current = tips[0];
+    let reachedRoot = false;
+    while (auditIdSet.has(current) && !visited.has(current)) {
+      visited.add(current);
+      const previous = previousByAudit.get(current);
+      if (previous === '无') {
+        reachedRoot = true;
+        break;
+      }
+      current = previous;
+    }
+    if (!reachedRoot) {
+      errors.push(`plan.md:${sliceId}: latest General Review direct chain must terminate at 无 without a cycle`);
+    }
+    const missing = auditIds.filter((auditId) => !visited.has(auditId));
+    if (missing.length > 0) {
+      errors.push(`plan.md:${sliceId}: latest General Review direct chain must cover every audit, missing ${missing.join(', ')}`);
+    }
+  }
+  return { errors, auditIds, tip: tips.length === 1 ? tips[0] : undefined };
+}
+
 function resolveCurrentGeneralReviewAudit(sliceId, sliceBody, audits) {
   const errors = [];
   const section = getSubsection(sliceBody, SLICE_AI_REVIEW_VERDICTS_SECTION);
@@ -3433,6 +3510,11 @@ function resolveCurrentGeneralReviewAudit(sliceId, sliceBody, audits) {
     return { errors: [`plan.md:${sliceId}: ${SLICE_AI_REVIEW_VERDICTS_SECTION} must select exactly one General Review audit A*`] };
   }
   const auditId = selector.value;
+  const topology = resolveGeneralReviewAuditTip(sliceId, sliceBody, audits);
+  errors.push(...topology.errors);
+  if (topology.tip && topology.tip !== auditId) {
+    errors.push(`plan.md:${sliceId}: current general review audit must be latest direct-chain tip ${topology.tip}, got ${auditId}`);
+  }
   const association = parseAssociationItems(sliceBody);
   const associationItem = association.items.find((item) => item.id === auditId);
   if (!associationItem || associationItem.status !== 'done') {
@@ -3466,28 +3548,14 @@ function resolveGeneralReviewPackageContext(sliceId, sliceBody, audits) {
   const header = getSliceHeaderBlock(sliceBody);
   const aiReview = getField(header, 'AI Review');
   const aiReviewStatus = getStatusPrefix(aiReview);
-  const reason = getStatusReason(aiReview);
-  const explicitFull = aiReviewStatus === 'pending' ? /^full[：:]\s*(.+)$/i.exec(reason) : undefined;
   const selector = parseSingleTopLevelField(getSubsection(sliceBody, SLICE_AI_REVIEW_VERDICTS_SECTION), 'General Review audit');
 
-  if (explicitFull) {
-    if (isPlaceholderText(explicitFull[1]) || hasTemplatePlaceholder(explicitFull[1])) {
-      return { errors: [`plan.md:${sliceId}: full re-review requires a non-placeholder full reason`] };
-    }
-    if (selector.values.length === 0) {
-      return { errors: [], reviewType: 'full', previousReview: '无', previousAuditBody: '- 无' };
-    }
-    const current = resolveCurrentGeneralReviewAudit(sliceId, sliceBody, audits);
-    if (current.errors.length > 0) return { errors: current.errors };
-    return {
-      errors: [],
-      reviewType: 'full',
-      previousReview: current.auditId,
-      previousAuditBody: audits.get(current.auditId).body.trimEnd(),
-    };
-  }
-
   if (aiReviewStatus === 'pending' && selector.values.length === 0) {
+    const topology = resolveGeneralReviewAuditTip(sliceId, sliceBody, audits);
+    if (topology.errors.length > 0) return { errors: topology.errors };
+    if (topology.auditIds.length > 0) {
+      return { errors: [`plan.md:${sliceId}: existing General Review audit ${topology.tip} must be selected before generating another package`] };
+    }
     return {
       errors: [],
       reviewType: 'full',
@@ -3498,15 +3566,9 @@ function resolveGeneralReviewPackageContext(sliceId, sliceBody, audits) {
 
   const current = resolveCurrentGeneralReviewAudit(sliceId, sliceBody, audits);
   if (current.errors.length > 0) return { errors: current.errors };
-  const hasOpenFindings = current.snapshot.findings.items.length > 0;
-  const fullHasNegativeVerdict = current.snapshot.reviewType === 'full'
-    && current.snapshot.verdicts.items.some((item) => item.status !== 'passed');
-  const reviewType = current.snapshot.reviewType === 'repair' && !hasOpenFindings
-    ? 'full'
-    : hasOpenFindings || fullHasNegativeVerdict ? 'repair' : 'full';
   return {
     errors: [],
-    reviewType,
+    reviewType: deriveNextGeneralReviewType(current.snapshot),
     previousReview: current.auditId,
     previousAuditBody: audits.get(current.auditId).body.trimEnd(),
   };
@@ -3788,6 +3850,142 @@ async function readRulesReviewProjectionForClose(runId) {
     };
   } catch (error) {
     return { errors: [error.message] };
+  }
+}
+
+function readGeneralReviewChain(auditId, audits) {
+  const chain = [];
+  const seen = new Set();
+  let current = auditId;
+  while (current !== '无') {
+    if (seen.has(current)) return { errors: [`General Review chain repeats ${current}`], chain: [] };
+    seen.add(current);
+    const result = readGeneralReviewAuditSnapshot(current, audits);
+    if (result.errors.length > 0 || !result.snapshot) return { errors: result.errors, chain: [] };
+    chain.push({ auditId: current, ...result.snapshot });
+    current = result.snapshot.previousReview;
+  }
+  return { errors: [], chain: chain.reverse() };
+}
+
+async function validateRulesReviewTargetCoverage(
+  sliceId,
+  sliceBody,
+  audits,
+  currentGeneralAuditId,
+  cachedRuns = new Map(),
+) {
+  const chainResult = readGeneralReviewChain(currentGeneralAuditId, audits);
+  if (chainResult.errors.length > 0) return chainResult.errors;
+  const targets = new Map();
+  for (const review of chainResult.chain) {
+    if (!targets.has(review.targetTree)) targets.set(review.targetTree, review);
+  }
+
+  const errors = [];
+  const repoRoot = await resolveGitRepoRoot();
+  const association = new Map(parseAssociationItems(sliceBody).items.map((item) => [item.id, item.status]));
+  const coveredTargets = new Map([...targets.keys()].map((targetTree) => [targetTree, new Set()]));
+  const runTargets = new Map();
+  const seenRunIds = new Set();
+  for (const [auditId, audit] of audits) {
+    const runIdField = parseSingleTopLevelField(audit.body, 'rulesReviewRunId');
+    if (runIdField.values.length === 0) continue;
+    const relatesToSlice = extractIds(getListFieldValue(audit.body, '关联'), SLICE_REF_RE).includes(sliceId);
+    if (!relatesToSlice || association.get(auditId) !== 'done' || getField(audit.body, '状态') !== 'done') continue;
+    if (runIdField.values.length !== 1 || !isSafeRulesReviewRunId(runIdField.value)) {
+      errors.push(`${sliceId}: ${auditId} must bind exactly one safe rulesReviewRunId`);
+      continue;
+    }
+    const runId = runIdField.value;
+    if (seenRunIds.has(runId)) {
+      errors.push(`${sliceId}: rules-review run ${runId} must not be reused by multiple A*`);
+      continue;
+    }
+    seenRunIds.add(runId);
+
+    let runResult = cachedRuns.get(runId);
+    if (!runResult) {
+      runResult = await readRulesReviewProjectionForClose(runId);
+      cachedRuns.set(runId, runResult);
+    }
+    if (runResult.errors.length > 0 || !runResult.projection) {
+      errors.push(...runResult.errors.map((error) => `${sliceId}: ${auditId} ${error}`));
+      continue;
+    }
+    const projection = runResult.projection;
+    if (!validateAuditDisplayCommand(getListFieldValue(audit.body, 'validation'), runId, projection.runDir)) {
+      errors.push(`${sliceId}: ${auditId} validation must display its passed rules-review run`);
+    }
+    if (!sameStringSet(parseRuleIds(getListFieldValues(audit.body, 'selectedRuleIds')), projection.selectedRuleRefs)) {
+      errors.push(`${sliceId}: ${auditId} selectedRuleIds must match rules-review run ${runId}`);
+    }
+    const review = targets.get(projection.reviewRange?.targetTree);
+    if (!review) {
+      errors.push(`${sliceId}: ${auditId} rules-review targetTree does not match any General Review TARGET`);
+      continue;
+    }
+    let identityMatches = true;
+    for (const field of ['baseCommit', 'baseTree', 'targetTree']) {
+      if (projection.reviewRange?.[field] !== review[field]) {
+        errors.push(`${sliceId}: ${auditId} rules-review ${field} must match General Review TARGET ${review.auditId}`);
+        identityMatches = false;
+      }
+    }
+    if (projection.reviewRange?.seedCommit !== undefined && projection.reviewRange.seedCommit !== review.seedCommit) {
+      errors.push(`${sliceId}: ${auditId} rules-review seedCommit must match General Review TARGET ${review.auditId}`);
+      identityMatches = false;
+    }
+    const expectedFiles = listTreeChangedFiles(repoRoot, review.baseTree, review.targetTree);
+    if (!sameStringSet(projection.changedFiles, expectedFiles)) {
+      errors.push(`${sliceId}: ${auditId} rules-review changed files must cover its complete General Review TARGET`);
+      identityMatches = false;
+    }
+    const snapshotFiles = new Set(projection.inputSnapshotRefs);
+    const coveredFiles = new Set(projection.changedUnitInputRefs.flat());
+    for (const file of expectedFiles.filter((item) => !isRuleReviewInternalPath(item))) {
+      if (!snapshotFiles.has(file) || !coveredFiles.has(file)) {
+        errors.push(`${sliceId}: ${auditId} rules-review snapshot/reviewItems must cover ${file}`);
+        identityMatches = false;
+      }
+    }
+    if (identityMatches) coveredTargets.get(review.targetTree).add(runId);
+    runTargets.set(runId, projection.reviewRange?.targetTree);
+  }
+
+  for (const [targetTree, review] of targets) {
+    if (coveredTargets.get(targetTree).size === 0) {
+      errors.push(`${sliceId}: General Review TARGET ${review.auditId}/${targetTree} requires an independent rules-review run`);
+    }
+  }
+  const selector = parseRulesReviewRunSelector(sliceBody);
+  const latestTargetTree = chainResult.chain.at(-1)?.targetTree;
+  if (selector.values.length !== 1 || runTargets.get(selector.runId) !== latestTargetTree) {
+    errors.push(`${sliceId}: current rules-review runId must select the latest General Review TARGET`);
+  }
+  return errors;
+}
+
+async function assertPriorTargetRulesReviewClosed(planDir, sliceId, range) {
+  const [plan, auditsMarkdown] = await Promise.all([
+    fs.readFile(path.join(planDir, 'plan.md'), 'utf8'),
+    fs.readFile(path.join(planDir, 'audits.md'), 'utf8'),
+  ]);
+  const slice = getBlocks(getSection(plan, '切片'), SLICE_ID_RE).get(sliceId);
+  if (!slice) throw usageError(`seal-target: slice ${sliceId} does not exist`);
+  const projectRuleReview = parseProjectRuleReview(getSubsection(slice.body, SLICE_CONTEXT_PREFLIGHT_SECTION));
+  if (projectRuleReview.status !== 'required') return;
+  const audits = getBlocks(auditsMarkdown, AUDIT_ID_RE);
+  const current = resolveCurrentGeneralReviewAudit(sliceId, slice.body, audits);
+  const errors = [...current.errors];
+  if (current.snapshot?.targetTree !== range.targetTree) {
+    errors.push(`${sliceId}: current General Review audit must bind the prior sealed TARGET`);
+  }
+  if (current.auditId) {
+    errors.push(...await validateRulesReviewTargetCoverage(sliceId, slice.body, audits, current.auditId));
+  }
+  if (errors.length > 0) {
+    throw gateError(`seal-target:${sliceId}: prior TARGET review is not closed: ${errors.join('; ')}`);
   }
 }
 
@@ -4139,6 +4337,17 @@ async function validateProjectRuleReviewVerdictForClose(
         decisions,
         zeroKnownDefectsClosure,
       ));
+    }
+    const currentGeneral = resolveCurrentGeneralReviewAudit(sliceId, sliceBody, audits);
+    if (currentGeneral.errors.length === 0 && currentGeneral.auditId) {
+      const cachedRuns = new Map([[selector.runId, runResult]]);
+      errors.push(...(await validateRulesReviewTargetCoverage(
+        sliceId,
+        sliceBody,
+        audits,
+        currentGeneral.auditId,
+        cachedRuns,
+      )).map((error) => `close-check:${error}`));
     }
   }
 
@@ -5385,6 +5594,13 @@ function validateSliceBlock(id, body, slices, decisions, audits, referencedDecis
     }
   }
   validateReviewVerdicts(id, body, { status, aiReview }, errors);
+  const generalReviewSelector = parseSingleTopLevelField(
+    getSubsection(body, SLICE_AI_REVIEW_VERDICTS_SECTION),
+    'General Review audit',
+  );
+  if (generalReviewSelector.values.length > 0) {
+    errors.push(...resolveCurrentGeneralReviewAudit(id, body, audits).errors);
+  }
   if (!gateNotes.trim()) errors.push(`plan.md:${id}: missing 门禁记录`);
   if (!getSubsection(body, SLICE_WHAT_SECTION).trim()) errors.push(`plan.md:${id}: missing ${SLICE_WHAT_SECTION}`);
   if (!getSubsection(body, '验收').trim()) errors.push(`plan.md:${id}: missing 验收`);

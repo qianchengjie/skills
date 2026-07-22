@@ -24,7 +24,7 @@ git show <targetTree>:<path>
 
 输出必须是符合 shard schema 的 strict JSON：
 
-- `runId`、`reviewBatchId` 与 task 一致。
+- `runId`、`reviewBatchId` 与 task 一致，`targetTree` 等于 task 的 `reviewRange.targetTree`，`taskHash` 原样回显 task 的机械身份。
 - 每个 task reviewItem 恰好返回一个 result。
 - `passed` 包含 evidence 与 failureChecks。
 - `finding` 包含 origin 与 evidence，不含 findingId。

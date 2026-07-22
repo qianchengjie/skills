@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -913,6 +914,7 @@ async function markWholeReviewPassed(planDir) {
 }
 
 async function appendProjectRuleReviewAudit(planDir, {
+  id = 'A2',
   runId,
   selectedRuleRefs = ['CORE-001', 'TYPE-001', 'UI-001'],
   validation = `node .agents/skills/rules-review/scripts/validate.js --mode run --dir .rules-review-tmp/${runId} => passed`,
@@ -955,7 +957,7 @@ async function appendProjectRuleReviewAudit(planDir, {
     auditsPath,
     `${audits.trimEnd()}
 
-### A2：项目规则审查 S1
+### ${id}：项目规则审查 S1
 
 ${lines.join('\n')}
 `,
@@ -965,7 +967,7 @@ ${lines.join('\n')}
   const plan = await fs.readFile(planPath, 'utf8');
   await fs.writeFile(
     planPath,
-    plan.replace('| A1 | done |', '| A1 | done |\n| A2 | done |'),
+    plan.replace('| A1 | done |', `| A1 | done |\n| ${id} | done |`),
     'utf8',
   );
 }
@@ -1084,6 +1086,7 @@ async function writeCloseCheckHandoffFixtures(
   if (applyExtraWorkspaceChanges) await applyExtraWorkspaceChanges();
   if (hasCodeChange) await sealCurrentWorkspaceFixture(planDir, sliceId, { beforeTree });
   await writeGeneratedReviewPackageFixture(planDir, sliceId);
+  await selectGeneralReviewAudit(planDir, 'A9');
   if (rulesReview) {
     const result = runDevPlanCli(['rule-review-package', planDir, sliceId]);
     assert.equal(result.status, 0, result.stderr.toString());
@@ -1133,7 +1136,10 @@ function initGitRepo() {
   execFileSync('git', ['config', 'user.name', 'Test User']);
 }
 
-async function materializeRulesReviewV4RunFixture({ hasCodeChange = true } = {}) {
+async function materializeRulesReviewV4RunFixture({
+  hasCodeChange = true,
+  runId = 'run-pass-full-clean',
+} = {}) {
   await prepareReviewableSliceDiffFixture();
   await fs.mkdir(path.join('.agents', 'rules'), { recursive: true });
   await Promise.all([
@@ -1150,7 +1156,6 @@ async function materializeRulesReviewV4RunFixture({ hasCodeChange = true } = {})
     await fs.writeFile('src/example.ts', 'export const value = 1;\n', 'utf8');
   }
 
-  const runId = 'run-pass-full-clean';
   const runDir = path.join('.rules-review-tmp', runId);
   await fs.rm(runDir, { recursive: true, force: true });
   await fs.mkdir(runDir, { recursive: true });
@@ -1249,14 +1254,24 @@ async function materializeRulesReviewV4RunFixture({ hasCodeChange = true } = {})
   ]);
   assert.equal(seal.status, 0, `${seal.stdout}\n${seal.stderr}`);
   const sealedDispatch = JSON.parse(await fs.readFile(dispatchPath, 'utf8'));
+  const buildTasks = spawnSync(process.execPath, [
+    rulesReviewValidator,
+    '--mode', 'build-tasks',
+    '--dispatch', path.join(runDir, 'dispatch.json'),
+    '--out', path.join(runDir, 'tasks'),
+  ]);
+  assert.equal(buildTasks.status, 0, buildTasks.stderr.toString());
 
   if (hasCodeChange) {
+    const task = JSON.parse(await fs.readFile(path.join(runDir, 'tasks/B001.json'), 'utf8'));
     const shardPath = path.join(runDir, 'shards/B001.json');
     await fs.mkdir(path.dirname(shardPath), { recursive: true });
     const shard = {
     kind: 'rules-review-shard',
     schemaVersion: 4,
     runId,
+    targetTree: sealedDispatch.reviewRange.targetTree,
+    taskHash: task.taskHash,
     reviewBatchId: 'B001',
     results: sealedDispatch.reviewItems.map((item) => ({
       reviewItemId: item.reviewItemId,
@@ -1273,7 +1288,6 @@ async function materializeRulesReviewV4RunFixture({ hasCodeChange = true } = {})
   }
 
   for (const args of [
-    ['--mode', 'build-tasks', '--dispatch', path.join(runDir, 'dispatch.json'), '--out', path.join(runDir, 'tasks')],
     ['--mode', 'aggregate-final', '--dir', runDir, '--output', path.join(runDir, 'finalReview.json')],
     ['--mode', 'render-final', '--input', path.join(runDir, 'finalReview.json'), '--dispatch', path.join(runDir, 'dispatch.json'), '--output', path.join(runDir, 'final.md')],
     ['--mode', 'render-response', '--dir', runDir],
@@ -1288,13 +1302,14 @@ async function materializeRulesReviewV4RunFixture({ hasCodeChange = true } = {})
 }
 
 async function prepareRulesReviewRunFixture({
+  runId = 'run-pass-full-clean',
   shouldFix = false,
   multipleShouldFix = false,
   mustFix = false,
   cannotVerify = false,
   hasCodeChange = true,
 } = {}) {
-  const { runId, runDir, selectedRuleRefs } = await materializeRulesReviewV4RunFixture({ hasCodeChange });
+  const { runDir, selectedRuleRefs } = await materializeRulesReviewV4RunFixture({ hasCodeChange, runId });
 
   if (shouldFix || mustFix || cannotVerify) {
     const shardPath = path.join(runDir, 'shards/B001.json');
@@ -4229,10 +4244,40 @@ test('General Review 按首次 full、repair、最终累计 full 收口', async 
     const beforeRepair = runDevPlanCli(['workspace-tree', '--seed', initialRange.seedCommit]);
     assert.equal(beforeRepair.status, 0, beforeRepair.stderr.toString());
     await fs.writeFile('src/example.ts', 'export const value = 3;\n', 'utf8');
+    const planBeforeRequiredRuleReview = await fs.readFile(path.join(planDir, 'plan.md'), 'utf8');
+    await fs.writeFile(
+      path.join(planDir, 'plan.md'),
+      withRequiredProjectRuleReview(planBeforeRequiredRuleReview),
+      'utf8',
+    );
+    const afterRepair = runDevPlanCli(['workspace-tree', '--seed', initialRange.seedCommit]);
+    const missingTargetRuleReview = runDevPlanCli([
+      'seal-target', planDir, 'S1',
+      '--base', initialRange.baseCommit,
+      '--seed', initialRange.seedCommit,
+      '--previous-tree', initialRange.targetTree,
+      '--before-tree', beforeRepair.stdout.toString().trim(),
+      '--after-tree', afterRepair.stdout.toString().trim(),
+    ]);
+    assert.equal(missingTargetRuleReview.status, 1, missingTargetRuleReview.stderr.toString());
+    assert.match(missingTargetRuleReview.stderr.toString(), /requires an independent rules-review run/);
+    await fs.writeFile(path.join(planDir, 'plan.md'), planBeforeRequiredRuleReview, 'utf8');
     const repairedRange = await sealCurrentWorkspaceFixture(planDir, 'S1', {
       previousTree: initialRange.targetTree,
       beforeTree: beforeRepair.stdout.toString().trim(),
     });
+
+    const planAtRepair = await fs.readFile(path.join(planDir, 'plan.md'), 'utf8');
+    await fs.writeFile(
+      path.join(planDir, 'plan.md'),
+      planAtRepair.replace('- AI Review：issues（存在开放 finding）', '- AI Review：pending（full：不得绕过 repair）'),
+      'utf8',
+    );
+    result = runDevPlanCli(['review-package', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    reviewPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1.md'), 'utf8');
+    assert.match(reviewPackage, /- reviewType：repair\n- previousReview：A2/);
+    await fs.writeFile(path.join(planDir, 'plan.md'), planAtRepair, 'utf8');
 
     result = runDevPlanCli(['review-package', planDir, 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
@@ -4251,6 +4296,18 @@ test('General Review 按首次 full、repair、最终累计 full 收口', async 
       id: 'A3',
       range: repairedRange,
       reviewPackageHash: repairHash,
+      reviewType: 'full',
+      previousReview: 'A2',
+      openFindings: [],
+    });
+    assert((await validatePlan(planDir)).some((error) => error.includes('reviewType must be repair after direct previousReview A2')));
+    await fs.writeFile(path.join(planDir, 'audits.md'), auditsBeforeMutation, 'utf8');
+    await fs.writeFile(path.join(planDir, 'plan.md'), planBeforeMutation, 'utf8');
+
+    await appendGeneralReviewV4Audit(planDir, {
+      id: 'A3',
+      range: repairedRange,
+      reviewPackageHash: repairHash,
       reviewType: 'repair',
       previousReview: 'A2',
       repairResults: [{ id: 'G1', status: 'not_addressed', evidence: 'Git Diff / focused test' }],
@@ -4263,6 +4320,7 @@ test('General Review 按首次 full、repair、最终累计 full 收口', async 
         summary: 'rewritten finding',
       }],
     });
+    assert((await validatePlan(planDir)).some((error) => error.includes('current general review audit must be latest direct-chain tip A3')));
     await selectGeneralReviewAudit(planDir, 'A3', { issues: true });
     assert((await validatePlan(planDir)).some((error) => error.includes('not_addressed finding G1 must remain unchanged')));
     await fs.writeFile(path.join(planDir, 'audits.md'), auditsBeforeMutation, 'utf8');
@@ -4329,6 +4387,67 @@ test('General Review 按首次 full、repair、最终累计 full 收口', async 
   });
 });
 
+test('General Review 拒绝跨切片 previousReview 和唯一 tip 旁挂 cycle', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-general-review-topology');
+    await writeValidExecutingPlan(planDir);
+    await writeReadyTaskHandoff(planDir, 'S1');
+    initGitRepo();
+    const beforeTree = await prepareReviewableSliceDiffFixture();
+    const range = await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    let result = runDevPlanCli(['review-package', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    const prompt = runDevPlanCli(['review-prompt', planDir, 'S1']);
+    const reviewPackageHash = /- reviewPackageHash: (sha256:[0-9a-f]{64})/.exec(prompt.stdout.toString())?.[1];
+    assert.ok(reviewPackageHash);
+
+    const planPath = path.join(planDir, 'plan.md');
+    const auditsPath = path.join(planDir, 'audits.md');
+    const basePlan = await fs.readFile(planPath, 'utf8');
+    const baseAudits = await fs.readFile(auditsPath, 'utf8');
+
+    await appendGeneralReviewV4Audit(planDir, { id: 'A8', range, reviewPackageHash });
+    await appendGeneralReviewV4Audit(planDir, {
+      id: 'A2',
+      range,
+      reviewPackageHash,
+      previousReview: 'A8',
+    });
+    await fs.writeFile(
+      auditsPath,
+      (await fs.readFile(auditsPath, 'utf8')).replace(/(### A8：[\s\S]*?- 关联：)S1/, '$1S2'),
+      'utf8',
+    );
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8')).replace('\n| A8 | done |', ''),
+      'utf8',
+    );
+    await selectGeneralReviewAudit(planDir, 'A2');
+    let errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('previousReview A8 must belong to General Review audits for S1')));
+
+    await fs.writeFile(planPath, basePlan, 'utf8');
+    await fs.writeFile(auditsPath, baseAudits, 'utf8');
+    await appendGeneralReviewV4Audit(planDir, { id: 'A2', range, reviewPackageHash });
+    await appendGeneralReviewV4Audit(planDir, {
+      id: 'A8',
+      range,
+      reviewPackageHash,
+      previousReview: 'A9',
+    });
+    await appendGeneralReviewV4Audit(planDir, {
+      id: 'A9',
+      range,
+      reviewPackageHash,
+      previousReview: 'A8',
+    });
+    await selectGeneralReviewAudit(planDir, 'A2');
+    errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('latest General Review direct chain must cover every audit, missing A8, A9')));
+  });
+});
+
 test('General Review repair 必须逐一裁决旧 finding，且拒绝旧 incremental 字段', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-general-review-repair-contract');
@@ -4354,14 +4473,9 @@ test('General Review repair 必须逐一裁决旧 finding，且拒绝旧 increme
       .replace('| A1 | done |', '| A1 | done |\n| A2 | done |')
       .replace('#### AI Review 结论\n\n| Verdict', '#### AI Review 结论\n\n- General Review audit：A2\n\n| Verdict');
     await fs.writeFile(planPath, plan, 'utf8');
-    await writeReadyTaskHandoff(planDir, 'S1');
-    initGitRepo();
-    const beforeTree = await prepareReviewableSliceDiffFixture();
-    await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
-    const result = runDevPlanCli(['review-package', planDir, 'S1']);
-    assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /reviewType must be exactly full or repair/);
-    assert.match(result.stderr.toString(), /missing #### openFindings/);
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('reviewType must be exactly full or repair')));
+    assert(errors.some((error) => error.includes('missing #### openFindings')));
   });
 });
 
@@ -4512,6 +4626,7 @@ test('rule-review-package 对 repair TARGET 仍复制累计 BASE 到 TARGET tree
     await fs.writeFile(planPath, withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')), 'utf8');
     await writeReadyTaskHandoff(planDir, 'S1');
     initGitRepo();
+    const initialRulesReview = await prepareRulesReviewRunFixture({ runId: 'run-initial-target' });
     const beforeTree = await prepareReviewableSliceDiffFixture();
     const initialRange = await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
     let result = runDevPlanCli(['review-package', planDir, 'S1']);
@@ -4535,6 +4650,15 @@ test('rule-review-package 对 repair TARGET 仍复制累计 BASE 到 TARGET tree
       }],
     });
     await selectGeneralReviewAudit(planDir, 'A2', { issues: true });
+    await appendProjectRuleReviewAudit(planDir, { id: 'A3', ...initialRulesReview });
+    await fs.writeFile(
+      planPath,
+      withPassedRequiredProjectRuleReviewVerdict(
+        await fs.readFile(planPath, 'utf8'),
+        { ...initialRulesReview, evidence: 'A3' },
+      ),
+      'utf8',
+    );
     const before = runDevPlanCli(['workspace-tree', '--seed', initialRange.seedCommit]);
     await fs.writeFile('src/example.ts', 'export const value = 3;\n', 'utf8');
     const repairedRange = await sealCurrentWorkspaceFixture(planDir, 'S1', {
@@ -5266,6 +5390,70 @@ test('CLI close-check requires project rule review A* evidence when required', a
     const extraHash = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-required']);
     assert.equal(extraHash.status, 1, extraHash.stderr.toString());
     assert.match(extraHash.stderr.toString(), /must not include shouldSetHash/);
+  });
+});
+
+test('CLI close-check requires an independent rules-review run for every General Review TARGET', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-rule-review-history');
+    await writeValidExecutingPlan(planDir);
+    const rulesReview = await prepareRulesReviewRunFixture();
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
+      'utf8',
+    );
+    await writeCloseCheckHandoffFixtures(planDir, 'S1', { rulesReview });
+    await appendProjectRuleReviewAudit(planDir, rulesReview);
+
+    const range = JSON.parse(await fs.readFile(path.join(planDir, 'review-packages', 'S1-range.json'), 'utf8'));
+    const priorAudit = `### A8：S1 prior General Review TARGET
+
+- 状态：done
+- 关联：S1
+- reviewType：full
+- previousReview：无
+- baseCommit：${range.baseCommit}
+- baseTree：${range.baseTree}
+- seedCommit：${range.seedCommit}
+- targetTree：${range.baseTree}
+- boundCommit：无
+- reviewPackageHash：sha256:${'8'.repeat(64)}
+
+#### General Review 结论
+
+| Verdict | Status | Severity | Evidence | Note |
+| --- | --- | --- | --- | --- |
+| 需求符合性 | passed | not-applicable | prior package | 需求结论 |
+| 切片边界 / 交接一致性 | passed | not-applicable | prior package | 边界结论 |
+| 代码质量 / AI 污染检查 | passed | not-applicable | prior package | 质量结论 |
+
+#### openFindings
+
+| Finding | Verdict | Severity | Origin | Evidence | Summary |
+| --- | --- | --- | --- | --- | --- |
+`;
+    const packagePath = path.join(planDir, 'review-packages', 'S1.md');
+    const reviewPackage = (await fs.readFile(packagePath, 'utf8'))
+      .replace('- previousReview：无', '- previousReview：A8')
+      .replace('## General Review 前序\n\n- 无', `## General Review 前序\n\n${priorAudit.trimEnd()}`);
+    await fs.writeFile(packagePath, reviewPackage, 'utf8');
+    const packageHash = `sha256:${createHash('sha256').update(reviewPackage).digest('hex')}`;
+    const auditsPath = path.join(planDir, 'audits.md');
+    const audits = (await fs.readFile(auditsPath, 'utf8'))
+      .replace(/(### A9：[\s\S]*?)- previousReview：无/, '$1- previousReview：A8')
+      .replace(/(### A9：[\s\S]*?)- reviewPackageHash：sha256:[0-9a-f]{64}/, `$1- reviewPackageHash：${packageHash}`);
+    await fs.writeFile(auditsPath, `${audits.trimEnd()}\n\n${priorAudit}`, 'utf8');
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8')).replace('| A1 | done |', '| A1 | done |\n| A8 | done |'),
+      'utf8',
+    );
+
+    const result = runDevPlanCli(['close-check', planDir]);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /General Review TARGET A8\/.+ requires an independent rules-review run/);
   });
 });
 
