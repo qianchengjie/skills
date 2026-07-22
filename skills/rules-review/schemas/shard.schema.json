@@ -3,12 +3,14 @@
   "$id": "https://agents.local/rules-review/shard.schema.json",
   "title": "rules-review reviewBatch shard",
   "type": "object",
-  "required": ["kind", "schemaVersion", "runId", "reviewBatchId", "results"],
+  "required": ["kind", "schemaVersion", "runId", "reviewBatchId", "targetTree", "taskHash", "results"],
   "properties": {
     "kind": { "const": "rules-review-shard" },
     "schemaVersion": { "const": 4 },
     "runId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "reviewBatchId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+    "targetTree": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+    "taskHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "results": { "type": "array", "items": { "$ref": "#/$defs/result" } }
   },
   "$defs": {
