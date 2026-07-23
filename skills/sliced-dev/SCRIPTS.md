@@ -99,48 +99,38 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs diff-check dev-plans/YYYY-MM-DD
 - 无通配符且不以 `/` 结尾：匹配精确文件或目录前缀。
 - `*` 匹配单段路径内任意字符，`**` 匹配零段或多段路径（`packages/foo/**/*.ts` 同时匹配 `packages/foo/a.ts` 和 `packages/foo/bar/a.ts`）。
 
-## workspace-tree / seal-target
+## pre-commit-check / record-commit
 
-每轮 implementer 派发前后分别运行：
-
-```bash
-node <sliced-dev-skill-dir>/scripts/dev-plan.mjs workspace-tree --seed <seedCommit>
-```
-
-命令使用临时 index 把当前 staged、unstaged、untracked 业务内容写成 tree；不修改真实 index、文件、staged/unstaged 状态或 worktree 列表。只排除 `review-packages/**`、`task-briefs/**`、`task-reports/**` 三类已声明生成输入；`.rules-review-tmp/**` 和 `dev-plans/**` 其余内容照常进入 workspace tree。冲突或不支持的 index 状态直接失败。
-
-接收门禁通过后封印本轮 delta：
-
-```bash
-node <sliced-dev-skill-dir>/scripts/dev-plan.mjs seal-target dev-plans/YYYY-MM-DD-<slug> <S-id> \
-  --base <baseCommit> \
-  --seed <seedCommit> \
-  --previous-tree <previousTargetTree> \
-  --before-tree <workspaceBeforeTree> \
-  --after-tree <workspaceAfterTree>
-```
-
-`seal-target` 先把 before→after patch 应用到 previous target，再把 previous target→before 的残余基线 patch 应用到新 target，要求结果精确等于 after。它还要求 delta 文件集合与 task report、`允许修改`、`禁止修改` 一致。patch 不唯一、hunk 重叠、必须夹带基线内容或 tree identity 不闭合时 fail closed，不做整文件降级。
-
-封印结果写入 `review-packages/<S-id>-range.json`。该文件是当前运行临时状态，不承诺跨会话、跨环境、跨天或长期恢复；Git object 缺失时当前审查立即失效，不从同名路径或当前文件重建。
-
-## pre-commit-check / bind-target
-
-正式提交前：
+首轮 implementer 派发前，controller 先把当前规范化的 `HEAD` 写入切片 `baseCommit`。实现和硬门禁完成后，controller 只 stage `taskReport.changedFiles`，再运行：
 
 ```bash
 node <sliced-dev-skill-dir>/scripts/dev-plan.mjs pre-commit-check dev-plans/YYYY-MM-DD-<slug> <S-id>
 ```
 
-它要求 `HEAD == seedCommit` 并重新验证全部必需 object、patch 组合、文件快照和 task report hash。失败时当前 General Review A* 与对应 rules-review run 失效，必须重新封印和审查。
+首轮要求 `HEAD == baseCommit`，返修轮要求 `HEAD == previousHeadCommit`。排除当前 plan 产物和已记录基线脏文件后，全部 task-owned staged / unstaged / untracked 路径、`taskReport.changedFiles` 和 staged 集合必须精确相等；未暂存残余、额外 staged、untracked 漏报、rename 逃逸、越过 allowlist、命中 forbidden path 或基线重叠都会失败。
 
-提交后：
+有代码变化时创建普通单父 commit；无代码轮不创建空 commit。随后运行：
 
 ```bash
-node <sliced-dev-skill-dir>/scripts/dev-plan.mjs bind-target dev-plans/YYYY-MM-DD-<slug> <S-id> --commit <commit>
+node <sliced-dev-skill-dir>/scripts/dev-plan.mjs record-commit dev-plans/YYYY-MM-DD-<slug> <S-id>
 ```
 
-只接受 `boundCommit^{tree} == targetTree`；不检查父提交数量、祖先关系或 merge 拓扑。
+命令写入 `review-packages/<S-id>-range.json`，schema 固定为 `sliced-dev.reviewRange.v2`，只包含：
+
+```json
+{
+  "schemaVersion": "sliced-dev.reviewRange.v2",
+  "sliceId": "S1",
+  "iteration": 1,
+  "baseCommit": "<首次派发前固定值>",
+  "previousHeadCommit": "<本轮开始时预期 HEAD>",
+  "headCommit": "<本轮结束提交>",
+  "iterationFiles": [],
+  "taskReportHash": "sha256:<64 位小写十六进制>"
+}
+```
+
+有代码轮要求 `headCommit^ == previousHeadCommit`、commit diff 路径等于 `iterationFiles`，且 `iterationFiles == taskReport.changedFiles`；无代码轮要求 `previousHeadCommit == headCommit` 和空文件集合。`baseCommit` 只能读取 plan 已记录值，禁止从 `headCommit^` 反推。
 
 ## claims-template
 
@@ -212,17 +202,17 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs review-package dev-plans/YYYY-M
 
 作用：生成当前切片的 `dev-plans/YYYY-MM-DD-<slug>/review-packages/<S-id>.md`，作为 AI Review 的临时主输入和注意力收束视图。生成前先运行 `validate`，失败则退出并输出具体错误；成功后会维护 `dev-plans/.gitignore`，确保三类生成文件模式存在。命令会读取 `task-briefs/<S-id>.md`、`task-reports/<S-id>.json` 和 `claims/<S-id>.json`。任一缺失、task report 结论不是 `ready-for-review`，或 P0/P1 claims 未达到可审查状态，都会失败。审计结果必须写回 plan 的 `AI Review 结论`、必要的 `D*` / `A*`，不要把 package 当成提交材料。
 
-package 只从已封印 tree 生成，不读取当前业务文件或当前 index：
+package 只从 Review Range v2 已记录的 commit 生成，不读取当前业务文件、当前 index 或当前 HEAD：
 
-- 首次 `full`：展示累计 `baseTree → targetTree`，输出三个 verdict 和完整 `openFindings`。
-- `repair`：展示 `previousTargetTree → targetTree` fix diff；每个直接前序 finding 恰好返回一次 `addressed / not_addressed`，不输出三个 verdict。
-- repair 后最终 `full`：再次展示累计 `baseTree → targetTree`；最终三个 verdict 只能来自这轮。
+- 首次 `full`：展示累计 `baseCommit..headCommit`，输出三个 verdict 和完整 `openFindings`。
+- `repair`：展示 `previousHeadCommit..headCommit` fix diff；每个直接前序 finding 恰好返回一次 `addressed / not_addressed`，不输出三个 verdict。
+- repair 后最终 `full`：对同一最终 `headCommit` 再展示累计 `baseCommit..headCommit`；最终三个 verdict 只能来自这轮。
 
 A* 通过 `- General Review audit：A*` 明确选择，只引用直接上一轮。旧 `模式：incremental`、`基线`、`Full reason`、Disposition 快照和 legacy package 都不兼容。
 
-package 固定包含 `Sealed Range`、`General Review 阶段`、`General Review 前序`、`文件快照`、tree diff 和 `reviewPackageHash` 绑定。`review-package` 只负责结构化输入，不判断 finding、证据强度、严重度或 BASE 选择是否正确。
+package 固定包含 `Review Range`、`General Review 阶段`、`General Review 前序`、`文件快照`、commit diff 和 `reviewPackageHash` 绑定。`review-package` 只负责结构化输入，不判断 finding、证据强度、严重度或 BASE 选择是否正确。
 
-任何必需 Git commit/tree/blob 缺失、`HEAD != seedCommit`、range/task report hash 不一致或 package 结构损坏都会 fail closed；不得回退当前文件、index 或同名路径，也不得在原 range 下重建 targetTree。
+任何必需 Git commit/tree/blob 缺失、父子关系不成立、commit diff 文件集合或 range/task report hash 不一致、package 结构损坏都会 fail closed；不得回退当前文件、index、当前 HEAD 或同名路径。
 
 ## rule-review-package
 
@@ -238,13 +228,13 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs rule-review-package dev-plans/Y
 - `not-applicable`：退出 0，提示 not-applicable，不生成文件。
 - `blocked`：退出 1，不生成文件。
 
-规则包复制当前 sealed range 的 `baseTree`、`targetTree`、累计文件快照和 `BASE → TARGET` diff。即使 General Review 当前是 repair，规则包也不缩成 fix diff。
+规则包复制当前 Review Range、累计文件快照和 `baseCommit..headCommit` diff。即使 General Review 当前是 repair，规则包也不缩成 fix diff。
 
-每个新的 TARGET 都创建独立 rules-review v4 run，完整审查当前全部 reviewItems；不得携带 `baseRunId`、continuation、旧 result 或旧 package 协议。dispatch 的 tree 输入和 snapshot 必须来自规则包，不从当前文件或 index 重建。
+每个新的 TARGET 都创建独立 rules-review v4 run，完整审查当前全部 reviewItems；不得携带 `baseRunId`、continuation、旧 result 或旧 package 协议。sliced-dev 始终传 `--base <baseCommit> --target-commit <headCommit>` 并保持 `excludedFiles: []`；dispatch 的 commit 输入和 snapshot 必须来自规则包，不从当前文件或 index 重建。
 
-fixed summary 投影当前新 run 的 `rulesReviewRunId`、recommendation、三个 issueSummary 计数和条件性 `shouldSetHash`。提交后分别运行 sliced-dev `bind-target` 和 rules-review `bind-commit`；两者都只验证 commit tree 等于 targetTree，不检查拓扑。
+fixed summary 投影当前新 run 的 `rulesReviewRunId`、recommendation、三个 issueSummary 计数和条件性 `shouldSetHash`。`--target-commit` 在封印时直接固定 `targetTree = headCommit^{tree}`、`boundCommit = headCommit` 和 `excludedFiles = []`，无需后置绑定。
 
-`close-check` 重跑受信任 rules-review validator，并核对 selectedRuleRefs、reviewRange、累计 changed units、input snapshot、文件 hash/mode、targetTree 和 boundCommit。机器不判断规则是否真的适用、finding 是否正确或证据是否充分。
+`close-check` 重跑受信任 rules-review validator，并核对 selectedRuleRefs、reviewRange、累计 changed units、input snapshot、文件 hash/mode 和精确 commit 绑定。机器不判断规则是否真的适用、finding 是否正确或证据是否充分。
 
 ## whole-review-package
 
@@ -264,13 +254,13 @@ package 必须汇总：
 - 所有切片交接。
 - Decisions / Audits 摘要和全文。
 - 所有切片 AI Review 结论。
-- 首个切片 BASE 到最终 HEAD 的 `Cumulative Range`、累计提交文件集合、diff stat 和 diff。
+- 首个执行型切片记录的 `baseCommit` 到最后一个执行型切片最终记录的 `headCommit` 的 `Cumulative Range`、累计提交文件集合、diff stat 和 diff。
 - task reports 摘要，包括每片 conclusion、changedFiles、validation 和 blockedReason。
 - 整任务审查固定 verdict 模板。
 
 高风险任务仍提示转 `rules-review deep / cross-slice`，不得静默当成自动门禁通过。
 
-每个代码 range 必须已绑定正式 commit。整任务包不读取当前 dirty worktree；基线脏内容不进入 package。必需 object 缺失、range 未绑定或当前 HEAD 不能形成唯一累计范围时 fail closed。
+相邻执行型切片必须满足后片 `baseCommit == 前片最终 headCommit`。整任务包不读取当前 dirty worktree 或最终 HEAD；最后一个切片后的无关 commit / 独立 `dev-plans` commit 不进入 package。必需 object 缺失、切片间存在 commit 缺口或 package 终点不等于最终记录 `headCommit` 时 fail closed。
 
 ## review-prompt
 
@@ -282,7 +272,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs review-prompt dev-plans/YYYY-MM
 
 前置条件：必须先运行 `review-package`，否则报错。
 
-作用：生成一段窄 AI Review prompt。prompt 给 reviewer package 路径、`reviewType / previousReview / baseCommit / baseTree / seedCommit / targetTree / boundCommit` 和 `reviewPackageHash`。reviewer final summary 必须原样返回全部绑定字段。
+作用：生成一段窄 AI Review prompt。prompt 给 reviewer package 路径、`reviewType / previousReview / baseCommit / previousHeadCommit / headCommit` 和 `reviewPackageHash`。reviewer final summary 必须原样返回全部绑定字段。
 
 `full` 的三 verdict 固定为：
 
@@ -352,8 +342,8 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/YYYY-MM-D
 - 每个 `done` slice 必须在 `#### 门禁记录` 中有 `diff-check` 结构化记录，`Status` 必须为 `passed`，`Command` 和 `Evidence` 必须非空、非占位。
 - 每个 `done` slice 必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确；最终 claim 状态必须是 `verified` 或 `waived`，不会从 task report 推断完成。
 - 每个 `done` 且 `AI Review：passed` 的 slice 必须存在非空 task brief、结论为 `ready-for-review` 的非空 task report、非空 review-package；JSON report 必须 schema valid；review-package 必须包含 Task Brief、Task Report、Claims、Git Diff 统计、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID；Git Diff 统计必须使用 `text` fence，Git Diff 必须使用 `diff` fence，允许无当前 dirty diff。
-- `AI Review：passed` 的前三个 verdict 必须来自当前最终 `full` A*；当前 A* 为 `repair`、仍有 openFindings、发生 repair 后缺少最终累计 full，或 package/A*/range hash 与 tree identity 不一致时阻塞。代码 range 必须有 `boundCommit`，且 `boundCommit^{tree} == targetTree`。
-- `项目规则审查：required` 时必须选择当前 TARGET 的全新 v4 run。`close-check` 重跑受信任 validator，核对 runId、selectedRuleRefs、recommendation、计数、条件性 hash、reviewRange、累计 input snapshot、文件 hash/mode 和 boundCommit；不接受 v3、continuation、baseRunId 或旧 package。默认 SHOULD 接受和零已知缺陷规则保持原有 A/D 绑定约束。
+- `AI Review：passed` 的前三个 verdict 必须来自当前最终 `full` A*；当前 A* 为 `repair`、仍有 openFindings、发生 repair 后缺少最终累计 full，或 package/A*/range hash 与 commit identity 不一致时阻塞。Review Range v2 的提交父子关系和文件集合必须闭合。
+- `项目规则审查：required` 时必须选择当前 TARGET 的全新 v4 run。`close-check` 重跑受信任 validator，核对 runId、selectedRuleRefs、recommendation、计数、条件性 hash、完整 commit range、累计 input snapshot、文件 hash/mode、`excludedFiles = []` 和 `boundCommit = headCommit`；不接受 continuation、baseRunId 或旧 package。默认 SHOULD 接受和零已知缺陷规则保持原有 A/D 绑定约束。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。
 - 启用 `零已知缺陷收口` 时，所有执行型切片都必须完成 AI Review，A 类也不能使用 `AI Review：skipped`。
 - `整任务审查：passed` 或 `整任务审查：blocked` 时，`review-packages/whole-task.md` 必须存在、非空，且包含 `whole-review-package` 生成器承诺的顶层章节，包括 Reviewer Instructions、计划头、全局约束、切片概览、切片交接、Claims 概览、D/A 摘要与全文、切片 AI Review、Task Reports、变更文件、Git Diff 和整任务审查结论模板；`整任务审查：package-generated` 和 `整任务审查：blocked` 都阻塞 `close-check`。

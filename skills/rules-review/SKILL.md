@@ -34,7 +34,7 @@ node scripts/validate.js --mode seal-dispatch \
   [--current | --staged | --target-commit <revision> | --target-tree <oid>]
 ```
 
-四个 TARGET selector 必须恰好出现一个。`--target-tree` 只接受参数自身就是规范 40/64 位小写 object ID 的 tree，不接受 ref 或 revision 表达式。`seal-dispatch` 使用临时 index 构造 tree，不修改真实 index、工作文件、staged/unstaged 状态或 worktree 列表。作为命令控制输入的当前 `dispatch.json` 不属于 TARGET；除此之外，包括 `.rules-review-tmp/` 兄弟路径在内的当前变更都按 Git `current` 输入封印，不做目录级静默排除。已经带有 `targetTree` 的 dispatch 不得原地重封；新 TARGET 必须创建新 run。
+四个 TARGET selector 必须恰好出现一个。`--target-tree` 只接受参数自身就是规范 40/64 位小写 object ID 的 tree，不接受 ref 或 revision 表达式。`--target-commit` 只接受精确的 `excludedFiles: []`；非空时在写入封印结果前 fail closed，`excludedRuleRefs` 不受此限制。该 selector 不执行文件排除，成功时直接固定 `targetTree = targetCommit^{tree}`、`boundCommit = targetCommit`、`excludedFiles = []`。`current`、`staged`、`target-tree` 继续支持 `excludedFiles`，并可在正式提交后使用后置绑定。`seal-dispatch` 使用临时 index 构造需要构造的 tree，不修改真实 index、工作文件、staged/unstaged 状态或 worktree 列表。作为命令控制输入的当前 `dispatch.json` 不属于 TARGET；除此之外，包括 `.rules-review-tmp/` 兄弟路径在内的当前变更都按 Git `current` 输入封印，不做目录级静默排除。已经带有 `targetTree` 的 dispatch 不得原地重封；新 TARGET 必须创建新 run。
 
 ## 2. 不可变输入
 
@@ -46,11 +46,11 @@ reviewRange:
   baseTree: <累计审查起点 tree>
   seedCommit: <可选；仅从当前 filesystem/index 构造时存在>
   targetTree: <实际接受并审查的 tree>
-  boundCommit: <可选；正式提交并绑定后补充>
+  boundCommit: <target-commit 模式立即存在；其他模式可在正式提交后补充>
   excludedFiles: []
 ```
 
-纯历史 commit/tree 不要求 `seedCommit`。`boundCommit` 只在有正式提交后存在。
+纯历史 commit/tree 不要求 `seedCommit`。`--target-commit` 的 `boundCommit` 在封印时即存在；其他 selector 只在后置绑定成功后存在。
 
 代码输入快照为：
 
@@ -95,7 +95,7 @@ rules-review run 是临时运行数据，不承诺跨会话、跨环境、跨天
 进入 targetTree 的变更 ∩ excludedFiles = ∅
 ```
 
-`excludedFiles` 只能列出真实候选变更。漏项、重叠、非候选路径、非普通 blob、冲突或无法唯一读取的 entry 都 blocked。
+`excludedFiles` 只能列出真实候选变更。漏项、重叠、非候选路径、非普通 blob、冲突或无法唯一读取的 entry 都 blocked。例外是 `--target-commit`：它不允许文件排除，输入必须精确为 `[]`；`excludedRuleRefs` 仍可形成规则范围分区。
 
 `scopeMode` 只按最终范围事实派生：
 
@@ -190,10 +190,11 @@ node scripts/validate.js --mode bind-commit \
   --commit <commit>
 ```
 
-绑定只验证：
+后置绑定只适用于未自动绑定的 selector，并验证：
 
 - 参数能唯一解析为 commit。
 - `boundCommit^{tree} == targetTree`。
+- dispatch 已绑定时，只允许同一 commit 的幂等调用；不同 commit 直接拒绝。
 
 不检查父提交数量、直接父、祖先关系或 merge 拓扑；tree 不同立即 blocked。
 

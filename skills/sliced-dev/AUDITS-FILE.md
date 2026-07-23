@@ -27,14 +27,12 @@
 - reviewType：full
 - previousReview：无
 - baseCommit：<commit oid>
-- baseTree：<tree oid>
-- seedCommit：<commit oid>
-- targetTree：<tree oid>
-- boundCommit：无
+- previousHeadCommit：<本轮开始时的 commit oid>
+- headCommit：<本轮结束时的 commit oid>
 - reviewPackageHash：sha256:<64 位小写十六进制>
 ```
 
-`boundCommit` 在正式提交前为 `无`，提交并通过 `bind-target` 后补成正式 commit。其 tree 必须等于 `targetTree`。
+这些 commit 字段原样来自 Review Range v2。首次 full 使用 `baseCommit..headCommit`；repair 使用 `previousHeadCommit..headCommit`；repair 后最终 full 与直接前序 repair 保持相同 commit 三元组，通过 `reviewType` 和 `previousReview` 区分阶段。
 
 ### full
 
@@ -59,7 +57,7 @@
 
 ### repair
 
-repair 只审直接上一轮全部 open finding 和 `previousTargetTree → targetTree` fix diff，不输出也不继承三个 verdict：
+repair 只审直接上一轮全部 open finding 和 `previousHeadCommit → headCommit` fix diff，不输出也不继承三个 verdict：
 
 ```markdown
 #### Finding Results
@@ -107,7 +105,7 @@ repair 只审直接上一轮全部 open finding 和 `previousTargetTree → targ
 
 ## 校验边界
 
-脚本只检查字段、枚举、直接引用、package hash、Git object/tree identity、finding 集合机械演进和终态闭合。脚本不判断 BASE 选择是否合理、finding 是否正确、证据是否充分、严重度是否恰当，也不判断 hunk 的业务归属；这些由 controller / reviewer 负责并留下证据。
+脚本只检查字段、枚举、直接引用、package hash、commit 父子关系、文件集合、finding 集合机械演进和终态闭合。脚本不判断 BASE 选择是否合理、finding 是否正确、证据是否充分或严重度是否恰当；这些由 controller / reviewer 负责并留下证据。
 
 ## 维护规则
 

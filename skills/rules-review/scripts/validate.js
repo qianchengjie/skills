@@ -296,6 +296,7 @@ function sealDispatchMode(args, result) {
     const baseTree = resolveTree(root, `${baseCommit}^{tree}`);
     const [selector] = selectors[0];
     let seedCommit;
+    let boundCommit;
     let candidateTree;
     if (selector === 'current') {
       seedCommit = resolveCommit(root, 'HEAD');
@@ -304,20 +305,32 @@ function sealDispatchMode(args, result) {
       seedCommit = resolveCommit(root, 'HEAD');
       candidateTree = writeIndexTree(root);
     } else if (selector === 'target-commit') {
-      const targetCommit = resolveCommit(root, args['target-commit']);
-      candidateTree = resolveTree(root, `${targetCommit}^{tree}`);
+      boundCommit = resolveCommit(root, args['target-commit']);
+      candidateTree = resolveTree(root, `${boundCommit}^{tree}`);
     } else {
       candidateTree = resolveTreeObject(root, args['target-tree']);
     }
 
     sealed = JSON.parse(JSON.stringify(draft));
     const excludedFiles = validateSealingExcludedFiles(sealed.reviewRange && sealed.reviewRange.excludedFiles);
+    if (selector === 'target-commit' && excludedFiles.length > 0) {
+      throw new Error('--target-commit requires reviewRange.excludedFiles to be exactly []');
+    }
     const candidateFiles = listTreeChangedFiles(root, baseTree, candidateTree);
     assertRegularChangedEntries(root, baseTree, candidateTree, candidateFiles);
-    const targetTree = excludeTreeFiles(root, candidateTree, baseTree, excludedFiles);
+    const targetTree = selector === 'target-commit'
+      ? candidateTree
+      : excludeTreeFiles(root, candidateTree, baseTree, excludedFiles);
     const includedFiles = listTreeChangedFiles(root, baseTree, targetTree);
     validateFilePartition(candidateFiles, includedFiles, excludedFiles);
-    sealed.reviewRange = { baseCommit, baseTree, ...(seedCommit ? { seedCommit } : {}), targetTree, excludedFiles };
+    sealed.reviewRange = {
+      baseCommit,
+      baseTree,
+      ...(seedCommit ? { seedCommit } : {}),
+      targetTree,
+      ...(boundCommit ? { boundCommit } : {}),
+      excludedFiles,
+    };
     sealed.inputSnapshot = {
       files: collectDeclaredInputRefs(sealed)
         .sort(compareStrings)
@@ -374,6 +387,12 @@ function bindCommitMode(args, result) {
     if (result.violations.length > 0) return;
     const boundCommit = resolveCommit(root, args.commit);
     const boundTree = resolveTree(root, `${boundCommit}^{tree}`);
+    if (
+      dispatch.reviewRange.boundCommit !== undefined
+      && dispatch.reviewRange.boundCommit !== boundCommit
+    ) {
+      throw new Error(`dispatch is already bound to ${dispatch.reviewRange.boundCommit}; rebinding to ${boundCommit} is not allowed`);
+    }
     if (boundTree !== dispatch.reviewRange.targetTree) {
       throw new Error(`boundCommit tree ${boundTree} does not match targetTree ${dispatch.reviewRange.targetTree}`);
     }

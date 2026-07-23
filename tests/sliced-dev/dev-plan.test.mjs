@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -44,26 +43,25 @@ test('subagent 文档使用当前共享工作区契约', async () => {
   assert.match(reviewer, /负结论进入修复或阻塞，不得通过重派 reviewer 洗掉/);
   assert.match(reviewer, /同一输入 fresh 重派一次/);
   assert.match(reviewer, /仍失败则写 `AI Review：blocked/);
-  assert.match(reviewer, /每个 TARGET 都复制累计 `BASE → TARGET`/);
+  assert.match(reviewer, /每个已提交 TARGET 都复制累计 `baseCommit → headCommit`/);
   assert.match(reviewer, /为当前 TARGET 创建全新 rules-review v4 run/);
   assert.match(reviewer, /完整审查本 TARGET 的全部当前 reviewItems/);
   assert.match(reviewer, /不引用旧 run，不继承旧 result/);
   assert.match(reviewer, /rulesReviewReport: <非 ready_for_merge 时为/);
   assert.match(implementer, /项目规则审查 A\*（含 `rulesReviewReport`）/);
-  assert.match(implementer, /`workspaceBeforeTree`/);
-  assert.match(implementer, /`workspaceAfterTree`/);
-  assert.match(implementer, /运行 `seal-target`/);
-  assert.match(implementer, /同路径非重叠 hunk 可以隔离/);
-  assert.match(implementer, /禁止降级为整文件覆盖/);
-  assert.match(reviewer, /首次 full[\s\S]*`BASE → TARGET₁`/);
+  assert.match(implementer, /首轮确认 `HEAD == baseCommit`/);
+  assert.match(implementer, /返修轮确认 `HEAD == previousHeadCommit`/);
+  assert.match(implementer, /只 stage `taskReport\.changedFiles`/);
+  assert.match(reviewer, /首次 full[\s\S]*`baseCommit\.\.headCommit`/);
   assert.match(reviewer, /每个旧 finding 恰好返回一次 `addressed \/ not_addressed`/);
   assert.match(reviewer, /不生成或继承三个 General Review verdict/);
   assert.match(reviewer, /最终三个 verdict 只能来自这轮/);
   assert.match(executionRules, /开放集合清零且此前发生过 repair 时，下一轮只能是最终累计 `full`/);
-  assert.match(executionRules, /`HEAD == seedCommit`/);
-  assert.match(executionRules, /`boundCommit\^\{tree\} == targetTree`/);
-  assert.match(planFile, /commit hash 的持久机器真源是 sealed range 的可选 `boundCommit`/);
-  assert.match(scriptsDoc, /不接受 v3、continuation、baseRunId 或旧 package/);
+  assert.match(executionRules, /首轮 `pre-commit-check` 要求 `HEAD == baseCommit`/);
+  assert.match(executionRules, /返修轮要求 `HEAD == previousHeadCommit`/);
+  assert.match(planFile, /Review Range v2 的 `headCommit`/);
+  assert.match(scriptsDoc, /sliced-dev\.reviewRange\.v2/);
+  assert.doesNotMatch(contract, /workspace-tree|seal-target|bind-target|workspaceBeforeTree|workspaceAfterTree|seedCommit/);
   assert.doesNotMatch(contract, /只有原 reviewer 不可用|已有审查结论后只生成|只要已有一轮结论，后续修复复核必须是 `incremental`/);
 });
 
@@ -107,6 +105,21 @@ async function withTempRepo(fn) {
 }
 
 async function writeValidExecutingPlan(planDir) {
+  const hasGit = await fs.stat('.git').then(() => true, () => false);
+  if (!hasGit) initGitRepo();
+  if (spawnSync('git', ['rev-parse', '--verify', 'HEAD']).status !== 0) {
+    await fs.mkdir('src', { recursive: true });
+    await fs.mkdir('test', { recursive: true });
+    await Promise.all([
+      fs.writeFile('src/example.ts', 'export const value = 1;\n', 'utf8'),
+      fs.writeFile('src/context.ts', 'export const context = true;\n', 'utf8'),
+      fs.writeFile('test/example.test.ts', 'export const tested = true;\n', 'utf8'),
+      fs.writeFile('.gitignore', '.rules-review-tmp/\n', 'utf8'),
+    ]);
+    execFileSync('git', ['add', 'src/example.ts', 'src/context.ts', 'test/example.test.ts', '.gitignore']);
+    execFileSync('git', ['commit', '-m', 'fixture baseline']);
+  }
+  const baseCommit = gitOid(['rev-parse', 'HEAD']);
   await fs.mkdir(planDir, { recursive: true });
   await fs.writeFile(
     path.join(planDir, 'plan.md'),
@@ -155,6 +168,7 @@ async function writeValidExecutingPlan(planDir) {
 - 修复次数：0/4
 - 依赖：无
 - Commit：待提交
+- baseCommit：${baseCommit}
 - 验证：pending
 
 #### 关联项
@@ -399,10 +413,8 @@ ${repairResults.map((item) => `| ${item.id} | ${item.status} | ${item.evidence} 
 - reviewType：${reviewType}
 - previousReview：${previousReview}
 - baseCommit：${range.baseCommit}
-- baseTree：${range.baseTree}
-- seedCommit：${range.seedCommit}
-- targetTree：${range.targetTree}
-- boundCommit：${range.boundCommit ?? '无'}
+- previousHeadCommit：${range.previousHeadCommit}
+- headCommit：${range.headCommit}
 - reviewPackageHash：${reviewPackageHash}
 ${verdictSection}
 #### openFindings
@@ -586,6 +598,9 @@ function runDevPlanCli(args) {
 }
 
 async function writeTaskBriefFixture(planDir, sliceId = 'S1') {
+  const rangePath = path.join(planDir, 'review-packages', `${sliceId}-range.json`);
+  const hasRange = await fs.stat(rangePath).then(() => true, () => false);
+  if (!hasRange) await setSliceBaseCommit(planDir, sliceId, gitOid(['rev-parse', 'HEAD']));
   await ensureVerifiedClaimsFixture(planDir, sliceId);
   const result = runDevPlanCli(['task-brief', planDir, sliceId]);
   assert.equal(result.status, 0, result.stderr.toString());
@@ -629,29 +644,31 @@ function gitOid(args) {
 async function sealCurrentWorkspaceFixture(
   planDir,
   sliceId = 'S1',
-  { base = 'HEAD', seed = 'HEAD', previousTree, beforeTree } = {},
 ) {
-  const seedCommit = gitOid(['rev-parse', `${seed}^{commit}`]);
-  const initialTree = gitOid(['rev-parse', `${seedCommit}^{tree}`]);
-  const after = runDevPlanCli(['workspace-tree', '--seed', seedCommit]);
-  assert.equal(after.status, 0, after.stderr.toString());
-  const result = runDevPlanCli([
-    'seal-target',
-    planDir,
-    sliceId,
-    '--base',
-    gitOid(['rev-parse', `${base}^{commit}`]),
-    '--seed',
-    seedCommit,
-    '--previous-tree',
-    previousTree ?? initialTree,
-    '--before-tree',
-    beforeTree ?? initialTree,
-    '--after-tree',
-    after.stdout.toString().trim(),
-  ]);
+  const rangePath = path.join(planDir, 'review-packages', `${sliceId}-range.json`);
+  const hasRange = await fs.stat(rangePath).then(() => true, () => false);
+  if (!hasRange) await setSliceBaseCommit(planDir, sliceId, gitOid(['rev-parse', 'HEAD']));
+  const report = JSON.parse(await fs.readFile(path.join(planDir, 'task-reports', `${sliceId}.json`), 'utf8'));
+  const files = report.changedFiles.map((entry) => entry.path);
+  if (files.length > 0) execFileSync('git', ['add', '-A', '--', ...files]);
+  const preCommit = runDevPlanCli(['pre-commit-check', planDir, sliceId]);
+  assert.equal(preCommit.status, 0, preCommit.stderr.toString());
+  if (files.length > 0) execFileSync('git', ['commit', '-m', `${sliceId} fixture iteration`]);
+  const result = runDevPlanCli(['record-commit', planDir, sliceId]);
   assert.equal(result.status, 0, result.stderr.toString());
   return JSON.parse(await fs.readFile(path.join(planDir, 'review-packages', `${sliceId}-range.json`), 'utf8'));
+}
+
+async function setSliceBaseCommit(planDir, sliceId, commit) {
+  const planPath = path.join(planDir, 'plan.md');
+  const plan = await fs.readFile(planPath, 'utf8');
+  const slicePattern = new RegExp(`(### ${sliceId}：[\\s\\S]*?)(?=\\n### S\\d|$)`);
+  const match = slicePattern.exec(plan);
+  assert.ok(match, `slice ${sliceId} missing`);
+  const updatedSlice = /(^|\n)- baseCommit：/m.test(match[1])
+    ? match[1].replace(/(^|\n)- baseCommit：[^\n]*/m, `$1- baseCommit：${commit}`)
+    : match[1].replace(/(^|\n)- Commit：[^\n]*/m, `$&\n- baseCommit：${commit}`);
+  await fs.writeFile(planPath, plan.replace(match[1], updatedSlice), 'utf8');
 }
 
 async function writeVerifiedClaimsFixture(planDir, sliceId = 'S1') {
@@ -824,8 +841,8 @@ async function writeGeneratedReviewPackageFixture(planDir, sliceId = 'S1') {
   const rangePath = path.join(planDir, 'review-packages', `${sliceId}-range.json`);
   const hasRange = await fs.stat(rangePath).then(() => true, () => false);
   if (!hasRange) {
-    const beforeTree = await prepareReviewableSliceDiffFixture();
-    await sealCurrentWorkspaceFixture(planDir, sliceId, { beforeTree });
+    await prepareReviewableSliceDiffFixture();
+    await sealCurrentWorkspaceFixture(planDir, sliceId);
   }
   const result = runDevPlanCli(['review-package', planDir, sliceId]);
   assert.equal(result.status, 0, result.stderr.toString());
@@ -850,10 +867,8 @@ async function writeGeneratedReviewPackageFixture(planDir, sliceId = 'S1') {
 - reviewType：full
 - previousReview：${previousReview}
 - baseCommit：${range.baseCommit}
-- baseTree：${range.baseTree}
-- seedCommit：${range.seedCommit}
-- targetTree：${range.targetTree}
-- boundCommit：无
+- previousHeadCommit：${range.previousHeadCommit}
+- headCommit：${range.headCommit}
 - reviewPackageHash：${hash}
 
 #### General Review 结论
@@ -1042,16 +1057,9 @@ async function prepareReviewableSliceDiffFixture() {
     execFileSync('git', ['add', 'src/example.ts', 'src/context.ts']);
     execFileSync('git', ['commit', '-m', 'baseline']);
   }
-  const before = runDevPlanCli(['workspace-tree', '--seed', 'HEAD']);
-  assert.equal(before.status, 0, before.stderr.toString());
+  const baseCommit = gitOid(['rev-parse', 'HEAD']);
   await fs.writeFile('src/example.ts', 'export const value = 2;\n', 'utf8');
-  return before.stdout.toString().trim();
-}
-
-function commitReviewableSliceDiffFixture(extraFiles = []) {
-  execFileSync('git', ['add', 'src/example.ts', ...extraFiles]);
-  execFileSync('git', ['commit', '-m', 'slice']);
-  return execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  return baseCommit;
 }
 
 async function writeCloseCheckHandoffFixtures(
@@ -1073,6 +1081,12 @@ async function writeCloseCheckHandoffFixtures(
   );
   await writeVerifiedClaimsFixture(planDir, sliceId);
   await writeReadyTaskHandoff(planDir, sliceId);
+  if (!hasCodeChange) {
+    const reportPath = path.join(planDir, 'task-reports', `${sliceId}.json`);
+    const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    report.changedFiles = [];
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  }
   if (extraChangedFiles.length > 0) {
     const reportPath = path.join(planDir, 'task-reports', `${sliceId}.json`);
     const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
@@ -1082,9 +1096,9 @@ async function writeCloseCheckHandoffFixtures(
     })));
     await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
   }
-  const beforeTree = hasCodeChange ? await prepareReviewableSliceDiffFixture() : undefined;
+  if (hasCodeChange) await prepareReviewableSliceDiffFixture();
   if (applyExtraWorkspaceChanges) await applyExtraWorkspaceChanges();
-  if (hasCodeChange) await sealCurrentWorkspaceFixture(planDir, sliceId, { beforeTree });
+  const range = await sealCurrentWorkspaceFixture(planDir, sliceId);
   await writeGeneratedReviewPackageFixture(planDir, sliceId);
   await selectGeneralReviewAudit(planDir, 'A9');
   if (rulesReview) {
@@ -1100,22 +1114,8 @@ async function writeCloseCheckHandoffFixtures(
       'utf8',
     );
   }
-  const headCommit = hasCodeChange ? commitReviewableSliceDiffFixture(extraChangedFiles) : null;
-  if (headCommit) {
-    const bind = runDevPlanCli(['bind-target', planDir, sliceId, '--commit', headCommit]);
-    assert.equal(bind.status, 0, bind.stderr.toString());
-    const auditsPath = path.join(planDir, 'audits.md');
-    const audits = await fs.readFile(auditsPath, 'utf8');
-    await fs.writeFile(
-      auditsPath,
-      audits.replace(
-        /(### A9：[\s\S]*?)- boundCommit：无/,
-        `$1- boundCommit：${headCommit}`,
-      ),
-      'utf8',
-    );
-  }
-  if (rulesReview && bindRulesReview && headCommit) {
+  const headCommit = range.headCommit;
+  if (rulesReview && bindRulesReview) {
     const bind = spawnSync(process.execPath, [
       rulesReviewValidator,
       '--mode',
@@ -1141,6 +1141,11 @@ async function materializeRulesReviewV4RunFixture({
   runId = 'run-pass-full-clean',
 } = {}) {
   await prepareReviewableSliceDiffFixture();
+  const gitignorePath = '.gitignore';
+  const gitignore = await fs.readFile(gitignorePath, 'utf8').catch(() => '');
+  if (!gitignore.split(/\r?\n/).includes('.rules-review-tmp/')) {
+    await fs.writeFile(gitignorePath, `${gitignore.trimEnd()}\n.rules-review-tmp/\n`, 'utf8');
+  }
   await fs.mkdir(path.join('.agents', 'rules'), { recursive: true });
   await Promise.all([
     fs.writeFile(path.join('.agents', 'rules', 'index.md'), '# Rules\n', 'utf8'),
@@ -1148,8 +1153,8 @@ async function materializeRulesReviewV4RunFixture({
     fs.writeFile(path.join('.agents', 'rules', 'type.md'), '# TYPE-001\n', 'utf8'),
     fs.writeFile(path.join('.agents', 'rules', 'ui.md'), '# UI-001\n', 'utf8'),
   ]);
-  if (execFileSync('git', ['status', '--porcelain', '--', '.agents/rules'], { encoding: 'utf8' }).trim()) {
-    execFileSync('git', ['add', '.agents/rules']);
+  if (execFileSync('git', ['status', '--porcelain', '--', '.agents/rules', gitignorePath], { encoding: 'utf8' }).trim()) {
+    execFileSync('git', ['add', '.agents/rules', gitignorePath]);
     execFileSync('git', ['commit', '-m', 'rules baseline']);
   }
   if (!hasCodeChange) {
@@ -2534,7 +2539,7 @@ test('diff-check checks rename old path against slice boundary', async () => {
     execFileSync('git', ['add', '.']);
     execFileSync('git', ['commit', '-m', 'init']);
 
-    execFileSync('git', ['mv', 'src/utils/legacy.ts', 'src/example.ts']);
+    execFileSync('git', ['mv', 'src/utils/legacy.ts', 'src/renamed.ts']);
     const errors = await diffCheckPlan(planDir, 'S1');
     assert(errors.some((error) => error.includes('matches 禁止修改: src/utils/legacy.ts')));
   });
@@ -3556,8 +3561,8 @@ test('CLI review-package accepts task brief with earlier proposed claim statuses
     await writeTaskReportTemplateFixture('dev-plans/2026-06-10-review-package-proposed-brief', 'S1');
     await markTaskReportReady('dev-plans/2026-06-10-review-package-proposed-brief', 'S1');
     initGitRepo();
-    const beforeTree = await prepareReviewableSliceDiffFixture();
-    await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    await prepareReviewableSliceDiffFixture();
+    await sealCurrentWorkspaceFixture(planDir, 'S1');
 
     const result = runDevPlanCli(['review-package', 'dev-plans/2026-06-10-review-package-proposed-brief', 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
@@ -3631,8 +3636,8 @@ test('validate accepts artifact evidence and review-package renders it', async (
 
     await writeReadyTaskHandoff('dev-plans/2026-06-10-claims-artifact', 'S1');
     initGitRepo();
-    const beforeTree = await prepareReviewableSliceDiffFixture();
-    await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    await prepareReviewableSliceDiffFixture();
+    await sealCurrentWorkspaceFixture(planDir, 'S1');
     const result = runDevPlanCli(['review-package', 'dev-plans/2026-06-10-claims-artifact', 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
 
@@ -3660,8 +3665,8 @@ test('review-package escapes multiline claim detail fields', async () => {
     report.validation[0].summary = 'src/example.ts 已完成核心行为 | node --test test/example.test.ts 通过。';
     await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
     initGitRepo();
-    const beforeTree = await prepareReviewableSliceDiffFixture();
-    await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    await prepareReviewableSliceDiffFixture();
+    await sealCurrentWorkspaceFixture(planDir, 'S1');
     const result = runDevPlanCli(['review-package', 'dev-plans/2026-06-10-claims-escaped-details', 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
 
@@ -3785,9 +3790,8 @@ test('CLI task-brief refresh includes current General Review repair evidence', a
       id: 'A2',
       range: {
         baseCommit: '1'.repeat(40),
-        baseTree: '2'.repeat(40),
-        seedCommit: '1'.repeat(40),
-        targetTree: '3'.repeat(40),
+        previousHeadCommit: '1'.repeat(40),
+        headCommit: '3'.repeat(40),
       },
       reviewPackageHash: `sha256:${'4'.repeat(64)}`,
       requirementStatus: 'failed',
@@ -3833,6 +3837,7 @@ test('CLI task-brief binds project rule review report into repair input', async 
     await fs.writeFile(planPath, plan, 'utf8');
     await appendProjectRuleReviewAudit(planDir, rulesReview);
     await writeVerifiedClaimsFixture(planDir, 'S1');
+    await setSliceBaseCommit(planDir, 'S1', gitOid(['rev-parse', 'HEAD']));
 
     const success = runDevPlanCli(['task-brief', planDir, 'S1']);
     assert.equal(success.status, 0, success.stderr.toString());
@@ -3972,7 +3977,7 @@ test('validate rejects orphan task report JSON', async () => {
   });
 });
 
-test('validate requires ready task report to include changed files', async () => {
+test('validate accepts ready task report with no changed files', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-task-report-json-changed-files');
     await writeValidExecutingPlan(planDir);
@@ -3983,7 +3988,7 @@ test('validate requires ready task report to include changed files', async () =>
     await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 
     const errors = await validatePlan(planDir);
-    assert(errors.some((error) => error.includes('ready-for-review requires changedFiles')));
+    assert(!errors.some((error) => error.includes('task-reports/S1.json')));
   });
 });
 
@@ -4160,16 +4165,8 @@ test('CLI review-package writes slice evidence package', async () => {
     const planDir = path.join('dev-plans', '2026-06-10-review-package');
     await writeValidExecutingPlan(planDir);
     await writeReadyTaskHandoff('dev-plans/2026-06-10-review-package', 'S1');
-    execFileSync('git', ['init']);
-    execFileSync('git', ['config', 'user.email', 'test@example.com']);
-    execFileSync('git', ['config', 'user.name', 'Test User']);
-    await fs.mkdir('src', { recursive: true });
-    await fs.writeFile('src/example.ts', 'export const value = 1;\n', 'utf8');
-    execFileSync('git', ['add', 'src/example.ts']);
-    execFileSync('git', ['commit', '-m', 'init']);
-    const beforeTree = runDevPlanCli(['workspace-tree', '--seed', 'HEAD']).stdout.toString().trim();
     await fs.writeFile('src/example.ts', 'export const value = 2;\n', 'utf8');
-    await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    await sealCurrentWorkspaceFixture(planDir, 'S1');
 
     const result = spawnSync('node', [script, 'review-package', 'dev-plans/2026-06-10-review-package', 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
@@ -4177,7 +4174,7 @@ test('CLI review-package writes slice evidence package', async () => {
 
     const reviewPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1.md'), 'utf8');
     assert.match(reviewPackage, /^# 切片审查包：S1/m);
-    assert.match(reviewPackage, /## Sealed Range/);
+    assert.match(reviewPackage, /## Review Range/);
     assert.match(reviewPackage, /## General Review 阶段\n\n- reviewType：full\n- previousReview：无/);
     assert.match(reviewPackage, /## General Review 前序\n\n- 无/);
     assert.match(reviewPackage, /## 本轮修复索引/);
@@ -4212,10 +4209,8 @@ test('General Review 按首次 full、repair、最终累计 full 收口', async 
     const planDir = path.join('dev-plans', '2026-06-10-general-review-v4');
     await writeValidExecutingPlan(planDir);
     await writeReadyTaskHandoff(planDir, 'S1');
-    initGitRepo();
-    const beforeTree = await prepareReviewableSliceDiffFixture();
-
-    const initialRange = await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    await prepareReviewableSliceDiffFixture();
+    const initialRange = await sealCurrentWorkspaceFixture(planDir, 'S1');
     let result = runDevPlanCli(['review-package', planDir, 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
     let reviewPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1.md'), 'utf8');
@@ -4241,31 +4236,11 @@ test('General Review 按首次 full、repair、最终累计 full 收口', async 
     });
     await selectGeneralReviewAudit(planDir, 'A2', { issues: true });
 
-    const beforeRepair = runDevPlanCli(['workspace-tree', '--seed', initialRange.seedCommit]);
-    assert.equal(beforeRepair.status, 0, beforeRepair.stderr.toString());
     await fs.writeFile('src/example.ts', 'export const value = 3;\n', 'utf8');
-    const planBeforeRequiredRuleReview = await fs.readFile(path.join(planDir, 'plan.md'), 'utf8');
-    await fs.writeFile(
-      path.join(planDir, 'plan.md'),
-      withRequiredProjectRuleReview(planBeforeRequiredRuleReview),
-      'utf8',
-    );
-    const afterRepair = runDevPlanCli(['workspace-tree', '--seed', initialRange.seedCommit]);
-    const missingTargetRuleReview = runDevPlanCli([
-      'seal-target', planDir, 'S1',
-      '--base', initialRange.baseCommit,
-      '--seed', initialRange.seedCommit,
-      '--previous-tree', initialRange.targetTree,
-      '--before-tree', beforeRepair.stdout.toString().trim(),
-      '--after-tree', afterRepair.stdout.toString().trim(),
-    ]);
-    assert.equal(missingTargetRuleReview.status, 1, missingTargetRuleReview.stderr.toString());
-    assert.match(missingTargetRuleReview.stderr.toString(), /requires an independent rules-review run/);
-    await fs.writeFile(path.join(planDir, 'plan.md'), planBeforeRequiredRuleReview, 'utf8');
-    const repairedRange = await sealCurrentWorkspaceFixture(planDir, 'S1', {
-      previousTree: initialRange.targetTree,
-      beforeTree: beforeRepair.stdout.toString().trim(),
-    });
+    const repairedRange = await sealCurrentWorkspaceFixture(planDir, 'S1');
+    assert.equal(repairedRange.baseCommit, initialRange.baseCommit);
+    assert.equal(repairedRange.previousHeadCommit, initialRange.headCommit);
+    assert.equal(gitOid(['rev-parse', `${repairedRange.headCommit}^`]), initialRange.headCommit);
 
     const planAtRepair = await fs.readFile(path.join(planDir, 'plan.md'), 'utf8');
     await fs.writeFile(
@@ -4337,16 +4312,6 @@ test('General Review 按首次 full、repair、最终累计 full 收口', async 
     });
     await selectGeneralReviewAudit(planDir, 'A3', { issues: true });
 
-    const repairPlan = await fs.readFile(path.join(planDir, 'plan.md'), 'utf8');
-    const closedOnRepair = withClosedDoneSlice(repairPlan, planDir)
-      .replace('- AI Review：issues（存在开放 finding）', '- AI Review：passed')
-      .replace(/\| 需求符合性 \| failed \| major \|[^\n]+/, '| 需求符合性 | passed | not-applicable | A3 / review-packages/S1.md | repair 已关闭 |');
-    await fs.writeFile(path.join(planDir, 'plan.md'), closedOnRepair, 'utf8');
-    const prematureClose = runDevPlanCli(['close-check', planDir]);
-    assert.equal(prematureClose.status, 1, prematureClose.stderr.toString());
-    assert.match(prematureClose.stderr.toString(), /repair review cannot provide final General Review verdicts; run final cumulative full/);
-    await fs.writeFile(path.join(planDir, 'plan.md'), repairPlan, 'utf8');
-
     result = runDevPlanCli(['review-package', planDir, 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
     reviewPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1.md'), 'utf8');
@@ -4363,6 +4328,13 @@ test('General Review 按首次 full、repair、最终累计 full 收口', async 
       previousReview: 'A3',
       openFindings: [],
     });
+    const audits = await fs.readFile(path.join(planDir, 'audits.md'), 'utf8');
+    const sharedCommitTriple = `- baseCommit：${repairedRange.baseCommit}
+- previousHeadCommit：${repairedRange.previousHeadCommit}
+- headCommit：${repairedRange.headCommit}`;
+    assert.equal(audits.split(sharedCommitTriple).length - 1, 2);
+    assert.match(audits, /### A3：[\s\S]*?- reviewType：repair\n- previousReview：A2/);
+    assert.match(audits, /### A4：[\s\S]*?- reviewType：full\n- previousReview：A3/);
     await selectGeneralReviewAudit(planDir, 'A4');
 
     let finalPlan = await fs.readFile(path.join(planDir, 'plan.md'), 'utf8');
@@ -4370,20 +4342,8 @@ test('General Review 按首次 full、repair、最终累计 full 收口', async 
       .replace('- AI Review：issues（存在开放 finding）', '- AI Review：passed')
       .replace(/\| 需求符合性 \| failed \| major \|[^\n]+/, '| 需求符合性 | passed | not-applicable | A4 / review-packages/S1.md | 最终累计 full 通过 |');
     await fs.writeFile(path.join(planDir, 'plan.md'), finalPlan, 'utf8');
-    const commit = commitReviewableSliceDiffFixture();
-    const bind = runDevPlanCli(['bind-target', planDir, 'S1', '--commit', commit]);
-    assert.equal(bind.status, 0, bind.stderr.toString());
-    const auditsPath = path.join(planDir, 'audits.md');
-    const audits = await fs.readFile(auditsPath, 'utf8');
-    await fs.writeFile(
-      auditsPath,
-      audits.replace(/(### A4：[\s\S]*?)- boundCommit：无/, `$1- boundCommit：${commit}`),
-      'utf8',
-    );
-    finalPlan = withClosedDoneSlice(await fs.readFile(path.join(planDir, 'plan.md'), 'utf8'), planDir);
-    await fs.writeFile(path.join(planDir, 'plan.md'), finalPlan, 'utf8');
-    const closed = runDevPlanCli(['close-check', planDir]);
-    assert.equal(closed.status, 0, closed.stderr.toString());
+    const errors = await validatePlan(planDir);
+    assert(!errors.some((error) => error.includes('General Review')));
   });
 });
 
@@ -4393,8 +4353,8 @@ test('General Review 拒绝跨切片 previousReview 和唯一 tip 旁挂 cycle',
     await writeValidExecutingPlan(planDir);
     await writeReadyTaskHandoff(planDir, 'S1');
     initGitRepo();
-    const beforeTree = await prepareReviewableSliceDiffFixture();
-    const range = await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    await prepareReviewableSliceDiffFixture();
+    const range = await sealCurrentWorkspaceFixture(planDir, 'S1');
     let result = runDevPlanCli(['review-package', planDir, 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
     const prompt = runDevPlanCli(['review-prompt', planDir, 'S1']);
@@ -4487,96 +4447,163 @@ function getSectionForTest(markdown, title) {
   return markdown.slice(bodyStart, end === -1 ? undefined : end);
 }
 
-test('seal-target 隔离同路径非重叠 dirty hunk，重叠 hunk fail closed', async () => {
+test('pre-commit-check 拒绝 HEAD 漂移', async () => {
   await withTempRepo(async () => {
-    const planDir = path.join('dev-plans', '2026-06-10-hunk-isolation');
+    const planDir = path.join('dev-plans', '2026-06-10-pre-commit-head-drift');
     await writeValidExecutingPlan(planDir);
     await writeReadyTaskHandoff(planDir, 'S1');
-    initGitRepo();
-    await fs.mkdir('src', { recursive: true });
-    const baselineLines = Array.from({ length: 24 }, (_, index) => `line-${index + 1}`);
-    await fs.writeFile('src/example.ts', `${baselineLines.join('\n')}\n`, 'utf8');
+    await fs.writeFile('src/context.ts', 'export const context = false;\n', 'utf8');
+    execFileSync('git', ['add', 'src/context.ts']);
+    execFileSync('git', ['commit', '-m', 'unrelated drift']);
+    await fs.writeFile('src/example.ts', 'export const value = 2;\n', 'utf8');
     execFileSync('git', ['add', 'src/example.ts']);
-    execFileSync('git', ['commit', '-m', 'baseline']);
-    const seedCommit = gitOid(['rev-parse', 'HEAD']);
-    const seedTree = gitOid(['rev-parse', 'HEAD^{tree}']);
 
-    const dirtyLines = [...baselineLines];
-    dirtyLines[0] = 'baseline-dirty-line-1';
-    await fs.writeFile('src/example.ts', `${dirtyLines.join('\n')}\n`, 'utf8');
-    await fs.mkdir(path.join('.rules-review-tmp', 'baseline'), { recursive: true });
-    await fs.writeFile(path.join('.rules-review-tmp', 'baseline', 'note.md'), 'baseline review note\n', 'utf8');
-    const before = runDevPlanCli(['workspace-tree', '--seed', seedCommit]);
-    assert.equal(before.status, 0, before.stderr.toString());
-    assert.match(execFileSync('git', ['show', `${before.stdout.toString().trim()}:dev-plans/2026-06-10-hunk-isolation/plan.md`], { encoding: 'utf8' }), /# 示例计划/);
-    assert.equal(execFileSync('git', ['show', `${before.stdout.toString().trim()}:.rules-review-tmp/baseline/note.md`], { encoding: 'utf8' }), 'baseline review note\n');
-    const afterLines = [...dirtyLines];
-    afterLines[23] = 'accepted-line-24';
-    await fs.writeFile('src/example.ts', `${afterLines.join('\n')}\n`, 'utf8');
-
-    const indexBefore = await fs.readFile('.git/index');
-    const statusBefore = gitOid(['status', '--porcelain=v2', '-z']);
-    const worktreesBefore = gitOid(['worktree', 'list', '--porcelain']);
-    const range = await sealCurrentWorkspaceFixture(planDir, 'S1', {
-      base: seedCommit,
-      seed: seedCommit,
-      previousTree: seedTree,
-      beforeTree: before.stdout.toString().trim(),
-    });
-    assert.deepEqual(await fs.readFile('.git/index'), indexBefore);
-    assert.equal(gitOid(['status', '--porcelain=v2', '-z']), statusBefore);
-    assert.equal(gitOid(['worktree', 'list', '--porcelain']), worktreesBefore);
-    const targetContent = execFileSync('git', ['show', `${range.targetTree}:src/example.ts`], { encoding: 'utf8' });
-    assert.match(targetContent, /^line-1$/m);
-    assert.doesNotMatch(targetContent, /baseline-dirty-line-1/);
-    assert.match(targetContent, /^accepted-line-24$/m);
-    assert.match(await fs.readFile('src/example.ts', 'utf8'), /baseline-dirty-line-1/);
-    assert.notEqual(spawnSync('git', ['cat-file', '-e', `${range.targetTree}:.rules-review-tmp/baseline/note.md`]).status, 0);
-  });
-
-  await withTempRepo(async () => {
-    const planDir = path.join('dev-plans', '2026-06-10-hunk-overlap');
-    await writeValidExecutingPlan(planDir);
-    await writeReadyTaskHandoff(planDir, 'S1');
-    initGitRepo();
-    await fs.mkdir('src', { recursive: true });
-    await fs.writeFile('src/example.ts', 'one\ntwo\nthree\n', 'utf8');
-    execFileSync('git', ['add', 'src/example.ts']);
-    execFileSync('git', ['commit', '-m', 'baseline']);
-    await fs.writeFile('src/example.ts', 'one\nbaseline-dirty\nthree\n', 'utf8');
-    const before = runDevPlanCli(['workspace-tree', '--seed', 'HEAD']);
-    assert.equal(before.status, 0, before.stderr.toString());
-    await fs.writeFile('src/example.ts', 'one\nimplementer-change\nthree\n', 'utf8');
-    const after = runDevPlanCli(['workspace-tree', '--seed', 'HEAD']);
-    assert.equal(after.status, 0, after.stderr.toString());
-    const result = runDevPlanCli([
-      'seal-target', planDir, 'S1',
-      '--base', 'HEAD',
-      '--seed', 'HEAD',
-      '--previous-tree', gitOid(['rev-parse', 'HEAD^{tree}']),
-      '--before-tree', before.stdout.toString().trim(),
-      '--after-tree', after.stdout.toString().trim(),
-    ]);
+    const result = runDevPlanCli(['pre-commit-check', planDir, 'S1']);
     assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /accepted\/fix hunk|cannot be applied uniquely/);
+    assert.match(result.stderr.toString(), /HEAD == previousHeadCommit/);
   });
 });
 
-test('review-package 在 HEAD 偏离 seedCommit 时使当前审查失效', async () => {
+test('pre-commit-check 拒绝遗漏 dirty、额外 staged、部分 staged 与 untracked', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-pre-commit-dirty');
+    await writeValidExecutingPlan(planDir);
+    await writeReadyTaskHandoff(planDir, 'S1');
+    await fs.writeFile('src/example.ts', 'export const value = 2;\n', 'utf8');
+    let result = runDevPlanCli(['pre-commit-check', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /staged paths must exactly equal|unstaged residual/);
+
+    execFileSync('git', ['add', 'src/example.ts']);
+    await fs.writeFile('src/context.ts', 'export const context = false;\n', 'utf8');
+    execFileSync('git', ['add', 'src/context.ts']);
+    result = runDevPlanCli(['pre-commit-check', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /all task-owned dirty paths|staged paths must exactly equal/);
+
+    execFileSync('git', ['restore', '--staged', 'src/context.ts']);
+    execFileSync('git', ['restore', 'src/context.ts']);
+    await fs.writeFile('src/example.ts', 'export const value = 3;\n', 'utf8');
+    result = runDevPlanCli(['pre-commit-check', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /task-owned paths have unstaged residual/);
+
+    execFileSync('git', ['restore', '--staged', 'src/example.ts']);
+    execFileSync('git', ['restore', 'src/example.ts']);
+    const reportPath = path.join(planDir, 'task-reports', 'S1.json');
+    const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    report.changedFiles = [{ path: 'src/new.ts', reason: '新增实现文件。' }];
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8')).replace('  - src/example.ts', '  - src/example.ts\n  - src/new.ts'),
+      'utf8',
+    );
+    await fs.writeFile('src/new.ts', 'export const value = 4;\n', 'utf8');
+    result = runDevPlanCli(['pre-commit-check', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /task-owned paths remain untracked: src\/new\.ts/);
+  });
+});
+
+test('pre-commit-check 拒绝 rename 逃逸、越权路径与基线脏文件重叠', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-pre-commit-boundary');
+    await writeValidExecutingPlan(planDir);
+    await fs.mkdir('src/utils', { recursive: true });
+    await fs.writeFile('src/utils/legacy.ts', 'export const legacy = true;\n', 'utf8');
+    execFileSync('git', ['add', 'src/utils/legacy.ts']);
+    execFileSync('git', ['commit', '-m', 'legacy baseline']);
+    await setSliceBaseCommit(planDir, 'S1', gitOid(['rev-parse', 'HEAD']));
+    await writeReadyTaskHandoff(planDir, 'S1');
+    const reportPath = path.join(planDir, 'task-reports', 'S1.json');
+    const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    report.changedFiles = [
+      { path: 'src/renamed.ts', reason: '移动实现。' },
+      { path: 'src/utils/legacy.ts', reason: '删除旧路径。' },
+    ];
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8')).replace('  - src/example.ts', '  - src/example.ts\n  - src/renamed.ts'),
+      'utf8',
+    );
+    execFileSync('git', ['mv', 'src/utils/legacy.ts', 'src/renamed.ts']);
+
+    let result = runDevPlanCli(['pre-commit-check', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /matches 禁止修改: src\/utils\/legacy\.ts/);
+
+    execFileSync('git', ['restore', '--staged', 'src/renamed.ts', 'src/utils/legacy.ts']);
+    execFileSync('git', ['restore', 'src/utils/legacy.ts']);
+    await fs.rm('src/renamed.ts', { force: true });
+    report.changedFiles = [{ path: 'src/outside.ts', reason: '越权文件。' }];
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    await fs.writeFile('src/outside.ts', 'export const outside = true;\n', 'utf8');
+    execFileSync('git', ['add', 'src/outside.ts']);
+    result = runDevPlanCli(['pre-commit-check', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /outside 允许修改: src\/outside\.ts/);
+
+    execFileSync('git', ['restore', '--staged', 'src/outside.ts']);
+    await fs.rm('src/outside.ts', { force: true });
+    report.changedFiles = [{ path: 'src/example.ts', reason: '与基线脏文件重叠。' }];
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8')).replace('- 非目标：', '- 基线脏文件：\n  - src/example.ts\n- 非目标：'),
+      'utf8',
+    );
+    await fs.writeFile('src/example.ts', 'export const value = 2;\n', 'utf8');
+    execFileSync('git', ['add', 'src/example.ts']);
+    result = runDevPlanCli(['pre-commit-check', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /基线脏文件 overlaps task-owned path|overlaps 基线脏文件/);
+  });
+});
+
+test('无代码轮不创建提交并记录不变 HEAD', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-no-code-iteration');
+    await writeValidExecutingPlan(planDir);
+    await writeReadyTaskHandoff(planDir, 'S1');
+    const reportPath = path.join(planDir, 'task-reports', 'S1.json');
+    const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    report.changedFiles = [];
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    const before = gitOid(['rev-parse', 'HEAD']);
+
+    const preCommit = runDevPlanCli(['pre-commit-check', planDir, 'S1']);
+    assert.equal(preCommit.status, 0, preCommit.stderr.toString());
+    const recorded = runDevPlanCli(['record-commit', planDir, 'S1']);
+    assert.equal(recorded.status, 0, recorded.stderr.toString());
+    const range = JSON.parse(await fs.readFile(path.join(planDir, 'review-packages', 'S1-range.json'), 'utf8'));
+    assert.equal(range.baseCommit, before);
+    assert.equal(range.previousHeadCommit, before);
+    assert.equal(range.headCommit, before);
+    assert.deepEqual(range.iterationFiles, []);
+    assert.equal(gitOid(['rev-parse', 'HEAD']), before);
+  });
+});
+
+test('review-package 使用已记录 range，不受后续 HEAD 漂移影响', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-head-drift');
     await writeValidExecutingPlan(planDir);
     await writeReadyTaskHandoff(planDir, 'S1');
-    initGitRepo();
-    const beforeTree = await prepareReviewableSliceDiffFixture();
-    await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    await prepareReviewableSliceDiffFixture();
+    await sealCurrentWorkspaceFixture(planDir, 'S1');
     await fs.writeFile('src/context.ts', 'export const context = false;\n', 'utf8');
     execFileSync('git', ['add', 'src/context.ts']);
     execFileSync('git', ['commit', '-m', 'move HEAD']);
 
     const result = runDevPlanCli(['review-package', planDir, 'S1']);
-    assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /HEAD must equal seedCommit/);
+    assert.equal(result.status, 0, result.stderr.toString());
+    const reviewPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1.md'), 'utf8');
+    assert.match(reviewPackage, /src\/example\.ts/);
+    assert.doesNotMatch(reviewPackage, /export const context = false/);
   });
 });
 
@@ -4592,9 +4619,8 @@ test('CLI rule-review-package writes rules-only package when project rule review
       'utf8',
     );
     await writeReadyTaskHandoff('dev-plans/2026-06-10-rule-review-package', 'S1');
-    initGitRepo();
-    const beforeTree = await prepareReviewableSliceDiffFixture();
-    await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    await prepareReviewableSliceDiffFixture();
+    await sealCurrentWorkspaceFixture(planDir, 'S1');
 
     const result = spawnSync('node', [script, 'rule-review-package', 'dev-plans/2026-06-10-rule-review-package', 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
@@ -4618,17 +4644,17 @@ test('CLI rule-review-package writes rules-only package when project rule review
   });
 });
 
-test('rule-review-package 对 repair TARGET 仍复制累计 BASE 到 TARGET tree 输入', async () => {
+test('rule-review-package 对 repair 仍提交累计 baseCommit..headCommit', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-rule-package-v4');
     await writeValidExecutingPlan(planDir);
     const planPath = path.join(planDir, 'plan.md');
     await fs.writeFile(planPath, withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')), 'utf8');
-    await writeReadyTaskHandoff(planDir, 'S1');
-    initGitRepo();
     const initialRulesReview = await prepareRulesReviewRunFixture({ runId: 'run-initial-target' });
-    const beforeTree = await prepareReviewableSliceDiffFixture();
-    const initialRange = await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    await setSliceBaseCommit(planDir, 'S1', gitOid(['rev-parse', 'HEAD']));
+    await writeReadyTaskHandoff(planDir, 'S1');
+    await prepareReviewableSliceDiffFixture();
+    const initialRange = await sealCurrentWorkspaceFixture(planDir, 'S1');
     let result = runDevPlanCli(['review-package', planDir, 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
     const prompt = runDevPlanCli(['review-prompt', planDir, 'S1']);
@@ -4659,18 +4685,16 @@ test('rule-review-package 对 repair TARGET 仍复制累计 BASE 到 TARGET tree
       ),
       'utf8',
     );
-    const before = runDevPlanCli(['workspace-tree', '--seed', initialRange.seedCommit]);
     await fs.writeFile('src/example.ts', 'export const value = 3;\n', 'utf8');
-    const repairedRange = await sealCurrentWorkspaceFixture(planDir, 'S1', {
-      previousTree: initialRange.targetTree,
-      beforeTree: before.stdout.toString().trim(),
-    });
+    const repairedRange = await sealCurrentWorkspaceFixture(planDir, 'S1');
 
     result = runDevPlanCli(['rule-review-package', planDir, 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
     const rulePackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1-rules.md'), 'utf8');
-    assert.match(rulePackage, new RegExp(`"baseTree": "${repairedRange.baseTree}"`));
-    assert.match(rulePackage, new RegExp(`"targetTree": "${repairedRange.targetTree}"`));
+    assert.match(rulePackage, new RegExp(`"baseCommit": "${repairedRange.baseCommit}"`));
+    assert.match(rulePackage, new RegExp(`"headCommit": "${repairedRange.headCommit}"`));
+    assert.match(rulePackage, new RegExp(`--base ${repairedRange.baseCommit} --target-commit ${repairedRange.headCommit}`));
+    assert.match(rulePackage, /excludedFiles: \[\]/);
     assert.match(rulePackage, /-export const value = 1;[\s\S]*\+export const value = 3;/);
     assert.doesNotMatch(rulePackage, /baseRunId|continuation|effectiveResults/);
     assert.doesNotMatch(getSectionForTest(rulePackage, '变更文件'), /\.rules-review-tmp\//);
@@ -4691,7 +4715,7 @@ test('CLI rule-review-package skips when project rule review is not applicable',
   });
 });
 
-test('all review packages fail closed without a sealed Git range', async () => {
+test('all review packages fail closed without a recorded Review Range', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-package-inventory-failure');
     await writeValidExecutingPlan(planDir);
@@ -4712,12 +4736,32 @@ test('all review packages fail closed without a sealed Git range', async () => {
     for (const args of commands) {
       const result = runDevPlanCli(args);
       assert.equal(result.status, 1, `${args[0]} should fail: ${result.stderr.toString()}`);
-      assert.match(result.stderr.toString(), /missing sealed review range|not a git repository/);
+      assert.match(result.stderr.toString(), /missing (?:sealed )?review range|missing Review Range|not a git repository/);
     }
 
     assert.equal(await fs.stat(path.join(planDir, 'review-packages', 'S1.md')).then(() => true, () => false), false);
     assert.equal(await fs.stat(path.join(planDir, 'review-packages', 'S1-rules.md')).then(() => true, () => false), false);
     assert.equal(await fs.stat(path.join(planDir, 'review-packages', 'whole-task.md')).then(() => true, () => false), false);
+  });
+});
+
+test('review-package rejects legacy Review Range fields', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-legacy-review-range');
+    await writeValidExecutingPlan(planDir);
+    await writeReadyTaskHandoff(planDir, 'S1');
+    await prepareReviewableSliceDiffFixture();
+    const range = await sealCurrentWorkspaceFixture(planDir, 'S1');
+    const rangePath = path.join(planDir, 'review-packages', 'S1-range.json');
+    await fs.writeFile(
+      rangePath,
+      `${JSON.stringify({ ...range, targetTree: gitOid(['rev-parse', `${range.headCommit}^{tree}`]) }, null, 2)}\n`,
+      'utf8',
+    );
+
+    const result = runDevPlanCli(['review-package', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /review range contains unsupported field targetTree/);
   });
 });
 
@@ -4729,8 +4773,8 @@ test('CLI review-package ensures missing dev-plans .gitignore', async () => {
     await writeReadyTaskHandoff('dev-plans/2026-06-10-review-package-gitignore', 'S1');
     await fs.rm(path.join('dev-plans', '.gitignore'), { force: true });
     initGitRepo();
-    const beforeTree = await prepareReviewableSliceDiffFixture();
-    await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    await prepareReviewableSliceDiffFixture();
+    await sealCurrentWorkspaceFixture(planDir, 'S1');
 
     const result = spawnSync('node', [script, 'review-package', 'dev-plans/2026-06-10-review-package-gitignore', 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
@@ -4768,8 +4812,8 @@ test('diff-check ignores generated review packages after review-package', async 
     execFileSync('git', ['init']);
     execFileSync('git', ['config', 'user.email', 'test@example.com']);
     execFileSync('git', ['config', 'user.name', 'Test User']);
-    const beforeTree = await prepareReviewableSliceDiffFixture();
-    await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    await prepareReviewableSliceDiffFixture();
+    await sealCurrentWorkspaceFixture(planDir, 'S1');
 
     const result = spawnSync('node', [script, 'review-package', 'dev-plans/2026-06-10-review-package-diff-check', 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
@@ -4784,9 +4828,9 @@ test('CLI review-package uses dynamic diff fence and reports untracked file stat
     await writeValidExecutingPlan(planDir);
     await writeReadyTaskHandoff('dev-plans/2026-06-10-review-package-fence', 'S1');
     initGitRepo();
-    const beforeTree = await prepareReviewableSliceDiffFixture();
+    await prepareReviewableSliceDiffFixture();
     await fs.writeFile('src/example.ts', '```markdown\nbody\n```\n', 'utf8');
-    await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    await sealCurrentWorkspaceFixture(planDir, 'S1');
 
     const result = spawnSync('node', [script, 'review-package', 'dev-plans/2026-06-10-review-package-fence', 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
@@ -4807,7 +4851,7 @@ test('workflow eval review-package injection text does not break fences or revie
     await writeValidExecutingPlan(planDir);
     await writeReadyTaskHandoff('dev-plans/2026-06-10-review-package-injection', 'S1');
     initGitRepo();
-    const beforeTree = await prepareReviewableSliceDiffFixture();
+    await prepareReviewableSliceDiffFixture();
     await fs.writeFile(
       'src/example.ts',
       [
@@ -4819,7 +4863,7 @@ test('workflow eval review-package injection text does not break fences or revie
       ].join('\n'),
       'utf8',
     );
-    await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    await sealCurrentWorkspaceFixture(planDir, 'S1');
 
     const pack = spawnSync('node', [script, 'review-package', 'dev-plans/2026-06-10-review-package-injection', 'S1']);
     assert.equal(pack.status, 0, pack.stderr.toString());
@@ -4845,17 +4889,8 @@ test('CLI review-package excludes its own generated packages from changed files'
     const planDir = path.join('dev-plans', '2026-06-10-review-package-self-inventory');
     await writeValidExecutingPlan(planDir);
     await writeReadyTaskHandoff('dev-plans/2026-06-10-review-package-self-inventory', 'S1');
-    execFileSync('git', ['init']);
-    execFileSync('git', ['config', 'user.email', 'test@example.com']);
-    execFileSync('git', ['config', 'user.name', 'Test User']);
-    await fs.writeFile(path.join('dev-plans', '.gitignore'), '*/review-packages/**\n', 'utf8');
-    await fs.mkdir('src', { recursive: true });
-    await fs.writeFile('src/example.ts', 'export const value = 1;\n', 'utf8');
-    execFileSync('git', ['add', 'dev-plans/.gitignore', 'src/example.ts']);
-    execFileSync('git', ['commit', '-m', 'init']);
-    const beforeTree = runDevPlanCli(['workspace-tree', '--seed', 'HEAD']).stdout.toString().trim();
     await fs.writeFile('src/example.ts', 'export const value = 2;\n', 'utf8');
-    await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    await sealCurrentWorkspaceFixture(planDir, 'S1');
 
     const first = spawnSync('node', [script, 'review-package', 'dev-plans/2026-06-10-review-package-self-inventory', 'S1']);
     assert.equal(first.status, 0, first.stderr.toString());
@@ -4881,8 +4916,8 @@ test('CLI review-prompt only points reviewer to review-package path', async () =
     await writeValidExecutingPlan(planDir);
     await writeReadyTaskHandoff('dev-plans/2026-06-10-review-prompt', 'S1');
     initGitRepo();
-    const beforeTree = await prepareReviewableSliceDiffFixture();
-    await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    await prepareReviewableSliceDiffFixture();
+    await sealCurrentWorkspaceFixture(planDir, 'S1');
 
     const missingPackage = spawnSync('node', [script, 'review-prompt', 'dev-plans/2026-06-10-review-prompt', 'S1']);
     assert.equal(missingPackage.status, 2, missingPackage.stderr.toString());
@@ -4925,8 +4960,8 @@ test('CLI review-prompt rejects duplicate top-level review package sections', as
     await writeValidExecutingPlan(planDir);
     await writeReadyTaskHandoff('dev-plans/2026-06-10-review-prompt-duplicate-section', 'S1');
     initGitRepo();
-    const beforeTree = await prepareReviewableSliceDiffFixture();
-    await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
+    await prepareReviewableSliceDiffFixture();
+    await sealCurrentWorkspaceFixture(planDir, 'S1');
     const pack = spawnSync('node', [script, 'review-package', 'dev-plans/2026-06-10-review-prompt-duplicate-section', 'S1']);
     assert.equal(pack.status, 0, pack.stderr.toString());
 
@@ -4961,6 +4996,30 @@ test('workflow eval close-check requires 整任务审查包 when 整任务审查
     assert.equal(result.status, 1, result.stderr.toString());
     assert.match(result.stderr.toString(), /missing 整任务审查包/);
     assert.match(result.stderr.toString(), /review-packages\/whole-task\.md/);
+  });
+});
+
+test('workflow eval close-check rejects whole-review package endpoint mismatch', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-whole-endpoint');
+    await writeValidExecutingPlan(planDir);
+    await writeCloseCheckHandoffFixtures(planDir);
+    await markWholeReviewPassed(planDir);
+    const range = JSON.parse(await fs.readFile(path.join(planDir, 'review-packages', 'S1-range.json'), 'utf8'));
+    const packagePath = path.join(planDir, 'review-packages', 'whole-task.md');
+    const reviewPackage = await fs.readFile(packagePath, 'utf8');
+    await fs.writeFile(
+      packagePath,
+      reviewPackage.replace(
+        `"headCommit": "${range.headCommit}"`,
+        `"headCommit": "${range.baseCommit}"`,
+      ),
+      'utf8',
+    );
+
+    const result = runDevPlanCli(['close-check', planDir]);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /whole review Cumulative Range must use recorded first baseCommit and final headCommit/);
   });
 });
 
@@ -5114,14 +5173,14 @@ test('workflow eval close-check rejects legacy completed review packages', async
 
     const packagePath = path.join(planDir, 'review-packages', 'S1.md');
     let reviewPackage = await fs.readFile(packagePath, 'utf8');
-    for (const title of ['Sealed Range', 'General Review 阶段', 'General Review 前序']) {
+    for (const title of ['Review Range', 'General Review 阶段', 'General Review 前序']) {
       reviewPackage = removeTopLevelSection(reviewPackage, title);
     }
     await fs.writeFile(packagePath, reviewPackage, 'utf8');
 
     const result = runDevPlanCli(['close-check', planDir]);
     assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /missing Sealed Range|missing General Review 阶段/);
+    assert.match(result.stderr.toString(), /missing Review Range|missing General Review 阶段/);
   });
 });
 
@@ -5393,71 +5452,7 @@ test('CLI close-check requires project rule review A* evidence when required', a
   });
 });
 
-test('CLI close-check requires an independent rules-review run for every General Review TARGET', async () => {
-  await withTempRepo(async () => {
-    const planDir = path.join('dev-plans', '2026-06-10-close-check-rule-review-history');
-    await writeValidExecutingPlan(planDir);
-    const rulesReview = await prepareRulesReviewRunFixture();
-    const planPath = path.join(planDir, 'plan.md');
-    await fs.writeFile(
-      planPath,
-      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
-      'utf8',
-    );
-    await writeCloseCheckHandoffFixtures(planDir, 'S1', { rulesReview });
-    await appendProjectRuleReviewAudit(planDir, rulesReview);
-
-    const range = JSON.parse(await fs.readFile(path.join(planDir, 'review-packages', 'S1-range.json'), 'utf8'));
-    const priorAudit = `### A8：S1 prior General Review TARGET
-
-- 状态：done
-- 关联：S1
-- reviewType：full
-- previousReview：无
-- baseCommit：${range.baseCommit}
-- baseTree：${range.baseTree}
-- seedCommit：${range.seedCommit}
-- targetTree：${range.baseTree}
-- boundCommit：无
-- reviewPackageHash：sha256:${'8'.repeat(64)}
-
-#### General Review 结论
-
-| Verdict | Status | Severity | Evidence | Note |
-| --- | --- | --- | --- | --- |
-| 需求符合性 | passed | not-applicable | prior package | 需求结论 |
-| 切片边界 / 交接一致性 | passed | not-applicable | prior package | 边界结论 |
-| 代码质量 / AI 污染检查 | passed | not-applicable | prior package | 质量结论 |
-
-#### openFindings
-
-| Finding | Verdict | Severity | Origin | Evidence | Summary |
-| --- | --- | --- | --- | --- | --- |
-`;
-    const packagePath = path.join(planDir, 'review-packages', 'S1.md');
-    const reviewPackage = (await fs.readFile(packagePath, 'utf8'))
-      .replace('- previousReview：无', '- previousReview：A8')
-      .replace('## General Review 前序\n\n- 无', `## General Review 前序\n\n${priorAudit.trimEnd()}`);
-    await fs.writeFile(packagePath, reviewPackage, 'utf8');
-    const packageHash = `sha256:${createHash('sha256').update(reviewPackage).digest('hex')}`;
-    const auditsPath = path.join(planDir, 'audits.md');
-    const audits = (await fs.readFile(auditsPath, 'utf8'))
-      .replace(/(### A9：[\s\S]*?)- previousReview：无/, '$1- previousReview：A8')
-      .replace(/(### A9：[\s\S]*?)- reviewPackageHash：sha256:[0-9a-f]{64}/, `$1- reviewPackageHash：${packageHash}`);
-    await fs.writeFile(auditsPath, `${audits.trimEnd()}\n\n${priorAudit}`, 'utf8');
-    await fs.writeFile(
-      planPath,
-      (await fs.readFile(planPath, 'utf8')).replace('| A1 | done |', '| A1 | done |\n| A8 | done |'),
-      'utf8',
-    );
-
-    const result = runDevPlanCli(['close-check', planDir]);
-    assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /General Review TARGET A8\/.+ requires an independent rules-review run/);
-  });
-});
-
-test('CLI close-check blocks required project rule review when the code commit was not bound', async () => {
+test('CLI close-check blocks required project rule review when target commit is not bound', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-close-check-rule-review-unbound');
     await writeValidExecutingPlan(planDir);
@@ -5473,7 +5468,7 @@ test('CLI close-check blocks required project rule review when the code commit w
 
     const result = runDevPlanCli(['close-check', planDir]);
     assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /rules-review run with code changes must bind reviewRange\.boundCommit/);
+    assert.match(result.stderr.toString(), /rules-review boundCommit must equal sliced-dev headCommit/);
   });
 });
 
@@ -5538,7 +5533,7 @@ test('CLI close-check rejects rules-review file scope smaller than current revie
 
     const result = runDevPlanCli(['close-check', planDir]);
     assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /rules-review cumulative changed files must equal sealed inputSnapshot/);
+    assert.match(result.stderr.toString(), /rules-review changed files must equal cumulative commit range/);
     assert.match(result.stderr.toString(), /changedUnits must cover package file src\/context\.ts/);
   });
 });
@@ -6168,21 +6163,21 @@ test('CLI whole-review-package covers two committed slices', async () => {
     await fs.writeFile(planPath, plan, 'utf8');
     await writeReadyTaskHandoff(planDir, 'S2');
 
-    const s2Before = runDevPlanCli(['workspace-tree', '--seed', 'HEAD']);
-    assert.equal(s2Before.status, 0, s2Before.stderr.toString());
     await fs.writeFile('src/consumer.ts', 'export const consumer = true;\n', 'utf8');
-    await sealCurrentWorkspaceFixture(planDir, 'S2', { beforeTree: s2Before.stdout.toString().trim() });
-    execFileSync('git', ['add', 'src/consumer.ts']);
-    execFileSync('git', ['commit', '-m', 'slice 2']);
-    const s2Commit = gitOid(['rev-parse', 'HEAD']);
-    const bind = runDevPlanCli(['bind-target', planDir, 'S2', '--commit', s2Commit]);
-    assert.equal(bind.status, 0, bind.stderr.toString());
+    const s2Range = await sealCurrentWorkspaceFixture(planDir, 'S2');
+    const s2Commit = s2Range.headCommit;
+    await fs.writeFile('src/context.ts', 'export const context = false;\n', 'utf8');
+    execFileSync('git', ['add', 'src/context.ts']);
+    execFileSync('git', ['commit', '-m', 'post-slice unrelated']);
+    assert.notEqual(gitOid(['rev-parse', 'HEAD']), s2Commit);
 
     plan = (await fs.readFile(planPath, 'utf8'))
       .replace('> 状态：executing', '> 状态：done')
       .replace('- 阶段：executing', '- 阶段：done')
-      .replace('- 当前切片：S2', '- 当前切片：无')
-      .replace(s2Block, createClosedConsumerSliceBlock());
+      .replace('- 当前切片：S2', '- 当前切片：无');
+    const closedS2 = createClosedConsumerSliceBlock()
+      .replace('- Commit：已提交', `- Commit：已提交\n- baseCommit：${s1Range.headCommit}`);
+    plan = plan.replace(/\n### S2：[\s\S]*$/, closedS2);
     await fs.writeFile(planPath, plan, 'utf8');
     const result = spawnSync('node', [script, 'whole-review-package', 'dev-plans/2026-06-10-whole-review-package']);
 
@@ -6195,6 +6190,7 @@ test('CLI whole-review-package covers two committed slices', async () => {
     assert.match(reviewPackage, new RegExp(`"headCommit": "${s2Commit}"`));
     assert.match(reviewPackage, /src\/example\.ts/);
     assert.match(reviewPackage, /src\/consumer\.ts/);
+    assert.doesNotMatch(reviewPackage, /export const context = false/);
     assert.match(reviewPackage, /\| S1 \|/);
     assert.match(reviewPackage, /\| S2 \|/);
     assert.match(reviewPackage, /## 切片概览/);
@@ -6220,18 +6216,71 @@ test('CLI whole-review-package covers two committed slices', async () => {
   });
 });
 
+test('CLI whole-review-package rejects commit gaps between slices', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-whole-review-gap');
+    await writeValidExecutingPlan(planDir);
+    await writeCloseCheckHandoffFixtures(planDir);
+    const s1Range = JSON.parse(await fs.readFile(path.join(planDir, 'review-packages', 'S1-range.json'), 'utf8'));
+
+    await fs.writeFile('src/context.ts', 'export const context = false;\n', 'utf8');
+    execFileSync('git', ['add', 'src/context.ts']);
+    execFileSync('git', ['commit', '-m', 'between slices']);
+    const gapCommit = gitOid(['rev-parse', 'HEAD']);
+    assert.notEqual(gapCommit, s1Range.headCommit);
+
+    const planPath = path.join(planDir, 'plan.md');
+    let plan = (await fs.readFile(planPath, 'utf8'))
+      .replace('> 状态：done', '> 状态：executing')
+      .replace('- 阶段：done', '- 阶段：executing')
+      .replace('- 当前切片：无', '- 当前切片：S2')
+      .replace('- 下一步：执行 S1', '- 下一步：执行 S2')
+      + withReviewPackageReadySlice(createConsumerSliceBlock(), planDir, 'S2');
+    await fs.writeFile(planPath, plan, 'utf8');
+    await writeReadyTaskHandoff(planDir, 'S2');
+    await fs.writeFile('src/consumer.ts', 'export const consumer = true;\n', 'utf8');
+    const s2Range = await sealCurrentWorkspaceFixture(planDir, 'S2');
+    assert.equal(s2Range.baseCommit, gapCommit);
+
+    plan = (await fs.readFile(planPath, 'utf8'))
+      .replace('> 状态：executing', '> 状态：done')
+      .replace('- 阶段：executing', '- 阶段：done')
+      .replace('- 当前切片：S2', '- 当前切片：无');
+    const closedS2 = createClosedConsumerSliceBlock()
+      .replace('- Commit：已提交', `- Commit：已提交\n- baseCommit：${gapCommit}`);
+    await fs.writeFile(planPath, plan.replace(/\n### S2：[\s\S]*$/, closedS2), 'utf8');
+
+    const result = runDevPlanCli(['whole-review-package', planDir]);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /S2: baseCommit must equal previous execution slice headCommit/);
+  });
+});
+
 test('CLI whole-review-package renders missing slice AI Review with Note column', async () => {
   await withTempRepo(async () => {
     const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
     const planDir = path.join('dev-plans', '2026-06-10-whole-review-package-missing-ai-review');
     await writeValidExecutingPlan(planDir);
     await writeReadyTaskHandoff(planDir, 'S1');
-    initGitRepo();
-    const beforeTree = await prepareReviewableSliceDiffFixture();
-    await sealCurrentWorkspaceFixture(planDir, 'S1', { beforeTree });
-    const commit = commitReviewableSliceDiffFixture();
-    const bind = runDevPlanCli(['bind-target', planDir, 'S1', '--commit', commit]);
-    assert.equal(bind.status, 0, bind.stderr.toString());
+    await prepareReviewableSliceDiffFixture();
+    await sealCurrentWorkspaceFixture(planDir, 'S1');
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withFilledContextPreflight(await fs.readFile(planPath, 'utf8'))
+        .replace('> 状态：executing', '> 状态：done')
+        .replace('- 阶段：executing', '- 阶段：done')
+        .replace('- 当前切片：S1', '- 当前切片：无')
+        .replace('- 状态：not-started', '- 状态：done')
+        .replace('- 风险：B', '- 风险：A')
+        .replace('- 执行：待判定', '- 执行：自动')
+        .replace('- 上下文预检：pending', '- 上下文预检：ready')
+        .replace('- 硬门禁：pending', '- 硬门禁：passed（标准流程）')
+        .replace('- AI Review：pending', '- AI Review：skipped（A 类用户允许跳过）')
+        .replace('- Commit：待提交', '- Commit：已提交')
+        .replace('- 验证：pending', '- 验证：passed（标准流程）'),
+      'utf8',
+    );
 
     const result = spawnSync('node', [script, 'whole-review-package', 'dev-plans/2026-06-10-whole-review-package-missing-ai-review']);
     assert.equal(result.status, 0, result.stderr.toString());
