@@ -65,6 +65,19 @@ test('subagent 文档使用当前共享工作区契约', async () => {
   assert.doesNotMatch(contract, /只有原 reviewer 不可用|已有审查结论后只生成|只要已有一轮结论，后续修复复核必须是 `incremental`/);
 });
 
+test('拷问展示明确区分整体拆分与当前切片', async () => {
+  const [skill, executionRules] = await Promise.all(
+    ['SKILL.md', 'EXECUTION-RULES.md']
+      .map((name) => fs.readFile(new URL(`../../skills/sliced-dev/${name}`, import.meta.url), 'utf8')),
+  );
+
+  assert.match(skill, /> 拷问对象：整体拆分方案/);
+  assert.match(skill, /> 拷问对象：切片 <S-id>「<切片标题>」/);
+  assert.match(skill, /拷问选择预览、每轮具体问题和拷问收口候选都必须重复显示/);
+  assert.match(executionRules, /\| 拆分拷问选择 \|[^\n]*`> 拷问对象：整体拆分方案`/);
+  assert.match(executionRules, /\| 切片拷问选择 \|[^\n]*`> 拷问对象：切片 <S-id>「<切片标题>」`/);
+});
+
 test('授权边界术语防回退', async () => {
   const [skill, executionRules, planFile, implementer] = await Promise.all(
     ['SKILL.md', 'EXECUTION-RULES.md', 'PLAN-FILE.md', 'IMPLEMENTER-SUBAGENT.md']
