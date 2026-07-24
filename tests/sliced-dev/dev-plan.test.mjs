@@ -2841,20 +2841,24 @@ test('validate rejects skipped user acceptance without reason', async () => {
   });
 });
 
-test('validate rejects user acceptance issues without reason', async () => {
+test('validate rejects user acceptance issues without non-placeholder reason', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-user-acceptance-issues-reason');
     await writeValidExecutingPlan(planDir);
     const planPath = path.join(planDir, 'plan.md');
     const plan = await fs.readFile(planPath, 'utf8');
-    await fs.writeFile(
-      planPath,
-      plan.replace('- AI Review：pending', '- AI Review：pending\n- 用户验收：issues'),
-      'utf8',
-    );
-
-    const errors = await validatePlan(planDir);
-    assert(errors.some((error) => error.includes('用户验收 issues requires reason')));
+    for (const userAcceptance of ['issues', 'issues（<原因>）']) {
+      await fs.writeFile(
+        planPath,
+        plan.replace('- AI Review：pending', `- AI Review：pending\n- 用户验收：${userAcceptance}`),
+        'utf8',
+      );
+      const errors = await validatePlan(planDir);
+      assert(
+        errors.some((error) => error.includes('用户验收 issues requires reason')),
+        userAcceptance,
+      );
+    }
   });
 });
 
