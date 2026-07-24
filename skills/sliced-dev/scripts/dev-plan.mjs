@@ -5735,10 +5735,14 @@ function validateSliceBlock(id, body, slices, decisions, audits, referencedDecis
     errors.push(`plan.md:${id}: invalid 用户验收 ${userAcceptance ?? '<missing>'}`);
   }
   const userAcceptanceStatus = hasUserAcceptance ? getStatusPrefix(userAcceptance) : undefined;
-  if (userAcceptanceStatus === 'skipped' && isPlaceholderText(getStatusReason(userAcceptance))) {
+  const userAcceptanceReason = hasUserAcceptance ? getStatusReason(userAcceptance) : undefined;
+  if (userAcceptanceStatus === 'skipped' && isPlaceholderText(userAcceptanceReason)) {
     errors.push(`plan.md:${id}: 用户验收 skipped requires reason`);
   }
-  if (userAcceptanceStatus === 'issues' && isPlaceholderText(getStatusReason(userAcceptance))) {
+  if (
+    userAcceptanceStatus === 'issues'
+    && (isPlaceholderText(userAcceptanceReason) || hasTemplatePlaceholder(userAcceptanceReason))
+  ) {
     errors.push(`plan.md:${id}: 用户验收 issues requires reason`);
   }
   const repair = validateRepairAttempts(repairAttempts);
