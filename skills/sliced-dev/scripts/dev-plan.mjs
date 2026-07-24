@@ -148,6 +148,7 @@ const PROJECT_RULE_REVIEW_VERDICT_STATUSES = new Set([
 ]);
 const REVIEW_VERDICT_SEVERITIES = new Set(['critical', 'major', 'minor', 'not-applicable']);
 const GENERAL_REVIEW_TYPES = new Set(['full', 'repair']);
+const USER_ACCEPTANCE_REVIEW_TRIGGER = 'user-acceptance-issues';
 const GENERAL_REVIEW_FINDING_SEVERITIES = new Set(['critical', 'major', 'minor']);
 const GENERAL_REVIEW_FINDING_ORIGINS = new Set(['initial', 'repair-delta', 'late-discovered']);
 const GENERAL_REVIEW_REPAIR_STATUSES = new Set(['addressed', 'not_addressed']);
@@ -2654,7 +2655,15 @@ function renderTaskBriefHandoff(sliceBody) {
 
 function renderTaskBriefGateRequirements(sliceBody) {
   const header = getSliceHeaderBlock(sliceBody);
-  const summaryLabels = ['风险', '执行', '上下文预检', '硬门禁', 'AI Review', '验证'];
+  const summaryLabels = [
+    '风险',
+    '执行',
+    '上下文预检',
+    '硬门禁',
+    'AI Review',
+    ...(getField(header, '用户验收') === undefined ? [] : ['用户验收']),
+    '验证',
+  ];
   const summary = summaryLabels.map((label) => `- ${label}：${getField(header, label) ?? '<missing>'}`).join('\n');
   const gateNotes = getSubsection(sliceBody, '门禁记录');
   return `${summary}
@@ -3427,6 +3436,7 @@ function readGeneralReviewAuditSnapshot(auditId, audits, { visited = new Set() }
   const previousHeadCommit = parseSingleTopLevelField(audit.body, 'previousHeadCommit');
   const headCommit = parseSingleTopLevelField(audit.body, 'headCommit');
   const reviewPackageHash = parseSingleTopLevelField(audit.body, 'reviewPackageHash');
+  const reviewTrigger = parseSingleTopLevelField(audit.body, 'reviewTrigger');
   if (status.values.length !== 1 || status.value !== 'done') {
     errors.push(`audits.md:${auditId}: general review audit 状态 must be exactly done`);
   }
@@ -3448,6 +3458,7 @@ function readGeneralReviewAuditSnapshot(auditId, audits, { visited = new Set() }
   if (reviewPackageHash.values.length !== 1 || !SHA256_RE.test(reviewPackageHash.value ?? '')) {
     errors.push(`audits.md:${auditId}: reviewPackageHash must appear once as sha256:<64 lowercase hex>`);
   }
+  validateGeneralReviewTrigger(reviewTrigger, `audits.md:${auditId}`, errors);
 
   const verdicts = parseVerdictTable(audit.body, GENERAL_REVIEW_AUDIT_VERDICTS_SECTION);
   const findings = parseGeneralReviewFindings(audit.body);
@@ -3480,6 +3491,9 @@ function readGeneralReviewAuditSnapshot(auditId, audits, { visited = new Set() }
   if (previousReview.value === '无' && reviewType.value !== 'full') {
     errors.push(`audits.md:${auditId}: first General Review must be full`);
   }
+  if (previousReview.value === '无' && reviewTrigger.values.length > 0) {
+    errors.push(`audits.md:${auditId}: reviewTrigger requires a direct previous clean full`);
+  }
   if (previousReview.value === '无' && previousHeadCommit.value !== baseCommit.value) {
     errors.push(`audits.md:${auditId}: first General Review previousHeadCommit must equal baseCommit`);
   }
@@ -3496,12 +3510,27 @@ function readGeneralReviewAuditSnapshot(auditId, audits, { visited = new Set() }
     }
     if (
       reviewType.value === 'full'
+      && !isUserAcceptanceReworkTransition({
+        reviewType: reviewType.value,
+        reviewTrigger: reviewTrigger.value,
+        previousHeadCommit: previousHeadCommit.value,
+      }, previousSnapshot)
       && (
         previousHeadCommit.value !== previousSnapshot.previousHeadCommit
         || headCommit.value !== previousSnapshot.headCommit
       )
     ) {
       errors.push(`audits.md:${auditId}: final full must keep the direct repair commit range unchanged`);
+    }
+    if (
+      reviewTrigger.values.length > 0
+      && !isUserAcceptanceReworkTransition({
+        reviewType: reviewType.value,
+        reviewTrigger: reviewTrigger.value,
+        previousHeadCommit: previousHeadCommit.value,
+      }, previousSnapshot)
+    ) {
+      errors.push(`audits.md:${auditId}: reviewTrigger requires full after a direct previous clean full`);
     }
   }
 
@@ -3544,11 +3573,37 @@ function readGeneralReviewAuditSnapshot(auditId, audits, { visited = new Set() }
       previousHeadCommit: previousHeadCommit.value,
       headCommit: headCommit.value,
       reviewPackageHash: reviewPackageHash.value,
+      reviewTrigger: reviewTrigger.value,
       verdicts,
       findings,
       repairResults,
     },
   };
+}
+
+function validateGeneralReviewTrigger(field, source, errors) {
+  if (field.values.length === 0) return;
+  if (field.values.length !== 1 || getStatusPrefix(field.value) !== USER_ACCEPTANCE_REVIEW_TRIGGER) {
+    errors.push(`${source}: reviewTrigger must be ${USER_ACCEPTANCE_REVIEW_TRIGGER} with a reason`);
+    return;
+  }
+  const reason = getStatusReason(field.value);
+  if (isPlaceholderText(reason) || hasTemplatePlaceholder(reason)) {
+    errors.push(`${source}: reviewTrigger requires non-placeholder user acceptance evidence`);
+  }
+}
+
+function isCleanFullGeneralReviewSnapshot(snapshot) {
+  return snapshot.reviewType === 'full'
+    && snapshot.findings.items.length === 0
+    && snapshot.verdicts.items.every((item) => item.status === 'passed');
+}
+
+function isUserAcceptanceReworkTransition(current, previousSnapshot) {
+  return current.reviewType === 'full'
+    && getStatusPrefix(current.reviewTrigger) === USER_ACCEPTANCE_REVIEW_TRIGGER
+    && isCleanFullGeneralReviewSnapshot(previousSnapshot)
+    && current.previousHeadCommit === previousSnapshot.headCommit;
 }
 
 function deriveNextGeneralReviewType(snapshot) {
@@ -3663,8 +3718,13 @@ function resolveGeneralReviewPackageContext(sliceId, sliceBody, audits) {
   const header = getSliceHeaderBlock(sliceBody);
   const aiReview = getField(header, 'AI Review');
   const aiReviewStatus = getStatusPrefix(aiReview);
+  const userAcceptance = getField(header, '用户验收');
+  const userAcceptanceStatus = getStatusPrefix(userAcceptance);
   const selector = parseSingleTopLevelField(getSubsection(sliceBody, SLICE_AI_REVIEW_VERDICTS_SECTION), 'General Review audit');
 
+  if (userAcceptanceStatus === 'issues' && selector.values.length === 0) {
+    return { errors: [`plan.md:${sliceId}: 用户验收 issues requires a selected previous clean full`] };
+  }
   if (aiReviewStatus === 'pending' && selector.values.length === 0) {
     const topology = resolveGeneralReviewAuditTip(sliceId, sliceBody, audits);
     if (topology.errors.length > 0) return { errors: topology.errors };
@@ -3681,6 +3741,22 @@ function resolveGeneralReviewPackageContext(sliceId, sliceBody, audits) {
 
   const current = resolveCurrentGeneralReviewAudit(sliceId, sliceBody, audits);
   if (current.errors.length > 0) return { errors: current.errors };
+  if (
+    userAcceptanceStatus === 'issues'
+    && isCleanFullGeneralReviewSnapshot(current.snapshot)
+    && current.snapshot.reviewTrigger === undefined
+  ) {
+    if (aiReviewStatus !== 'pending') {
+      return { errors: [`plan.md:${sliceId}: 用户验收 issues requires AI Review pending before re-review`] };
+    }
+    return {
+      errors: [],
+      reviewType: 'full',
+      previousReview: current.auditId,
+      previousAuditBody: audits.get(current.auditId).body.trimEnd(),
+      reviewTrigger: `${USER_ACCEPTANCE_REVIEW_TRIGGER}（${getStatusReason(userAcceptance)}）`,
+    };
+  }
   return {
     errors: [],
     reviewType: deriveNextGeneralReviewType(current.snapshot),
@@ -3705,6 +3781,7 @@ function parseGeneralReviewPackageStage(reviewPackage) {
   const section = getSection(reviewPackage, 'General Review 阶段');
   const reviewType = parseSingleTopLevelField(section, 'reviewType');
   const previousReview = parseSingleTopLevelField(section, 'previousReview');
+  const reviewTrigger = parseSingleTopLevelField(section, 'reviewTrigger');
   const fields = Object.fromEntries(
     ['baseCommit', 'previousHeadCommit', 'headCommit']
       .map((name) => [name, parseSingleTopLevelField(section, name)]),
@@ -3714,6 +3791,10 @@ function parseGeneralReviewPackageStage(reviewPackage) {
   }
   if (previousReview.values.length !== 1 || (previousReview.value !== '无' && !AUDIT_ID_RE.test(previousReview.value ?? ''))) {
     errors.push('review package previousReview must be 无 or one A*');
+  }
+  validateGeneralReviewTrigger(reviewTrigger, 'review package', errors);
+  if (reviewTrigger.values.length > 0 && (reviewType.value !== 'full' || previousReview.value === '无')) {
+    errors.push('review package reviewTrigger requires full with a direct previousReview');
   }
   for (const [name, field] of Object.entries(fields)) {
     if (field.values.length !== 1 || !GIT_OID_RE.test(field.value ?? '')) {
@@ -3743,6 +3824,7 @@ function parseGeneralReviewPackageStage(reviewPackage) {
     context: {
       reviewType: reviewType.value,
       previousReview: previousReview.value,
+      reviewTrigger: reviewTrigger.value,
       ...Object.fromEntries(Object.entries(fields).map(([name, field]) => [name, field.value])),
       reviewRange: recorded.range,
     },
@@ -3764,6 +3846,9 @@ async function validateCurrentGeneralReviewAuditForClose(planDir, sliceId, slice
   }
   if (current.snapshot.previousReview !== packageStage.context.previousReview) {
     errors.push(`close-check:${sliceId}: current audit ${current.auditId} previousReview must match review package`);
+  }
+  if (current.snapshot.reviewTrigger !== packageStage.context.reviewTrigger) {
+    errors.push(`close-check:${sliceId}: current audit ${current.auditId} reviewTrigger must match review package`);
   }
   for (const name of ['baseCommit', 'previousHeadCommit', 'headCommit']) {
     if (current.snapshot[name] !== packageStage.context[name]) {
@@ -4702,8 +4787,17 @@ async function buildSliceReviewPackage(planDir, sliceId, { taskBrief, taskReport
     ) {
       throw gateError('review-package: repair previousHeadCommit must equal direct previousReview headCommit');
     }
+    const userAcceptanceRework = isUserAcceptanceReworkTransition({
+      reviewType: generalReview.reviewType,
+      reviewTrigger: generalReview.reviewTrigger,
+      previousHeadCommit: recorded.range.previousHeadCommit,
+    }, previous.snapshot);
+    if (generalReview.reviewTrigger && !userAcceptanceRework) {
+      throw gateError('review-package: user acceptance rework previousHeadCommit must equal direct previous clean full headCommit');
+    }
     if (
       generalReview.reviewType === 'full'
+      && !userAcceptanceRework
       && (
         previous.snapshot.previousHeadCommit !== recorded.range.previousHeadCommit
         || previous.snapshot.headCommit !== recorded.range.headCommit
@@ -4736,12 +4830,12 @@ async function buildSliceReviewPackage(planDir, sliceId, { taskBrief, taskReport
     SLICE_AI_REVIEW_VERDICTS_SECTION,
   );
   const generalReviewStage = `- reviewType：${generalReview.reviewType}
-- previousReview：${generalReview.previousReview}
+- previousReview：${generalReview.previousReview}${generalReview.reviewTrigger ? `\n- reviewTrigger：${generalReview.reviewTrigger}` : ''}
 - baseCommit：${recorded.range.baseCommit}
 - previousHeadCommit：${recorded.range.previousHeadCommit}
 - headCommit：${recorded.range.headCommit}`;
   const generalReviewInstructions = generalReview.reviewType === 'full'
-    ? '本轮是累计 full review：按 BASE → 当前 TARGET 完整评估三个 General Review verdict，并生成当前完整 openFindings。'
+    ? `${generalReview.reviewTrigger ? '本轮由用户验收拒收触发返工后的重新审查。' : ''}本轮是累计 full review：按 BASE → 当前 TARGET 完整评估三个 General Review verdict，并生成当前完整 openFindings。`
     : `本轮是 repair review，直接前序为 ${generalReview.previousReview}：
 - 只检查每个旧 open finding 的 addressed / not_addressed，以及 previousHeadCommit → headCommit 的修复提交是否新引入 finding。
 - 不对 BASE → 当前 TARGET 做开放式完整审查，不生成或继承三个 General Review verdict。
@@ -4858,7 +4952,7 @@ full 的新 finding 使用 Origin=initial；最终累计 full 才可用 Origin=l
 ## 控制器证据
 
 - 若需要补证，先写回 claims / D/A 等真源，再重新生成 package；证据不足时保留 cannot-verify-from-package，不要把未证实项改为 passed。
-- controller 把本轮 reviewType、direct previousReview、固定 commit identity、reviewPackageHash、repair 结果和完整 openFindings 写入新的 done A*。
+- controller 把本轮 reviewType、direct previousReview、可选 reviewTrigger、固定 commit identity、reviewPackageHash、repair 结果和完整 openFindings 写入新的 done A*。
 - full 才能把三个 verdict 写回 plan；repair 只推进 finding 状态，修复后必须再生成累计 full package。
 `;
   return content;
@@ -4883,6 +4977,11 @@ async function buildRuleReviewPackage(planDir, sliceId, { taskBrief, taskReport 
   const recorded = await validateStoredReviewRange(planDir, sliceId);
   if (generalReview.previousReview !== '无') {
     const previous = readGeneralReviewAuditSnapshot(generalReview.previousReview, audits);
+    const userAcceptanceRework = previous.snapshot && isUserAcceptanceReworkTransition({
+      reviewType: generalReview.reviewType,
+      reviewTrigger: generalReview.reviewTrigger,
+      previousHeadCommit: recorded.range.previousHeadCommit,
+    }, previous.snapshot);
     if (
       previous.errors.length > 0
       || previous.snapshot?.baseCommit !== recorded.range.baseCommit
@@ -4892,11 +4991,13 @@ async function buildRuleReviewPackage(planDir, sliceId, { taskBrief, taskReport 
       )
       || (
         generalReview.reviewType === 'full'
+        && !userAcceptanceRework
         && (
           previous.snapshot?.previousHeadCommit !== recorded.range.previousHeadCommit
           || previous.snapshot?.headCommit !== recorded.range.headCommit
         )
       )
+      || (generalReview.reviewTrigger && !userAcceptanceRework)
     ) {
       throw gateError('rule-review-package: direct previousReview does not match the recorded full/repair commit range');
     }
@@ -5637,6 +5738,9 @@ function validateSliceBlock(id, body, slices, decisions, audits, referencedDecis
   if (userAcceptanceStatus === 'skipped' && isPlaceholderText(getStatusReason(userAcceptance))) {
     errors.push(`plan.md:${id}: 用户验收 skipped requires reason`);
   }
+  if (userAcceptanceStatus === 'issues' && isPlaceholderText(getStatusReason(userAcceptance))) {
+    errors.push(`plan.md:${id}: 用户验收 issues requires reason`);
+  }
   const repair = validateRepairAttempts(repairAttempts);
   if (!repair.valid) errors.push(`plan.md:${id}: invalid 修复次数 ${repairAttempts ?? '<missing>'}`);
   if (risk === 'C' && execution === '自动') {
@@ -5987,7 +6091,7 @@ async function buildReviewPrompt(planDir, sliceId) {
   const stage = parseGeneralReviewPackageStage(reviewPackage);
   if (stage.errors.length > 0) throw gateError(`review-prompt: ${stage.errors.join('; ')}`);
   const binding = `- reviewType: ${stage.context.reviewType}
-- previousReview: ${stage.context.previousReview}
+- previousReview: ${stage.context.previousReview}${stage.context.reviewTrigger ? `\n- reviewTrigger: ${stage.context.reviewTrigger}` : ''}
 - baseCommit: ${stage.context.baseCommit}
 - previousHeadCommit: ${stage.context.previousHeadCommit}
 - headCommit: ${stage.context.headCommit}
