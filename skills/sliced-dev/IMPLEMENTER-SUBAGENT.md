@@ -20,7 +20,7 @@
 
 每轮派发顺序固定为：
 
-1. 把本轮实现依据写回真源。首轮使用当前切片、Claims 和门禁记录；返修把失败硬门禁写入 `#### 门禁记录`，或把当前 General Review A*（含完整 `openFindings`）/ 项目规则审查 A*（含 `rulesReviewReport`）写回 `audits.md` 并关联当前切片。需要调整执行边界时，先按授权边界规则完成预检和写回。
+1. 把本轮实现依据写回真源。首轮使用当前切片、Claims 和门禁记录；返修把失败硬门禁写入 `#### 门禁记录`，把用户拒收反馈写成 `用户验收：issues（<原因>）`，或把当前 General Review A*（含完整 `openFindings`）/ 项目规则审查 A*（含 `rulesReviewReport`）写回 `audits.md` 并关联当前切片。task brief 必须包含本轮适用的返修依据。需要调整执行边界时，先按授权边界规则完成预检和写回。
 2. 运行 `task-brief`，重新生成 `task-briefs/<S-id>.md`。
 3. 运行 `task-report-template`，覆盖 `task-reports/<S-id>.json` 为默认 `blocked`、空 `changedFiles`、空 `validation` 的本轮报告。
 4. 首轮确认 `HEAD == baseCommit`；返修轮确认 `HEAD == previousHeadCommit`。不创建 worktree、临时 tree 或恢复 anchor。

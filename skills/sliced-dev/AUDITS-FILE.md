@@ -34,6 +34,14 @@
 
 这些 commit 字段原样来自 Review Range v2。首次 full 使用 `baseCommit..headCommit`；repair 使用 `previousHeadCommit..headCommit`；repair 后最终 full 与直接前序 repair 保持相同 commit 三元组，通过 `reviewType` 和 `previousReview` 区分阶段。
 
+clean full 通过后由用户验收拒收触发返工时，新累计 full 在 `previousReview` 后额外写：
+
+```markdown
+- reviewTrigger：user-acceptance-issues（<用户拒收原因>）
+```
+
+该字段只允许用于 `full`，直接前序必须是 verdict 全部 passed 且没有 open finding 的 clean full，当前 `previousHeadCommit` 必须等于该前序的 `headCommit`。字段和原因必须从 package、reviewer final summary 原样写回；其它 General Review 轮次省略。
+
 ### full
 
 首次和最终累计审查都使用 `full`。它完整审查 `BASE → TARGET`，必须返回三个 verdict 和当前完整 `openFindings`：
@@ -53,7 +61,7 @@
 | --- | --- | --- | --- | --- | --- |
 ```
 
-如果首次 full 没有进入 repair，它同时就是最终 full。发生过 repair 后，最终三个 verdict 只能来自 repair 之后的新累计 full；最终 full 发现问题时重新进入 repair。
+如果首次 full 没有进入 repair，它同时就是最终 full。发生过 repair 后，最终三个 verdict 只能来自 repair 之后的新累计 full；最终 full 发现问题时重新进入 repair。用户验收拒收后的返工也重新执行累计 full，但用 `reviewTrigger` 说明它不是无触发器的跨提交 full。
 
 ### repair
 

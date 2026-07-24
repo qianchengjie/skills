@@ -398,6 +398,7 @@ async function appendGeneralReviewV4Audit(planDir, {
   requirementSeverity = 'not-applicable',
   repairResults = [],
   openFindings = [],
+  reviewTrigger,
 } = {}) {
   const verdictSection = reviewType === 'full'
     ? `
@@ -425,7 +426,7 @@ ${repairResults.map((item) => `| ${item.id} | ${item.status} | ${item.evidence} 
 - 关联：S1
 - reviewType：${reviewType}
 - previousReview：${previousReview}
-- baseCommit：${range.baseCommit}
+${reviewTrigger ? `- reviewTrigger：${reviewTrigger}\n` : ''}- baseCommit：${range.baseCommit}
 - previousHeadCommit：${range.previousHeadCommit}
 - headCommit：${range.headCommit}
 - reviewPackageHash：${reviewPackageHash}
@@ -2840,6 +2841,23 @@ test('validate rejects skipped user acceptance without reason', async () => {
   });
 });
 
+test('validate rejects user acceptance issues without reason', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-user-acceptance-issues-reason');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = await fs.readFile(planPath, 'utf8');
+    await fs.writeFile(
+      planPath,
+      plan.replace('- AI Review：pending', '- AI Review：pending\n- 用户验收：issues'),
+      'utf8',
+    );
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('用户验收 issues requires reason')));
+  });
+});
+
 test('validate rejects not-required user acceptance', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-user-acceptance-not-required');
@@ -4357,6 +4375,102 @@ test('General Review 按首次 full、repair、最终累计 full 收口', async 
     await fs.writeFile(path.join(planDir, 'plan.md'), finalPlan, 'utf8');
     const errors = await validatePlan(planDir);
     assert(!errors.some((error) => error.includes('General Review')));
+  });
+});
+
+test('General Review 支持用户验收拒收后的累计 full', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-user-acceptance-rework');
+    await writeValidExecutingPlan(planDir);
+    await writeReadyTaskHandoff(planDir, 'S1');
+    await prepareReviewableSliceDiffFixture();
+    const initialRange = await sealCurrentWorkspaceFixture(planDir, 'S1');
+    let result = runDevPlanCli(['review-package', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    let prompt = runDevPlanCli(['review-prompt', planDir, 'S1']);
+    const initialHash = /- reviewPackageHash: (sha256:[0-9a-f]{64})/.exec(prompt.stdout.toString())?.[1];
+    assert.ok(initialHash);
+
+    await appendGeneralReviewV4Audit(planDir, {
+      id: 'A2',
+      range: initialRange,
+      reviewPackageHash: initialHash,
+    });
+    await selectGeneralReviewAudit(planDir, 'A2');
+    const planPath = path.join(planDir, 'plan.md');
+    let plan = await fs.readFile(planPath, 'utf8');
+    plan = plan.replace(
+      '- AI Review：pending',
+      '- AI Review：pending\n- 用户验收：issues（hooks 验收未通过）',
+    );
+    await fs.writeFile(planPath, plan, 'utf8');
+
+    await writeTaskBriefFixture(planDir, 'S1');
+    const brief = await fs.readFile(path.join(planDir, 'task-briefs', 'S1.md'), 'utf8');
+    assert.match(brief, /- 用户验收：issues（hooks 验收未通过）/);
+    result = runDevPlanCli(['review-package', planDir, 'S1']);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr.toString(), /user acceptance rework previousHeadCommit/);
+    await writeTaskReportTemplateFixture(planDir, 'S1');
+    await markTaskReportReady(planDir, 'S1');
+    await fs.writeFile('src/example.ts', 'export const value = 3;\n', 'utf8');
+    const reworkRange = await sealCurrentWorkspaceFixture(planDir, 'S1');
+    assert.equal(reworkRange.previousHeadCommit, initialRange.headCommit);
+
+    plan = await fs.readFile(planPath, 'utf8');
+    await fs.writeFile(
+      planPath,
+      plan.replace('- 用户验收：issues（hooks 验收未通过）\n', ''),
+      'utf8',
+    );
+    result = runDevPlanCli(['review-package', planDir, 'S1']);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr.toString(), /final full must reuse the repaired commit range/);
+    await fs.writeFile(planPath, plan, 'utf8');
+
+    result = runDevPlanCli(['review-package', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    const reviewPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1.md'), 'utf8');
+    assert.match(reviewPackage, /- reviewType：full\n- previousReview：A2\n- reviewTrigger：user-acceptance-issues（hooks 验收未通过）/);
+    assert.match(reviewPackage, /-export const value = 1;[\s\S]*\+export const value = 3;/);
+
+    prompt = runDevPlanCli(['review-prompt', planDir, 'S1']);
+    const reworkHash = /- reviewPackageHash: (sha256:[0-9a-f]{64})/.exec(prompt.stdout.toString())?.[1];
+    assert.ok(reworkHash);
+    assert.match(prompt.stdout.toString(), /- reviewTrigger: user-acceptance-issues（hooks 验收未通过）/);
+    await appendGeneralReviewV4Audit(planDir, {
+      id: 'A3',
+      range: reworkRange,
+      reviewPackageHash: reworkHash,
+      previousReview: 'A2',
+      reviewTrigger: 'user-acceptance-issues（hooks 验收未通过）',
+      requirementStatus: 'failed',
+      requirementSeverity: 'major',
+      openFindings: [
+        {
+          id: 'G1',
+          verdict: '需求符合性',
+          severity: 'major',
+          origin: 'initial',
+          evidence: 'review-package / Claims',
+          summary: '用户拒收返工仍有问题',
+        },
+      ],
+    });
+    await selectGeneralReviewAudit(planDir, 'A3', { issues: true });
+
+    await writeTaskBriefFixture(planDir, 'S1');
+    await writeTaskReportTemplateFixture(planDir, 'S1');
+    await markTaskReportReady(planDir, 'S1');
+    await fs.writeFile('src/example.ts', 'export const value = 4;\n', 'utf8');
+    const repairRange = await sealCurrentWorkspaceFixture(planDir, 'S1');
+    assert.equal(repairRange.previousHeadCommit, reworkRange.headCommit);
+
+    result = runDevPlanCli(['review-package', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    const repairPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1.md'), 'utf8');
+    assert.match(repairPackage, /- reviewType：repair\n- previousReview：A3\n- baseCommit：/);
+    assert.match(repairPackage, /-export const value = 3;[\s\S]*\+export const value = 4;/);
   });
 });
 

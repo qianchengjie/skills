@@ -163,7 +163,7 @@ dev-plans/
 - `上下文预检`：`pending` / `ready` / `blocked` / `skipped` 开头，可追加中文说明。
 - `硬门禁`：`pending` / `passed` / `failed` / `blocked` / `skipped` 开头，可追加中文说明。
 - `AI Review`：`pending` / `passed` / `issues` / `blocked` / `skipped` 开头，可追加中文说明；`issues` / `blocked` 必须有非占位头部摘要 / 原因，或在 `#### AI Review 结论` 中有带非占位 Note 的 `failed` / `cannot-verify-from-package` / `Severity=major|critical` verdict。
-- 条件字段 `用户验收`：`pending` / `passed` / `issues` / `skipped` 开头，可追加中文说明；只用于 `执行：需确认`、`风险：C`、用户明确要求逐片验收，或用户实际反馈 issue 的切片；`skipped` 必须写明用户明确跳过原因。
+- 条件字段 `用户验收`：`pending` / `passed` / `issues` / `skipped` 开头，可追加中文说明；只用于 `执行：需确认`、`风险：C`、用户明确要求逐片验收，或用户实际反馈 issue 的切片；`issues` 必须写明用户拒收原因，`skipped` 必须写明用户明确跳过原因。
 - 条件字段 `替代切片`：只用于 `状态：split`，使用 `S1.1 / S1.2` 形式列出一个或多个真实存在的后代切片；不能引用自身、同级片或不存在的 ID。
 - 条件字段 `跳过依据`：只用于 `状态：skipped`，值必须是一个 `D*`；该 D 必须为 `decided`、在当前切片 `关联项` 中同样写为 `decided`、正文 `关联` 包含当前切片，并有非占位 `结论` 和 `证据`。
 - 条件字段 `Commit`：只用于执行型切片（`not-started` / `blocked` / `in-progress` / `done`），值为 `待提交` / `已提交`；它只记录状态，不写 commit hash；`split` / `skipped` 必须省略。
@@ -342,7 +342,7 @@ Evidence 字段规则：
 - task report 不写 claim 状态建议；claims 更新由控制器依据实现、硬门禁、diff-check、测试 / 命令结果和必要回源检查直接写入 `claims/<S-id>.json`。
 - `conclusion: ready-for-review` 时，`validation` 必须非空，`blockedReason` 必须为空；无代码轮允许 `changedFiles: []`。`conclusion: blocked` 时，`blockedReason` 必须非空。
 - `review-package` 只接受 `conclusion: ready-for-review` 的 task report；同时 P0/P1 claims 必须已由控制器写成 `implemented` / `verified` / 合法 `waived`，并带 evidence 或 note。
-- `review-package` 是 general reviewer 的注意力入口，不是事实真源；它不包含 `项目规则审查` 信息。首轮 `full` 审查 `baseCommit..headCommit`；存在开放 finding 时，`repair` 只审查 `previousHeadCommit..headCommit`；发生过 repair 且开放 finding 清零后，再对相同最终提交执行 `baseCommit..headCommit` 的最终累计 `full`。若 P0/P1 claim、边界或证据无法从 package 判断，reviewer 必须 focused 回源检查，或输出 `cannot-verify-from-package`。
+- `review-package` 是 general reviewer 的注意力入口，不是事实真源；它不包含 `项目规则审查` 信息。首轮 `full` 审查 `baseCommit..headCommit`；存在开放 finding 时，`repair` 只审查 `previousHeadCommit..headCommit`；发生过 repair 且开放 finding 清零后，再对相同最终提交执行 `baseCommit..headCommit` 的最终累计 `full`。AI Review 已通过但用户验收拒收时，返工后的 TARGET 直接引用上一轮 clean full，以 `reviewTrigger：user-acceptance-issues（<用户反馈>）` 重新执行 `baseCommit..headCommit` 累计 `full`。若 P0/P1 claim、边界或证据无法从 package 判断，reviewer 必须 focused 回源检查，或输出 `cannot-verify-from-package`。
 - `review-packages/<S-id>-range.json` 是 `sliced-dev.reviewRange.v2` 的不可变 Git 记录，字段仅为 `schemaVersion / sliceId / iteration / baseCommit / previousHeadCommit / headCommit / iterationFiles / taskReportHash`。package 只能读取该 sidecar 指向的 commit / blob；不得从当前文件、真实 index、当前 HEAD 或同名路径重建输入。对象缺失、提交父子关系不成立、commit diff 与 `iterationFiles` 不一致或 task report hash 改变时 fail closed。
 - `rule-review-package` 只在 `项目规则审查：required` 时生成，路径为 `review-packages/<S-id>-rules.md`；它复制同一 Review Range、累计文件快照和 `baseCommit..headCommit` diff，并额外包含 `项目规则审查`，但不内联 general reviewer 三 verdict、旧项目规则 A* 或旧 SHOULD 接受 D*。每个已提交 TARGET 都创建全新 rules-review v4 run，以 `--target-commit <headCommit>` 和 `excludedFiles: []` 审查完整 commit 范围；不引用、继承或续用旧 run。
 
@@ -355,6 +355,7 @@ General Review 固定为三阶段累计协议：
 - 首次 `full` 审查 `baseCommit..headCommit`，完整给出三个 verdict 和当前完整 `openFindings`。若没有进入 repair，它同时是最终 full。
 - `repair` 只审查 `previousHeadCommit..headCommit`。它直接引用上一轮 A*，对每个旧 finding 恰好返回一次 `addressed` 或 `not_addressed`，并报告 fix diff 新引入的 finding。当前 `openFindings` 机械派生为旧 finding 中的 `not_addressed` 加 `Origin=repair-delta` 的新 finding；repair 不生成也不继承三个最终 verdict。
 - 发生过 repair 后，开放 finding 清零也不能收口；必须对当前最终 `headCommit` 再执行 `baseCommit..headCommit` 的累计 `full`。最终 full 与直接前序 repair 使用相同 commit 三元组，通过 `reviewType` 和 `previousReview` 区分。最终三个 verdict 只能来自这次 full；发现新问题时重新进入 repair。
+- 用户在 clean full 通过后拒收且不改变授权范围 / 验收口径时，不创建虚假 finding，也不进入 finding-focused repair。先写 `用户验收：issues（<原因>）`、重置 `AI Review：pending`，把反馈渲染进 task brief；返工提交的 package / reviewer final summary / 新 A* 必须原样绑定 `reviewTrigger：user-acceptance-issues（<原因>）`，并直接对 `baseCommit..headCommit` 执行新的累计 `full`。该轮 `previousHeadCommit` 必须等于直接前序 clean full 的 `headCommit`；缺少触发器、原因或 clean full 前序时 fail closed。该返工 full 若发现问题，保留 `用户验收：issues（<原因>）`，但不得再次消费同一触发器；后续按当前 A* 进入普通 repair。通过后再次进入 `用户验收：pending`。
 
 每轮都新建 reviewer，只消费当前 package 和其中显式引用的直接上一轮 A*，不依赖 reviewer 会话记忆。`previousReview` 只能引用直接上一轮；每个 A* 都物化当前完整 `openFindings`，不递归继承结果。A* 缺失、多义、非 `done`，旧 finding 未被唯一裁决，range / package hash / commit identity 不一致，或 Git object 缺失时 fail closed，不得静默重建、回退当前文件或改用开放式 full 绕过协议错误。
 
@@ -504,14 +505,14 @@ Evidence 必须非空。前三项必须各引用且只引用同一个当前 gene
 - 切片 `上下文预检`：`pending` / `ready` / `blocked` / `skipped` 开头，可追加中文说明
 - 切片 `硬门禁`：`pending` / `passed` / `failed` / `blocked` / `skipped` 开头，可追加中文说明
 - 切片 `AI Review`：`pending` / `passed` / `issues` / `blocked` / `skipped` 开头，可追加中文说明
-- 条件字段 `用户验收`：`pending` / `passed` / `issues` / `skipped` 开头，可追加中文说明；只用于 `执行：需确认`、`风险：C`、用户明确要求逐片验收，或用户实际反馈 issue 的切片；`skipped` 必须写明用户明确跳过原因
+- 条件字段 `用户验收`：`pending` / `passed` / `issues` / `skipped` 开头，可追加中文说明；只用于 `执行：需确认`、`风险：C`、用户明确要求逐片验收，或用户实际反馈 issue 的切片；`issues` 必须写明用户拒收原因，`skipped` 必须写明用户明确跳过原因
 - AI Review verdict `Status`：前三项为 `passed` / `failed` / `cannot-verify-from-package`；第四项 `项目规则审查` 在预检不适用时额外允许 `not-applicable`
 - AI Review verdict `Severity`：`critical` / `major` / `minor` / `not-applicable`
 - AI Review verdict 组合：`passed` / `not-applicable` 只能搭配 `Severity=not-applicable`；`failed` / `cannot-verify-from-package` 只能搭配 `critical` / `major` / `minor`
 - `上下文预检：ready`：必填预检字段不得是占位内容；`项目规则审查` 必须写明确状态，`禁止修改` 可显式写 `无`
 - `AI Review：issues/blocked`：必须有非占位头部摘要 / 原因，或有带非占位 Note 的阻塞 verdict 说明
 - `AI Review：passed`：必须有完整四 verdict，前三项不得为 `not-applicable`，各项必须满足 Status / Severity 固定组合，且不得出现 `failed` / `cannot-verify-from-package` / `critical`
-- `用户验收：pending/issues`：阻塞切片 `done`；`执行：需确认` / `风险：C` 的 done 切片必须有 `用户验收：passed/skipped`；用户不满意且不改变用户授权范围 / 验收口径时进入本片有限修复，改变产品行为、验收口径、公共契约、非目标或令风险升为 C 时转 D 分叉
+- `用户验收：pending/issues`：阻塞切片 `done`；`issues` 必须有非占位原因；`执行：需确认` / `风险：C` 的 done 切片必须有 `用户验收：passed/skipped`；用户不满意且不改变用户授权范围 / 验收口径时重置 `AI Review：pending` 并进入本片有限修复，返工提交以带原因的 `reviewTrigger：user-acceptance-issues（...）` 直接进入累计 full；改变产品行为、验收口径、公共契约、非目标或令风险升为 C 时转 D 分叉
 - `整任务审查：package-generated/blocked`：阻塞 `close-check`；`blocked` 仍必须有完整五 verdict 和整任务审查包结构证据
 - `整任务审查：passed`：必须有完整五 verdict，五项不得为 `not-applicable`，各项必须满足 Status / Severity 固定组合，且不得出现 `failed` / `cannot-verify-from-package` / `blocked` / `critical`
 - 切片 `修复次数`：`当前次数/最大次数`，最大次数只允许 `2` / `4`，当前次数不能超过最大次数；默认 `0/4`
