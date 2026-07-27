@@ -7,22 +7,22 @@
   "required": ["kind", "schemaVersion", "runId", "reviewRange", "ruleSnapshot", "inputSnapshot", "ruleSet", "targets", "applicabilityMatrix", "reviewItems", "executionPlan", "reviewBatches"],
   "properties": {
     "kind": { "const": "rules-review-dispatch" },
-    "schemaVersion": { "const": 4 },
+    "schemaVersion": { "const": 5 },
     "runId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "reviewRange": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["baseCommit", "baseTree", "targetTree", "excludedFiles"],
+      "required": ["baseCommit", "baseTree", "targetTree", "boundCommit", "excludedFiles"],
       "properties": {
         "baseCommit": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
         "baseTree": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
-        "seedCommit": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
         "targetTree": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
         "boundCommit": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
         "excludedFiles": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
-          "uniqueItems": true
+          "uniqueItems": true,
+          "maxItems": 0
         }
       }
     },

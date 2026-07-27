@@ -44,7 +44,7 @@ test('subagent 文档使用当前共享工作区契约', async () => {
   assert.match(reviewer, /同一输入 fresh 重派一次/);
   assert.match(reviewer, /仍失败则写 `AI Review：blocked/);
   assert.match(reviewer, /每个已提交 TARGET 都复制累计 `baseCommit → headCommit`/);
-  assert.match(reviewer, /为当前 TARGET 创建全新 rules-review v4 run/);
+  assert.match(reviewer, /为当前 TARGET 创建全新 rules-review v5 run/);
   assert.match(reviewer, /完整审查本 TARGET 的全部当前 reviewItems/);
   assert.match(reviewer, /不引用旧 run，不继承旧 result/);
   assert.match(reviewer, /rulesReviewReport: <非 ready_for_merge 时为/);
@@ -1081,7 +1081,6 @@ async function writeCloseCheckHandoffFixtures(
   sliceId = 'S1',
   {
     rulesReview,
-    bindRulesReview = true,
     hasCodeChange = true,
     extraChangedFiles = [],
     applyExtraWorkspaceChanges,
@@ -1094,6 +1093,7 @@ async function writeCloseCheckHandoffFixtures(
     'utf8',
   );
   await writeVerifiedClaimsFixture(planDir, sliceId);
+  if (rulesReview) await setSliceBaseCommit(planDir, sliceId, rulesReview.baseCommit);
   await writeReadyTaskHandoff(planDir, sliceId);
   if (!hasCodeChange) {
     const reportPath = path.join(planDir, 'task-reports', `${sliceId}.json`);
@@ -1110,9 +1110,30 @@ async function writeCloseCheckHandoffFixtures(
     })));
     await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
   }
-  if (hasCodeChange) await prepareReviewableSliceDiffFixture();
-  if (applyExtraWorkspaceChanges) await applyExtraWorkspaceChanges();
-  const range = await sealCurrentWorkspaceFixture(planDir, sliceId);
+  if (!rulesReview && hasCodeChange) await prepareReviewableSliceDiffFixture();
+  if (rulesReview) {
+    if (extraChangedFiles.length > 0) {
+      const targetFiles = execFileSync(
+        'git',
+        ['diff', '--name-only', rulesReview.baseCommit, rulesReview.targetCommit, '--'],
+        { encoding: 'utf8' },
+      ).trim().split('\n').filter(Boolean);
+      if (targetFiles.length > 0) {
+        execFileSync('git', ['checkout', rulesReview.targetCommit, '--', ...targetFiles]);
+      }
+      if (applyExtraWorkspaceChanges) await applyExtraWorkspaceChanges();
+      execFileSync('git', ['add', '-A', '--', ...extraChangedFiles]);
+      execFileSync('git', ['commit', '-m', `${sliceId} fixture extra iteration`]);
+    } else {
+      execFileSync('git', ['checkout', '--detach', rulesReview.targetCommit]);
+      if (applyExtraWorkspaceChanges) await applyExtraWorkspaceChanges();
+    }
+    const result = runDevPlanCli(['record-commit', planDir, sliceId]);
+    assert.equal(result.status, 0, result.stderr.toString());
+  } else {
+    if (applyExtraWorkspaceChanges) await applyExtraWorkspaceChanges();
+    await sealCurrentWorkspaceFixture(planDir, sliceId);
+  }
   await writeGeneratedReviewPackageFixture(planDir, sliceId);
   await selectGeneralReviewAudit(planDir, 'A9');
   if (rulesReview) {
@@ -1128,19 +1149,6 @@ async function writeCloseCheckHandoffFixtures(
       'utf8',
     );
   }
-  const headCommit = range.headCommit;
-  if (rulesReview && bindRulesReview) {
-    const bind = spawnSync(process.execPath, [
-      rulesReviewValidator,
-      '--mode',
-      'bind-commit',
-      '--dir',
-      rulesReview.runDir,
-      '--commit',
-      headCommit,
-    ]);
-    assert.equal(bind.status, 0, `${bind.stdout}\n${bind.stderr}`);
-  }
   await writeWholeReviewPackageFixture(planDir);
 }
 
@@ -1150,11 +1158,12 @@ function initGitRepo() {
   execFileSync('git', ['config', 'user.name', 'Test User']);
 }
 
-async function materializeRulesReviewV4RunFixture({
+async function materializeRulesReviewV5RunFixture({
   hasCodeChange = true,
   runId = 'run-pass-full-clean',
 } = {}) {
   await prepareReviewableSliceDiffFixture();
+  await fs.writeFile('src/example.ts', 'export const value = 1;\n', 'utf8');
   const gitignorePath = '.gitignore';
   const gitignore = await fs.readFile(gitignorePath, 'utf8').catch(() => '');
   if (!gitignore.split(/\r?\n/).includes('.rules-review-tmp/')) {
@@ -1171,9 +1180,13 @@ async function materializeRulesReviewV4RunFixture({
     execFileSync('git', ['add', '.agents/rules', gitignorePath]);
     execFileSync('git', ['commit', '-m', 'rules baseline']);
   }
-  if (!hasCodeChange) {
-    await fs.writeFile('src/example.ts', 'export const value = 1;\n', 'utf8');
+  const baseCommit = gitOid(['rev-parse', 'HEAD']);
+  if (hasCodeChange) {
+    await fs.writeFile('src/example.ts', 'export const value = 2;\n', 'utf8');
+    execFileSync('git', ['add', 'src/example.ts']);
+    execFileSync('git', ['commit', '-m', 'rules-review target']);
   }
+  const targetCommit = gitOid(['rev-parse', 'HEAD']);
 
   const runDir = path.join('.rules-review-tmp', runId);
   await fs.rm(runDir, { recursive: true, force: true });
@@ -1182,7 +1195,7 @@ async function materializeRulesReviewV4RunFixture({
   const inputRefs = hasCodeChange ? ['src/example.ts'] : [];
   const dispatch = {
     kind: 'rules-review-dispatch',
-    schemaVersion: 4,
+    schemaVersion: 5,
     runId,
     reviewRange: { excludedFiles: [] },
     ruleSnapshot: { files: [] },
@@ -1254,22 +1267,12 @@ async function materializeRulesReviewV4RunFixture({
   };
   const dispatchPath = path.join(runDir, 'dispatch.json');
   await fs.writeFile(dispatchPath, `${JSON.stringify(dispatch, null, 2)}\n`, 'utf8');
-  const indexDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rules-review-target-'));
-  let targetTree;
-  try {
-    const env = { ...process.env, GIT_INDEX_FILE: path.join(indexDir, 'index') };
-    execFileSync('git', ['read-tree', 'HEAD'], { env });
-    if (hasCodeChange) execFileSync('git', ['add', '--', 'src/example.ts'], { env });
-    targetTree = execFileSync('git', ['write-tree'], { env, encoding: 'utf8' }).trim();
-  } finally {
-    await fs.rm(indexDir, { recursive: true, force: true });
-  }
   const seal = spawnSync(process.execPath, [
     rulesReviewValidator,
     '--mode', 'seal-dispatch',
     '--input', dispatchPath,
-    '--base', 'HEAD',
-    '--target-tree', targetTree,
+    '--base', baseCommit,
+    '--target-commit', targetCommit,
   ]);
   assert.equal(seal.status, 0, `${seal.stdout}\n${seal.stderr}`);
   const sealedDispatch = JSON.parse(await fs.readFile(dispatchPath, 'utf8'));
@@ -1287,7 +1290,7 @@ async function materializeRulesReviewV4RunFixture({
     await fs.mkdir(path.dirname(shardPath), { recursive: true });
     const shard = {
     kind: 'rules-review-shard',
-    schemaVersion: 4,
+    schemaVersion: 5,
     runId,
     targetTree: sealedDispatch.reviewRange.targetTree,
     taskHash: task.taskHash,
@@ -1314,10 +1317,8 @@ async function materializeRulesReviewV4RunFixture({
     const result = spawnSync(process.execPath, [rulesReviewValidator, ...args]);
     assert.equal(result.status, 0, result.stderr.toString());
   }
-  if (hasCodeChange) {
-    await fs.writeFile('src/example.ts', 'export const value = 1;\n', 'utf8');
-  }
-  return { runId, runDir, selectedRuleRefs };
+  execFileSync('git', ['checkout', '--detach', baseCommit]);
+  return { runId, runDir, selectedRuleRefs, baseCommit, targetCommit };
 }
 
 async function prepareRulesReviewRunFixture({
@@ -1328,7 +1329,12 @@ async function prepareRulesReviewRunFixture({
   cannotVerify = false,
   hasCodeChange = true,
 } = {}) {
-  const { runDir, selectedRuleRefs } = await materializeRulesReviewV4RunFixture({ hasCodeChange, runId });
+  const {
+    runDir,
+    selectedRuleRefs,
+    baseCommit,
+    targetCommit,
+  } = await materializeRulesReviewV5RunFixture({ hasCodeChange, runId });
 
   if (shouldFix || mustFix || cannotVerify) {
     const shardPath = path.join(runDir, 'shards/B001.json');
@@ -1417,11 +1423,19 @@ async function prepareRulesReviewRunFixture({
     shouldSetHash: gate.shouldSetHash,
     selectedRuleRefs,
     runDir,
+    baseCommit,
+    targetCommit,
   };
 }
 
 async function prepareNonPassingRulesReviewRunFixture(recommendation) {
-  const { runId, runDir, selectedRuleRefs } = await materializeRulesReviewV4RunFixture();
+  const {
+    runId,
+    runDir,
+    selectedRuleRefs,
+    baseCommit,
+    targetCommit,
+  } = await materializeRulesReviewV5RunFixture();
   const currentDispatch = JSON.parse(await fs.readFile(path.join(runDir, 'dispatch.json'), 'utf8'));
   const blocked = recommendation === 'review_blocked';
   currentDispatch.reviewBatches[0].returnStatus = blocked ? 'format_invalid' : 'not_returned';
@@ -1472,6 +1486,8 @@ async function prepareNonPassingRulesReviewRunFixture(recommendation) {
     cannotVerify: gate.issueSummary.cannotVerify,
     selectedRuleRefs,
     runDir,
+    baseCommit,
+    targetCommit,
   };
 }
 
@@ -4765,7 +4781,7 @@ test('CLI rule-review-package writes rules-only package when project rule review
     assert.match(reviewPackage, /recommendation: <ready_for_merge/);
     assert.match(reviewPackage, /shouldFix: <integer>/);
     assert.match(reviewPackage, /cannotVerify: <integer>/);
-    assert.match(reviewPackage, /每个新的 TARGET 都创建独立 rules-review v4 run/);
+    assert.match(reviewPackage, /每个新的 TARGET 都创建独立 rules-review v5 run/);
     assert.match(reviewPackage, /package 不携带旧 runId/);
     assert.match(reviewPackage, /### D1：示例分叉/);
     assert.doesNotMatch(reviewPackage, /baseRunId|continuation|effectiveResults/);
@@ -5583,7 +5599,7 @@ test('CLI close-check requires project rule review A* evidence when required', a
   });
 });
 
-test('CLI close-check blocks required project rule review when target commit is not bound', async () => {
+test('CLI close-check blocks required project rule review when boundCommit is missing', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-close-check-rule-review-unbound');
     await writeValidExecutingPlan(planDir);
@@ -5594,23 +5610,27 @@ test('CLI close-check blocks required project rule review when target commit is 
       withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
       'utf8',
     );
-    await writeCloseCheckHandoffFixtures(planDir, 'S1', { rulesReview, bindRulesReview: false });
+    const dispatchPath = path.join(rulesReview.runDir, 'dispatch.json');
+    const dispatch = JSON.parse(await fs.readFile(dispatchPath, 'utf8'));
+    delete dispatch.reviewRange.boundCommit;
+    await fs.writeFile(dispatchPath, `${JSON.stringify(dispatch, null, 2)}\n`, 'utf8');
+    await writeCloseCheckHandoffFixtures(planDir, 'S1', { rulesReview });
     await appendProjectRuleReviewAudit(planDir, rulesReview);
 
     const result = runDevPlanCli(['close-check', planDir]);
     assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /rules-review boundCommit must equal sliced-dev headCommit/);
+    assert.match(result.stderr.toString(), /trusted rules-review validator failed/);
   });
 });
 
-test('rules-review v4 的空 TARGET 使用 no_batch 且不伪造 result', async () => {
+test('rules-review v5 的空 TARGET 使用 no_batch 且不伪造 result', async () => {
   await withTempRepo(async () => {
     const rulesReview = await prepareRulesReviewRunFixture({ hasCodeChange: false });
     const dispatch = JSON.parse(await fs.readFile(path.join(rulesReview.runDir, 'dispatch.json'), 'utf8'));
     assert.equal(dispatch.executionPlan.mode, 'no_batch');
     assert.deepEqual(dispatch.reviewItems, []);
     assert.deepEqual(dispatch.reviewBatches, []);
-    assert.equal(dispatch.reviewRange.boundCommit, undefined);
+    assert.equal(dispatch.reviewRange.boundCommit, rulesReview.targetCommit);
     assert.equal(rulesReview.recommendation, 'ready_for_merge');
   });
 });
@@ -5652,7 +5672,6 @@ test('CLI close-check rejects rules-review file scope smaller than current revie
     );
     await writeCloseCheckHandoffFixtures(planDir, 'S1', {
       rulesReview,
-      bindRulesReview: false,
       extraChangedFiles: ['src/context.ts'],
       applyExtraWorkspaceChanges: () => fs.writeFile(
         'src/context.ts',

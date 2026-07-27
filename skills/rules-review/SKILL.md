@@ -1,29 +1,25 @@
 ---
 name: rules-review
-description: 项目规则驱动的代码审查流程。读取 `.agents/rules/index.md` 与适用 active 规则，把固定 Git tree 输入消费为 `ruleSet -> targets -> applicabilityMatrix -> reviewItems -> executionPlan -> reviewBatches -> results -> finalReview`，并用 validator 校验协议闭合。默认只读，不维护规则仓，不替代全量功能 QA。
+description: 项目规则驱动的 commit 代码审查流程。读取目标 commit 中的 `.agents/rules/index.md` 与适用 active 规则，把固定 commit range 消费为 `ruleSet -> targets -> applicabilityMatrix -> reviewItems -> executionPlan -> reviewBatches -> results -> finalReview`，并用 validator 校验协议闭合。仅审查已提交内容；默认只读，不维护规则仓，不替代全量功能 QA。
 disable-model-invocation: true
 ---
 
 # 规范审查
 
-`rules-review` 使用 `schemaVersion = 4`。每个新的 TARGET 都创建全新 run，完整审查该 TARGET 的全部当前 `reviewItems`，不继承旧结果，也不把修复轮当作增量审查。
+`rules-review` 使用 `schemaVersion = 5`。TARGET 只能是 Git commit。每个新的 TARGET 都创建全新 run，完整审查该 TARGET 的全部当前 `reviewItems`，不继承旧结果，也不把修复轮当作增量审查。
 
 `protocolGate = "passed"` 只表示本轮结构协议闭合，不表示代码无问题。代码结论同时看 `semanticVerdict`、`issueSummary` 和 `recommendation`。
 
 ## 1. 解析用户入口
 
-controller 只把用户语法解析为固定的 BASE 与 TARGET，不把入口写法保存进工件：
+controller 只把用户语法解析为固定的 BASE commit 与 TARGET commit，不把入口写法保存进工件：
 
 | 用户请求 | BASE | TARGET |
 | --- | --- | --- |
-| `current` | 默认 `HEAD` | 当前全部 staged、unstaged、untracked |
-| `current --base <rev>` | 指定 revision | 当前 `HEAD` 加全部未提交内容 |
-| `staged` | 默认 `HEAD` | 当前 index tree |
 | `commit <rev>` | 唯一可解析的 base | commit tree |
-| `branch <base> [head]` | 唯一 merge-base | head tree |
-| provided tree | 调用方提供的固定 BASE | 已封印 targetTree |
+| `commit <rev> --base <base-rev>` | 指定 commit | commit tree |
 
-base、merge-base 或目标解释不唯一时立即 blocked，不任选一种解释。
+BASE、TARGET 或目标解释不唯一时立即 blocked，不任选一种解释。用户要求审查 current、staged、worktree、branch 或裸 tree 时，停止并要求先形成目标 commit；不要把这些入口静默降级为 commit 审查。
 
 内部封印接口：
 
@@ -31,10 +27,10 @@ base、merge-base 或目标解释不唯一时立即 blocked，不任选一种解
 node scripts/validate.js --mode seal-dispatch \
   --input <dispatch.json> \
   --base <revision> \
-  [--current | --staged | --target-commit <revision> | --target-tree <oid>]
+  --target-commit <revision>
 ```
 
-四个 TARGET selector 必须恰好出现一个。`--target-tree` 只接受参数自身就是规范 40/64 位小写 object ID 的 tree，不接受 ref 或 revision 表达式。`--target-commit` 只接受精确的 `excludedFiles: []`；非空时在写入封印结果前 fail closed，`excludedRuleRefs` 不受此限制。该 selector 不执行文件排除，成功时直接固定 `targetTree = targetCommit^{tree}`、`boundCommit = targetCommit`、`excludedFiles = []`。`current`、`staged`、`target-tree` 继续支持 `excludedFiles`，并可在正式提交后使用后置绑定。`seal-dispatch` 使用临时 index 构造需要构造的 tree，不修改真实 index、工作文件、staged/unstaged 状态或 worktree 列表。作为命令控制输入的当前 `dispatch.json` 不属于 TARGET；除此之外，包括 `.rules-review-tmp/` 兄弟路径在内的当前变更都按 Git `current` 输入封印，不做目录级静默排除。已经带有 `targetTree` 的 dispatch 不得原地重封；新 TARGET 必须创建新 run。
+`--target-commit` 是唯一 TARGET selector，成功时固定 `targetTree = targetCommit^{tree}`、`boundCommit = targetCommit`、`excludedFiles = []`。`excludedRuleRefs` 仍可形成规则范围分区。`seal-dispatch` 只解析并读取已有 commit、tree 与 blob，不创建 Git object，不修改真实 index、工作文件、staged/unstaged 状态或 worktree 列表。作为命令控制输入的 `dispatch.json` 不属于 TARGET；TARGET 只由指定 commit 决定。已经带有 `targetTree` 的 dispatch 不得原地重封；新 TARGET 必须创建新 run。
 
 ## 2. 不可变输入
 
@@ -44,13 +40,12 @@ node scripts/validate.js --mode seal-dispatch \
 reviewRange:
   baseCommit: <累计审查起点 commit>
   baseTree: <累计审查起点 tree>
-  seedCommit: <可选；仅从当前 filesystem/index 构造时存在>
   targetTree: <实际接受并审查的 tree>
-  boundCommit: <target-commit 模式立即存在；其他模式可在正式提交后补充>
+  boundCommit: <实际接受并审查的 target commit>
   excludedFiles: []
 ```
 
-纯历史 commit/tree 不要求 `seedCommit`。`--target-commit` 的 `boundCommit` 在封印时即存在；其他 selector 只在后置绑定成功后存在。
+`baseTree` 与 `targetTree` 分别从 `baseCommit` 与 `boundCommit` 只读派生。`boundCommit` 在封印时必须存在，且其 tree 必须等于 `targetTree`。
 
 代码输入快照为：
 
@@ -86,25 +81,25 @@ git show <targetTree>:<path>
 
 rules-review run 是临时运行数据，不承诺跨会话、跨环境、跨天或长期恢复。
 
-## 3. 文件范围分区
+## 3. 文件范围
 
-封印时识别的全部候选变更必须满足：
+审查范围固定为完整 commit range：
 
 ```text
-候选变更 = 进入 targetTree 的变更 ∪ excludedFiles
-进入 targetTree 的变更 ∩ excludedFiles = ∅
+候选变更 = git diff <baseCommit> <boundCommit>
+excludedFiles = []
 ```
 
-`excludedFiles` 只能列出真实候选变更。漏项、重叠、非候选路径、非普通 blob、冲突或无法唯一读取的 entry 都 blocked。例外是 `--target-commit`：它不允许文件排除，输入必须精确为 `[]`；`excludedRuleRefs` 仍可形成规则范围分区。
+不支持文件排除。漏项、非普通 blob 或无法唯一读取的 entry 都 blocked。`excludedRuleRefs` 仍可形成规则范围分区。
 
 `scopeMode` 只按最终范围事实派生：
 
 ```text
-excludedFiles 非空或 excludedRuleRefs 非空 => scoped
-两者都为空                            => full
+excludedRuleRefs 非空 => scoped
+excludedRuleRefs 为空 => full
 ```
 
-不保存用户是否显式输入 paths。显式 paths 没有实际排除候选文件或适用规则时仍是 `full`。
+不保存用户是否显式输入 paths，也不接受局部文件 commit 审查。
 
 ## 4. 规则与目标
 
@@ -182,23 +177,7 @@ reviewer 必须按 task 中的全部 reviewItems 返回结果，不能依赖主�
 
 需要多 batch 或用户明确要求并行审查时，读取 [references/subagent-all-aspects.md](references/subagent-all-aspects.md)。
 
-## 7. 绑定正式提交
-
-```text
-node scripts/validate.js --mode bind-commit \
-  --dir .rules-review-tmp/<run-id> \
-  --commit <commit>
-```
-
-后置绑定只适用于未自动绑定的 selector，并验证：
-
-- 参数能唯一解析为 commit。
-- `boundCommit^{tree} == targetTree`。
-- dispatch 已绑定时，只允许同一 commit 的幂等调用；不同 commit 直接拒绝。
-
-不检查父提交数量、直接父、祖先关系或 merge 拓扑；tree 不同立即 blocked。
-
-## 8. 命令顺序
+## 7. 命令顺序
 
 ```text
 seal-dispatch
@@ -227,13 +206,13 @@ node scripts/validate.js --mode render-response --dir .rules-review-tmp/<run-id>
 
 任何阶段的 Git identity、hash、mode、范围、引用或状态不闭合都 fail closed。不得静默生成替代 tree、降级成当前文件或把不完整结果写成通过。
 
-## 9. 机器边界
+## 8. 机器边界
 
 validator 检查：
 
 - schemaVersion、固定字段、路径与 strict JSON。
-- commit/tree/blob 存在，baseCommit/tree、boundCommit/tree 身份一致。
-- 文件和规则声明分区完整互斥。
+- commit/tree/blob 存在，baseCommit/tree、boundCommit/tree 身份一致，且 `excludedFiles = []`。
+- 完整 commit 文件范围和规则声明分区闭合。
 - input/rule snapshot 的 mode、hash、内容与 targetTree 一致。
 - task 投影、batch 引用和当前结果唯一覆盖。
 - finalReview、Markdown 与当前结果的机械派生一致。
@@ -248,6 +227,6 @@ validator 明确不检查：
 
 这些判断由 controller/reviewer 记录依据并承担责任，不能写成关键词启发式或规模阈值冒充语义审查。
 
-## 10. 输出
+## 9. 输出
 
 最终回复直接复用 `render-response` 生成的 `response.md`。第一眼同时展示审查结论、问题数、无法验证数量与修复建议；不得把 `protocolGate = "passed"` 简写成“代码通过”。

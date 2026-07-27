@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -51,9 +51,10 @@ async function expectFailure(args, pattern, cwd = repoRoot) {
 }
 
 function createRepository() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-v4-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-v5-"));
   fs.mkdirSync(path.join(root, ".agents/rules"), { recursive: true });
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".gitignore"), ".rules-review-tmp/\n");
   fs.writeFileSync(path.join(root, ".agents/rules/index.md"), "# Rules\n\n- CORE-001\n");
   fs.writeFileSync(path.join(root, ".agents/rules/core.md"), "# CORE-001\n\n检查当前变更。\n");
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 1;\n");
@@ -67,7 +68,7 @@ function createRepository() {
 }
 
 function draft({
-  runId = "run-v4",
+  runId = "run-v5",
   inputRefs = ["src/main.js"],
   excludedFiles = [],
   candidateRuleRefs = ["CORE-001"],
@@ -78,7 +79,7 @@ function draft({
 } = {}) {
   return {
     kind: "rules-review-dispatch",
-    schemaVersion: 4,
+    schemaVersion: 5,
     runId,
     reviewRange: { excludedFiles },
     ruleSnapshot: { files: [] },
@@ -157,14 +158,29 @@ function draft({
 }
 
 function createDraft(root, options = {}) {
-  const file = path.join(root, ".rules-review-tmp", options.runId || "run-v4", "dispatch.json");
+  const file = path.join(root, ".rules-review-tmp", options.runId || "run-v5", "dispatch.json");
   writeJson(file, draft(options));
   return file;
 }
 
-async function seal(file, selector = ["--current"], base = "HEAD") {
+async function seal(file, targetCommit, base) {
+  const root = git(path.dirname(file), ["rev-parse", "--show-toplevel"]);
+  const baseRevision = base || git(root, ["rev-parse", "HEAD"]);
+  let targetRevision = targetCommit;
+  if (!targetRevision) {
+    if (git(root, ["status", "--porcelain", "--untracked-files=all"])) {
+      git(root, ["add", "-A"]);
+      git(root, ["commit", "-qm", "target"]);
+    }
+    targetRevision = git(root, ["rev-parse", "HEAD"]);
+  }
   try {
-    await run(["--mode", "seal-dispatch", "--input", file, "--base", base, ...selector]);
+    await run([
+      "--mode", "seal-dispatch",
+      "--input", file,
+      "--base", baseRevision,
+      "--target-commit", targetRevision,
+    ]);
   } catch (error) {
     throw new Error(`${error.stdout || ""}${error.stderr || ""}`, { cause: error });
   }
@@ -195,7 +211,7 @@ function assertWorkspaceEqual(before, after) {
 function passedShard(dispatch, task) {
   return {
     kind: "rules-review-shard",
-    schemaVersion: 4,
+    schemaVersion: 5,
     runId: dispatch.runId,
     reviewBatchId: "B001",
     targetTree: dispatch.reviewRange.targetTree,
@@ -233,49 +249,92 @@ async function materializePassingRun(dispatchFile) {
   return runDir;
 }
 
-test("current 封印 staged、unstaged、untracked，且不修改真实工作区", async (t) => {
+test("target-commit 固定完整提交范围，且封印过程不写 Git object 或修改工作区", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = git(root, ["rev-parse", "HEAD"]);
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
-  git(root, ["add", "src/main.js"]);
-  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 3;\n");
   fs.writeFileSync(path.join(root, "src/other.js"), "export const other = 2;\n");
   fs.writeFileSync(path.join(root, "src/new.js"), "export const added = true;\n");
+  git(root, ["add", "-A"]);
+  git(root, ["commit", "-qm", "target"]);
+  const target = git(root, ["rev-parse", "HEAD"]);
   fs.mkdirSync(path.join(root, ".rules-review-tmp"), { recursive: true });
-  fs.writeFileSync(path.join(root, ".rules-review-tmp/manual-note.md"), "must stay visible\n");
-  const file = createDraft(root, { inputRefs: ["src/main.js", "src/other.js", "src/new.js", ".rules-review-tmp/manual-note.md"] });
+  fs.writeFileSync(path.join(root, ".rules-review-tmp/manual-note.md"), "control data\n");
+  const file = createDraft(root, { inputRefs: ["src/main.js", "src/other.js", "src/new.js"] });
   const before = snapshotWorkspace(root);
+  const objectsBefore = git(root, ["count-objects", "-v"]);
 
-  const dispatch = await seal(file);
+  const dispatch = await seal(file, target, base);
 
   assertWorkspaceEqual(before, snapshotWorkspace(root));
-  assert.equal(dispatch.reviewRange.baseCommit, git(root, ["rev-parse", "HEAD"]));
-  assert.equal(dispatch.reviewRange.seedCommit, git(root, ["rev-parse", "HEAD"]));
-  assert.equal(git(root, ["show", `${dispatch.reviewRange.targetTree}:src/main.js`]), "export const main = 3;");
+  assert.equal(git(root, ["count-objects", "-v"]), objectsBefore);
+  assert.equal(dispatch.reviewRange.baseCommit, base);
+  assert.equal(dispatch.reviewRange.boundCommit, target);
+  assert.equal(git(root, ["show", `${dispatch.reviewRange.targetTree}:src/main.js`]), "export const main = 2;");
   assert.equal(git(root, ["show", `${dispatch.reviewRange.targetTree}:src/new.js`]), "export const added = true;");
-  assert.equal(git(root, ["show", `${dispatch.reviewRange.targetTree}:.rules-review-tmp/manual-note.md`]), "must stay visible");
-  assert.deepEqual(dispatch.inputSnapshot.files.map((entry) => entry.inputRef), [".rules-review-tmp/manual-note.md", "src/main.js", "src/new.js", "src/other.js"]);
+  assert.equal(git(root, ["ls-tree", "--name-only", dispatch.reviewRange.targetTree, "--", ".rules-review-tmp"]), "");
+  assert.deepEqual(dispatch.inputSnapshot.files.map((entry) => entry.inputRef), ["src/main.js", "src/new.js", "src/other.js"]);
   assert.deepEqual(dispatch.ruleSnapshot.files.map((entry) => entry.path), [".agents/rules/core.md", ".agents/rules/index.md"]);
 
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 99;\n");
   const validation = await runJson(["--mode", "dispatch", "--input", file]);
-  assert.equal(validation.ok, true, "消费端应只读取封印 tree，不读取当前同名文件");
+  assert.equal(validation.ok, true, "消费端应只读取目标 commit，不读取当前同名文件");
 });
 
-test("staged 只封印 index tree", async (t) => {
+test("partial clone 缺失 blob 时禁止惰性拉取并 fail closed", async (t) => {
+  const source = createRepository();
+  const partial = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-partial-"));
+  t.after(() => fs.rmSync(source, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(partial, { recursive: true, force: true }));
+  const base = git(source, ["rev-parse", "HEAD"]);
+  fs.writeFileSync(path.join(source, "src/main.js"), "export const main = 2;\n");
+  git(source, ["add", "src/main.js"]);
+  git(source, ["commit", "-qm", "target"]);
+  const target = git(source, ["rev-parse", "HEAD"]);
+  const targetBlob = git(source, ["rev-parse", `${target}:src/main.js`]);
+  git(source, ["config", "uploadpack.allowFilter", "true"]);
+  git(os.tmpdir(), [
+    "clone",
+    "-q",
+    "--filter=blob:none",
+    "--no-checkout",
+    pathToFileURL(source).href,
+    partial,
+  ]);
+  assert.throws(() => git(partial, ["cat-file", "-e", targetBlob], {
+    env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+  }));
+  const file = createDraft(partial);
+  const objectsBefore = git(partial, ["count-objects", "-v"]);
+
+  await expectFailure([
+    "--mode", "seal-dispatch",
+    "--input", file,
+    "--base", base,
+    "--target-commit", target,
+  ], /seal-dispatch failed closed/);
+
+  assert.equal(git(partial, ["count-objects", "-v"]), objectsBefore);
+  assert.deepEqual(readJson(file).reviewRange, { excludedFiles: [] });
+});
+
+test("commit-only 入口拒绝 current、staged、target-tree 和缺失 target-commit", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
-  git(root, ["add", "src/main.js"]);
-  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 3;\n");
   const file = createDraft(root);
 
-  const dispatch = await seal(file, ["--staged"]);
-
-  assert.equal(git(root, ["show", `${dispatch.reviewRange.targetTree}:src/main.js`]), "export const main = 2;");
+  for (const selector of [["--current"], ["--staged"], ["--target-tree", git(root, ["rev-parse", "HEAD^{tree}"])]]) {
+    await expectFailure([
+      "--mode", "seal-dispatch", "--input", file, "--base", "HEAD", ...selector,
+    ], /only accepts committed TARGETs/);
+  }
+  await expectFailure([
+    "--mode", "seal-dispatch", "--input", file, "--base", "HEAD",
+  ], /requires --target-commit/);
 });
 
-test("target-commit 自动精确绑定，provided tree 保留未绑定范围", async (t) => {
+test("target-commit 自动精确绑定规范 commit 和 tree 身份", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const base = git(root, ["rev-parse", "HEAD"]);
@@ -286,33 +345,18 @@ test("target-commit 自动精确绑定，provided tree 保留未绑定范围", a
   const targetTree = git(root, ["rev-parse", `${target}^{tree}`]);
 
   const commitFile = createDraft(root, { runId: "commit-run" });
-  const commitDispatch = await seal(commitFile, ["--target-commit", target], base);
+  const commitDispatch = await seal(commitFile, target, base);
   assert.equal(commitDispatch.reviewRange.targetTree, targetTree);
   assert.equal(commitDispatch.reviewRange.boundCommit, target);
   assert.deepEqual(commitDispatch.reviewRange.excludedFiles, []);
   assert.equal("seedCommit" in commitDispatch.reviewRange, false);
 
-  const treeFile = createDraft(root, { runId: "tree-run" });
-  const treeDispatch = await seal(treeFile, ["--target-tree", targetTree], base);
-  assert.equal(treeDispatch.reviewRange.targetTree, targetTree);
-  assert.equal("boundCommit" in treeDispatch.reviewRange, false);
-  assert.equal("seedCommit" in treeDispatch.reviewRange, false);
-
-  for (const [runId, targetRef] of [["tree-expression", "HEAD^{tree}"], ["tree-ref", "refs/tags/tree-ref"]]) {
-    git(root, ["update-ref", "refs/tags/tree-ref", targetTree]);
-    const invalidTreeFile = createDraft(root, { runId });
-    await expectFailure([
-      "--mode", "seal-dispatch", "--input", invalidTreeFile, "--base", base, "--target-tree", targetRef,
-    ], /target-tree must be a normalized 40 or 64 character lowercase object ID/);
-  }
-
   git(root, ["branch", "topic", target]);
-  const mergeBase = git(root, ["merge-base", base, "topic"]);
-  const branchFile = createDraft(root, { runId: "branch-run" });
-  const branchDispatch = await seal(branchFile, ["--target-commit", "topic"], mergeBase);
-  assert.equal(branchDispatch.reviewRange.baseCommit, base);
-  assert.equal(branchDispatch.reviewRange.targetTree, targetTree);
-  assert.equal(branchDispatch.reviewRange.boundCommit, target);
+  const resolvedFile = createDraft(root, { runId: "resolved-run" });
+  const resolvedDispatch = await seal(resolvedFile, "topic", base);
+  assert.equal(resolvedDispatch.reviewRange.baseCommit, base);
+  assert.equal(resolvedDispatch.reviewRange.targetTree, targetTree);
+  assert.equal(resolvedDispatch.reviewRange.boundCommit, target);
 });
 
 test("target-commit 拒绝文件排除，但仍允许 excludedRuleRefs", async (t) => {
@@ -331,7 +375,7 @@ test("target-commit 拒绝文件排除，但仍允许 excludedRuleRefs", async (
   });
   await expectFailure([
     "--mode", "seal-dispatch", "--input", excludedFile, "--base", base, "--target-commit", target,
-  ], /--target-commit requires reviewRange\.excludedFiles to be exactly \[\]/);
+  ], /commit-only rules-review requires reviewRange\.excludedFiles to be exactly \[\]/);
   assert.deepEqual(readJson(excludedFile).reviewRange.excludedFiles, ["src/other.js"]);
 
   const excludedRule = createDraft(root, {
@@ -342,45 +386,79 @@ test("target-commit 拒绝文件排除，但仍允许 excludedRuleRefs", async (
     requiredRuleRefs: ["CORE-001"],
     excludedRuleRefs: ["AUX-001"],
   });
-  const dispatch = await seal(excludedRule, ["--target-commit", target], base);
+  const dispatch = await seal(excludedRule, target, base);
   assert.equal(dispatch.reviewRange.boundCommit, target);
   assert.deepEqual(dispatch.ruleSet.excludedRuleRefs, ["AUX-001"]);
 });
 
-test("HEAD^ + current 累计包含已提交内容和当前未提交内容", async (t) => {
+test("显式 base 到 target commit 累计包含多次已提交变更", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = git(root, ["rev-parse", "HEAD"]);
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
   git(root, ["add", "src/main.js"]);
   git(root, ["commit", "-qm", "slice"]);
   fs.writeFileSync(path.join(root, "src/other.js"), "export const other = 2;\n");
+  git(root, ["add", "src/other.js"]);
+  git(root, ["commit", "-qm", "repair"]);
+  const target = git(root, ["rev-parse", "HEAD"]);
   const file = createDraft(root, { inputRefs: ["src/main.js", "src/other.js"] });
 
-  const dispatch = await seal(file, ["--current"], "HEAD^");
+  const dispatch = await seal(file, target, base);
 
   assert.equal(git(root, ["show", `${dispatch.reviewRange.targetTree}:src/main.js`]), "export const main = 2;");
   assert.equal(git(root, ["show", `${dispatch.reviewRange.targetTree}:src/other.js`]), "export const other = 2;");
 });
 
-test("候选文件完整分区，scopeMode 只由排除事实派生", async (t) => {
+test("commit 文件范围必须完整，scopeMode 只由规则排除事实派生", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
   fs.writeFileSync(path.join(root, "src/other.js"), "export const other = 2;\n");
-  const file = createDraft(root, { excludedFiles: ["src/other.js"] });
+  const file = createDraft(root, {
+    inputRefs: ["src/main.js", "src/other.js"],
+    candidateRuleRefs: ["CORE-001", "AUX-001"],
+    selectedRuleRefs: ["CORE-001"],
+    requiredRuleRefs: ["CORE-001"],
+    excludedRuleRefs: ["AUX-001"],
+  });
   const dispatch = await seal(file);
-  assert.equal(git(root, ["show", `${dispatch.reviewRange.targetTree}:src/other.js`]), "export const other = 1;");
   const runDir = await materializePassingRun(file);
   const finalReview = readJson(path.join(runDir, "finalReview.json"));
   assert.equal(finalReview.scopeMode, "scoped");
-  assert.deepEqual(finalReview.excludedFiles, ["src/other.js"]);
+  assert.deepEqual(finalReview.excludedFiles, []);
+  assert.deepEqual(finalReview.excludedRuleRefs, ["AUX-001"]);
   const result = await runJson(["--mode", "run", "--dir", runDir]);
   assert.equal(result.ok, true);
 
-  const invalidFile = createDraft(root, { runId: "bad-exclusion", excludedFiles: ["src/missing.js"] });
+  const invalidFile = createDraft(root, { runId: "missing-file", inputRefs: ["src/main.js"] });
+  await expectFailure(
+    ["--mode", "seal-dispatch", "--input", invalidFile, "--base", dispatch.reviewRange.baseCommit, "--target-commit", dispatch.reviewRange.boundCommit],
+    /targetTree changed file is not covered by changedUnits\.inputRefs/,
+  );
+});
+
+test("v5 finalReview 独立校验和 schema 均拒绝文件排除", async (t) => {
+  const root = createRepository();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
+  const dispatchFile = createDraft(root);
+  await seal(dispatchFile);
+  const runDir = await materializePassingRun(dispatchFile);
+  const finalReviewFile = path.join(runDir, "finalReview.json");
+  const finalReview = readJson(finalReviewFile);
+  finalReview.scopeMode = "scoped";
+  finalReview.coverageClaim = "scoped_complete";
+  finalReview.excludedFiles = ["src/other.js"];
+  writeJson(finalReviewFile, finalReview);
+
   await expectFailure([
-    "--mode", "seal-dispatch", "--input", invalidFile, "--base", "HEAD", "--current",
-  ], /excludedFiles contains non-candidate path/);
+    "--mode", "final-review",
+    "--input", finalReviewFile,
+  ], /commit-only rules-review requires excludedFiles to be exactly \[\]/);
+
+  const schema = readJson(path.join(repoRoot, "skills/rules-review/schemas/final-review.schema.json"));
+  assert.equal(schema.properties.excludedFiles.maxItems, 0);
 });
 
 test("候选规则必须由 selected、excluded、globallyNotApplicable 完整互斥分区", async (t) => {
@@ -459,7 +537,9 @@ test("新 TARGET 拒绝原地重封和旧 shard 重放", async (t) => {
   const oldShard = passedShard(first, JSON.parse(oldTask));
 
   await expectFailure([
-    "--mode", "seal-dispatch", "--input", firstFile, "--base", "HEAD", "--current",
+    "--mode", "seal-dispatch", "--input", firstFile,
+    "--base", first.reviewRange.baseCommit,
+    "--target-commit", first.reviewRange.boundCommit,
   ], /sealed dispatch cannot be resealed/);
   fs.rmSync(path.dirname(firstFile), { recursive: true, force: true });
 
@@ -491,10 +571,11 @@ test("相同 runId、batchId 和 targetTree 下，旧 shard 仍须匹配完整 t
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
   git(root, ["add", "src/main.js"]);
   git(root, ["commit", "-qm", "target"]);
+  const target = git(root, ["rev-parse", "HEAD"]);
   const targetTree = git(root, ["rev-parse", "HEAD^{tree}"]);
 
   const firstFile = createDraft(root, { runId: "same-task-run" });
-  const first = await seal(firstFile, ["--target-tree", targetTree], base);
+  const first = await seal(firstFile, target, base);
   const firstTasks = path.join(path.dirname(firstFile), "tasks");
   await run(["--mode", "build-tasks", "--dispatch", firstFile, "--out", firstTasks]);
   const firstTask = readJson(path.join(firstTasks, "B001.json"));
@@ -502,7 +583,7 @@ test("相同 runId、batchId 和 targetTree 下，旧 shard 仍须匹配完整 t
   fs.rmSync(path.dirname(firstFile), { recursive: true, force: true });
 
   const secondFile = createDraft(root, { runId: "same-task-run" });
-  const second = await seal(secondFile, ["--target-tree", targetTree], "HEAD");
+  const second = await seal(secondFile, target, target);
   const secondTasks = path.join(path.dirname(secondFile), "tasks");
   await run(["--mode", "build-tasks", "--dispatch", secondFile, "--out", secondTasks]);
   const secondTask = readJson(path.join(secondTasks, "B001.json"));
@@ -516,36 +597,34 @@ test("相同 runId、batchId 和 targetTree 下，旧 shard 仍须匹配完整 t
   ], /shard taskHash must match the canonical task identity/);
 });
 
-test("bind-commit 首次绑定只要求 tree 相等，之后只允许同一 commit 幂等绑定", async (t) => {
+test("boundCommit 是必填的规范 commit，且其 tree 必须等于 targetTree", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
   const file = createDraft(root);
   const dispatch = await seal(file);
-  const unrelatedTopologyCommit = git(root, ["commit-tree", dispatch.reviewRange.targetTree, "-m", "same tree, no parent"]);
 
-  await run(["--mode", "bind-commit", "--dir", path.dirname(file), "--commit", unrelatedTopologyCommit]);
+  delete dispatch.reviewRange.boundCommit;
+  writeJson(file, dispatch);
+  await expectFailure(["--mode", "dispatch", "--input", file], /required field is missing/);
 
-  assert.equal(readJson(file).reviewRange.boundCommit, unrelatedTopologyCommit);
-  await run(["--mode", "bind-commit", "--dir", path.dirname(file), "--commit", unrelatedTopologyCommit]);
-  const anotherCommit = git(root, ["commit-tree", dispatch.reviewRange.targetTree, "-m", "another same-tree commit"]);
-  await expectFailure([
-    "--mode", "bind-commit", "--dir", path.dirname(file), "--commit", anotherCommit,
-  ], /already bound.*rebinding.*not allowed/);
+  dispatch.reviewRange.boundCommit = dispatch.reviewRange.baseCommit;
+  writeJson(file, dispatch);
+  await expectFailure(["--mode", "dispatch", "--input", file], /boundCommit tree does not match targetTree/);
 });
 
-test("v3 与旧 incremental 字段明确拒绝", async (t) => {
+test("v4 与旧 incremental 字段明确拒绝", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
   const file = createDraft(root);
   await seal(file);
   const dispatch = readJson(file);
-  dispatch.schemaVersion = 3;
+  dispatch.schemaVersion = 4;
   writeJson(file, dispatch);
   await expectFailure(["--mode", "dispatch", "--input", file], /schemaVersion must match rules-review protocol/);
 
-  dispatch.schemaVersion = 4;
+  dispatch.schemaVersion = 5;
   dispatch.continuation = { baseRunId: "old-run" };
   dispatch.fullReason = "legacy";
   dispatch.inputSource = { mode: "worktree" };
@@ -553,24 +632,33 @@ test("v3 与旧 incremental 字段明确拒绝", async (t) => {
   await expectFailure(["--mode", "dispatch", "--input", file], /dispatch contains unsupported field/);
 });
 
-test("seal-dispatch 对缺少 base、多 target selector 和非常规 index 状态 fail closed", async (t) => {
+test("seal-dispatch 对缺少 base、缺少 target commit 和旧入口 fail closed", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
   const file = createDraft(root);
-  await expectFailure(["--mode", "seal-dispatch", "--input", file, "--current"], /requires --base/);
   await expectFailure([
-    "--mode", "seal-dispatch", "--input", file, "--base", "HEAD", "--current", "--staged",
-  ], /exactly one target selector/);
+    "--mode", "seal-dispatch", "--input", file, "--target-commit", "HEAD",
+  ], /requires --base/);
+  await expectFailure([
+    "--mode", "seal-dispatch", "--input", file, "--base", "HEAD",
+  ], /requires --target-commit/);
+  await expectFailure([
+    "--mode", "seal-dispatch", "--input", file, "--base", "HEAD",
+    "--target-commit", "HEAD", "--current",
+  ], /only accepts committed TARGETs/);
+  await expectFailure(["--mode", "bind-commit"], /unknown or missing mode/);
 });
 
-test("文档声明 tree-only、每 TARGET fresh run 与临时生命周期", () => {
+test("文档声明 commit-only、每 TARGET fresh run 与临时生命周期", () => {
   const skill = fs.readFileSync(path.join(repoRoot, "skills/rules-review/SKILL.md"), "utf8");
   const reviewer = fs.readFileSync(path.join(repoRoot, "skills/rules-review/references/subagent-all-aspects.md"), "utf8");
+  assert.match(skill, /TARGET 只能是 Git commit/);
+  assert.match(skill, /`--target-commit` 是唯一 TARGET selector/);
   assert.match(skill, /每个新的 TARGET.*全新 run/s);
   assert.match(skill, /不继承旧结果/);
   assert.match(skill, /不承诺跨会话、跨环境、跨天或长期恢复/);
   assert.match(skill, /git diff <baseTree> <targetTree>/);
   assert.match(reviewer, /git show <targetTree>:<path>/);
+  assert.doesNotMatch(skill, /--current|--staged|--target-tree|bind-commit/);
   assert.doesNotMatch(skill, /baseRunId|effectiveResults|fullReason|inputSource/);
 });

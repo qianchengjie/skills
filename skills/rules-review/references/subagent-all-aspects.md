@@ -1,6 +1,6 @@
 # rules-review reviewer 契约
 
-仅在 controller 已生成并校验 v4 task 后使用。每个 reviewer 只处理一个 `reviewBatchId`。
+仅在 controller 已生成并校验 v5 task 后使用。每个 reviewer 只处理一个 `reviewBatchId`。
 
 ## 分派
 

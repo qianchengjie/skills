@@ -131,7 +131,7 @@ repair 的结果表：
 当前切片：<S-id>
 Rule review package：<dev-plans/.../review-packages/<S-id>-rules.md>
 
-- 为当前 TARGET 创建全新 rules-review v4 run。
+- 为当前 TARGET 创建全新 rules-review v5 run。
 - 完整审查本 TARGET 的全部当前 reviewItems。
 - 不引用旧 run，不继承旧 result，不扫描目录猜“最新” run。
 - rules-review 使用 package 给出的 `--base <baseCommit> --target-commit <headCommit>` 和 `excludedFiles: []`，不从当前文件或 index 重建，也不传文件排除。
@@ -158,7 +158,7 @@ fixed summary：
 - rulesReviewReport: <非 ready_for_merge 时为 .rules-review-tmp/<runId>/response.md>
 ```
 
-规则语义审查在代码提交后完成。`--target-commit` 封印时直接固定 `targetTree = headCommit^{tree}` 与 `boundCommit = headCommit`；sliced-dev 不再调用后置 `bind-commit`。
+规则语义审查在代码提交后完成。`--target-commit` 封印时直接固定 `targetTree = headCommit^{tree}` 与 `boundCommit = headCommit`。
 
 ## 机器校验边界
 

@@ -2,14 +2,12 @@
 
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
 const MODES = new Set([
   'dispatch',
   'seal-dispatch',
-  'bind-commit',
   'task',
   'retry-task',
   'shard',
@@ -22,7 +20,7 @@ const MODES = new Set([
   'run',
 ]);
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 const RETURN_STATUSES = ['not_started', 'started', 'returned', 'not_returned', 'format_invalid', 'untrusted'];
 const AGGREGATE_STATUSES = ['aggregated', 'not_aggregated'];
 const RESULT_STATUSES = ['passed', 'finding', 'observation', 'not_applicable', 'cannot_verify'];
@@ -178,8 +176,6 @@ function run(args) {
   try {
     if (mode === 'seal-dispatch') {
       sealDispatchMode(args, result);
-    } else if (mode === 'bind-commit') {
-      bindCommitMode(args, result);
     } else if (mode === 'dispatch') {
       const dispatch = readJson(args.input, args.input, result, 'D001');
       if (dispatch) validateDispatch(dispatch, args.input, result, args.input);
@@ -270,7 +266,7 @@ function sealDispatchMode(args, result) {
   const draft = readJson(args.input, args.input, result, 'D001');
   if (!draft) return;
   if (draft.schemaVersion !== SCHEMA_VERSION) {
-    addViolation(result, 'SD001', args.input, '/schemaVersion', 'seal-dispatch only accepts current rules-review drafts', SCHEMA_VERSION, draft.schemaVersion, 2);
+    addViolation(result, 'SD001', args.input, '/schemaVersion', 'seal-dispatch only accepts schemaVersion 5 rules-review drafts', SCHEMA_VERSION, draft.schemaVersion, 2);
     return;
   }
 
@@ -281,54 +277,28 @@ function sealDispatchMode(args, result) {
       throw new Error('sealed dispatch cannot be resealed; create a fresh run for a new TARGET');
     }
     if (!isNonEmptyString(args.base)) throw new Error('seal-dispatch requires --base <revision>');
-    const selectors = [
-      ['current', args.current === true],
-      ['staged', args.staged === true],
-      ['target-commit', isNonEmptyString(args['target-commit'])],
-      ['target-tree', isNonEmptyString(args['target-tree'])],
-    ].filter(([, selected]) => selected);
-    if (selectors.length !== 1) throw new Error('seal-dispatch requires exactly one target selector');
-    if ((args.current !== undefined && args.current !== true) || (args.staged !== undefined && args.staged !== true)) {
-      throw new Error('--current and --staged do not accept values');
+    const unsupportedSelectors = ['current', 'staged', 'target-tree']
+      .filter((name) => args[name] !== undefined);
+    if (unsupportedSelectors.length > 0) {
+      throw new Error(`rules-review only accepts committed TARGETs; unsupported selector(s): ${unsupportedSelectors.join(', ')}`);
     }
+    if (!isNonEmptyString(args['target-commit'])) throw new Error('seal-dispatch requires --target-commit <revision>');
 
     const baseCommit = resolveCommit(root, args.base);
     const baseTree = resolveTree(root, `${baseCommit}^{tree}`);
-    const [selector] = selectors[0];
-    let seedCommit;
-    let boundCommit;
-    let candidateTree;
-    if (selector === 'current') {
-      seedCommit = resolveCommit(root, 'HEAD');
-      candidateTree = writeCurrentTree(root, seedCommit, dispatchPath);
-    } else if (selector === 'staged') {
-      seedCommit = resolveCommit(root, 'HEAD');
-      candidateTree = writeIndexTree(root);
-    } else if (selector === 'target-commit') {
-      boundCommit = resolveCommit(root, args['target-commit']);
-      candidateTree = resolveTree(root, `${boundCommit}^{tree}`);
-    } else {
-      candidateTree = resolveTreeObject(root, args['target-tree']);
-    }
+    const boundCommit = resolveCommit(root, args['target-commit']);
+    const targetTree = resolveTree(root, `${boundCommit}^{tree}`);
 
     sealed = JSON.parse(JSON.stringify(draft));
     const excludedFiles = validateSealingExcludedFiles(sealed.reviewRange && sealed.reviewRange.excludedFiles);
-    if (selector === 'target-commit' && excludedFiles.length > 0) {
-      throw new Error('--target-commit requires reviewRange.excludedFiles to be exactly []');
-    }
-    const candidateFiles = listTreeChangedFiles(root, baseTree, candidateTree);
-    assertRegularChangedEntries(root, baseTree, candidateTree, candidateFiles);
-    const targetTree = selector === 'target-commit'
-      ? candidateTree
-      : excludeTreeFiles(root, candidateTree, baseTree, excludedFiles);
-    const includedFiles = listTreeChangedFiles(root, baseTree, targetTree);
-    validateFilePartition(candidateFiles, includedFiles, excludedFiles);
+    if (excludedFiles.length > 0) throw new Error('commit-only rules-review requires reviewRange.excludedFiles to be exactly []');
+    const changedFiles = listTreeChangedFiles(root, baseTree, targetTree);
+    assertRegularChangedEntries(root, baseTree, targetTree, changedFiles);
     sealed.reviewRange = {
       baseCommit,
       baseTree,
-      ...(seedCommit ? { seedCommit } : {}),
       targetTree,
-      ...(boundCommit ? { boundCommit } : {}),
+      boundCommit,
       excludedFiles,
     };
     sealed.inputSnapshot = {
@@ -354,7 +324,7 @@ function sealDispatchMode(args, result) {
       source.sourceHash = ruleSnapshotByPath.get(source.sourceFile).contentHash;
     });
   } catch (error) {
-    addViolation(result, 'SD002', args.input, null, `seal-dispatch failed closed: ${error.message}`, 'unambiguous Git base and immutable target tree', error.message, 2);
+    addViolation(result, 'SD002', args.input, null, `seal-dispatch failed closed: ${error.message}`, 'unambiguous Git base and committed TARGET', error.message, 2);
     return;
   }
 
@@ -362,52 +332,6 @@ function sealDispatchMode(args, result) {
   if (result.violations.length > 0) return;
   atomicWriteFile(args.input, `${JSON.stringify(sealed, null, 2)}\n`);
   result.rendered = args.input;
-}
-
-function bindCommitMode(args, result) {
-  const runDir = args.dir;
-  if (!runDir || runDir === true) {
-    addViolation(result, 'BC001', null, '/dir', 'bind-commit requires --dir', 'run directory', runDir || null, 2);
-    return;
-  }
-  if (!isNonEmptyString(args.commit)) {
-    addViolation(result, 'BC002', null, '/commit', 'bind-commit requires --commit', 'Git commit', args.commit || null, 2);
-    return;
-  }
-  if (!validateRunDirectoryFiles(runDir, result)) return;
-
-  const dispatchPath = path.join(runDir, 'dispatch.json');
-  const dispatch = readJson(dispatchPath, rel(runDir, dispatchPath), result, 'D001');
-  if (!dispatch) return;
-
-  let bound;
-  try {
-    const { root } = loadRepository(dispatchPath);
-    validateDispatch(dispatch, rel(runDir, dispatchPath), result, dispatchPath);
-    if (result.violations.length > 0) return;
-    const boundCommit = resolveCommit(root, args.commit);
-    const boundTree = resolveTree(root, `${boundCommit}^{tree}`);
-    if (
-      dispatch.reviewRange.boundCommit !== undefined
-      && dispatch.reviewRange.boundCommit !== boundCommit
-    ) {
-      throw new Error(`dispatch is already bound to ${dispatch.reviewRange.boundCommit}; rebinding to ${boundCommit} is not allowed`);
-    }
-    if (boundTree !== dispatch.reviewRange.targetTree) {
-      throw new Error(`boundCommit tree ${boundTree} does not match targetTree ${dispatch.reviewRange.targetTree}`);
-    }
-    bound = JSON.parse(JSON.stringify(dispatch));
-    bound.reviewRange.boundCommit = boundCommit;
-    validateDispatch(bound, rel(runDir, dispatchPath), result, dispatchPath);
-  } catch (error) {
-    addViolation(result, 'BC003', rel(runDir, dispatchPath), '/reviewRange/boundCommit', `bind-commit failed closed: ${error.message}`, 'commit whose tree equals targetTree', error.message, 2);
-    return;
-  }
-  if (result.violations.length > 0) return;
-
-  const serialized = `${JSON.stringify(bound, null, 2)}\n`;
-  if (fs.readFileSync(dispatchPath, 'utf8') !== serialized) atomicWriteFile(dispatchPath, serialized);
-  result.rendered = dispatchPath;
 }
 
 function atomicWriteFile(filePath, content) {
@@ -424,66 +348,11 @@ function atomicWriteFile(filePath, content) {
   }
 }
 
-function withTemporaryIndex(root, callback) {
-  const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rules-review-index-'));
-  const indexPath = path.join(temporaryDir, 'index');
-  const env = { ...process.env, GIT_INDEX_FILE: indexPath };
-  try {
-    return callback(indexPath, env);
-  } finally {
-    fs.rmSync(temporaryDir, { recursive: true, force: true });
-  }
-}
-
 function git(root, args, options = {}) {
   return execFileSync('git', ['-C', root, ...args], {
     maxBuffer: 64 * 1024 * 1024,
     ...options,
-  });
-}
-
-function assertIndexIsUnambiguous(root) {
-  const unmerged = git(root, ['ls-files', '--unmerged', '-z']);
-  if (unmerged.length > 0) throw new Error('unmerged index entries are not supported');
-}
-
-function writeCurrentTree(root, seedCommit, dispatchPath) {
-  assertIndexIsUnambiguous(root);
-  const dispatchInput = path.relative(root, dispatchPath).split(path.sep).join('/');
-  assertSafeRepoRelativePath(dispatchInput);
-  return withTemporaryIndex(root, (_indexPath, env) => {
-    git(root, ['read-tree', seedCommit], { env });
-    git(root, ['add', '-A', '--', '.', `:(exclude,literal)${dispatchInput}`], { env });
-    return normalizeGitOid(git(root, ['write-tree'], { env, encoding: 'utf8' }).trim(), 'current target tree');
-  });
-}
-
-function writeIndexTree(root) {
-  assertIndexIsUnambiguous(root);
-  const rawIndexPath = git(root, ['rev-parse', '--git-path', 'index'], { encoding: 'utf8' }).trim();
-  if (!rawIndexPath || rawIndexPath.includes('\n')) throw new Error('unable to resolve a single Git index path');
-  const sourceIndexPath = path.isAbsolute(rawIndexPath) ? rawIndexPath : path.resolve(root, rawIndexPath);
-  const stat = fs.lstatSync(sourceIndexPath);
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('Git index must be a regular non-symlink file');
-  return withTemporaryIndex(root, (indexPath, env) => {
-    fs.copyFileSync(sourceIndexPath, indexPath);
-    return normalizeGitOid(git(root, ['write-tree'], { env, encoding: 'utf8' }).trim(), 'staged target tree');
-  });
-}
-
-function excludeTreeFiles(root, candidateTree, baseTree, excludedFiles) {
-  if (excludedFiles.length === 0) return candidateTree;
-  return withTemporaryIndex(root, (_indexPath, env) => {
-    git(root, ['read-tree', candidateTree], { env });
-    excludedFiles.forEach((repoPath) => {
-      const baseEntry = readTreeEntry(root, baseTree, repoPath);
-      if (baseEntry.state === 'deleted') {
-        git(root, ['update-index', '--force-remove', '--', repoPath], { env });
-      } else {
-        git(root, ['update-index', '--add', '--cacheinfo', baseEntry.mode, baseEntry.objectId, repoPath], { env });
-      }
-    });
-    return normalizeGitOid(git(root, ['write-tree'], { env, encoding: 'utf8' }).trim(), 'scoped target tree');
+    env: { ...process.env, ...options.env, GIT_NO_LAZY_FETCH: '1' },
   });
 }
 
@@ -497,22 +366,6 @@ function validateSealingExcludedFiles(value) {
     seen.add(repoPath);
     return repoPath;
   }).sort(compareStrings);
-}
-
-function validateFilePartition(candidateFiles, includedFiles, excludedFiles) {
-  const candidates = new Set(candidateFiles);
-  const included = new Set(includedFiles);
-  const excluded = new Set(excludedFiles);
-  included.forEach((repoPath) => {
-    if (!candidates.has(repoPath)) throw new Error(`targetTree contains non-candidate change ${repoPath}`);
-    if (excluded.has(repoPath)) throw new Error(`candidate change appears in targetTree and excludedFiles: ${repoPath}`);
-  });
-  excluded.forEach((repoPath) => {
-    if (!candidates.has(repoPath)) throw new Error(`excludedFiles contains non-candidate path ${repoPath}`);
-  });
-  candidates.forEach((repoPath) => {
-    if (!included.has(repoPath) && !excluded.has(repoPath)) throw new Error(`candidate change is missing from targetTree and excludedFiles: ${repoPath}`);
-  });
 }
 
 function assertRegularChangedEntries(root, baseTree, targetTree, changedFiles) {
@@ -604,11 +457,11 @@ function resolveTree(root, revision) {
   return tree;
 }
 
-function resolveTreeObject(root, revision) {
-  if (!GIT_OID_RE.test(revision || '')) throw new Error('target-tree must be a normalized 40 or 64 character lowercase object ID');
+function resolveNormalizedTreeObject(root, revision) {
+  if (!GIT_OID_RE.test(revision || '')) throw new Error('tree must be a normalized 40 or 64 character lowercase object ID');
   const objectId = normalizeGitOid(git(root, ['rev-parse', '--verify', '--end-of-options', revision], { encoding: 'utf8' }).trim(), `Git object ${revision}`);
-  if (objectId !== revision) throw new Error('target-tree must use its normalized object ID');
-  if (git(root, ['cat-file', '-t', objectId], { encoding: 'utf8' }).trim() !== 'tree') throw new Error(`target-tree must resolve directly to a tree object: ${revision}`);
+  if (objectId !== revision) throw new Error('tree must use its normalized object ID');
+  if (git(root, ['cat-file', '-t', objectId], { encoding: 'utf8' }).trim() !== 'tree') throw new Error(`object must be a tree: ${revision}`);
   return objectId;
 }
 
@@ -741,16 +594,19 @@ function validateReviewRangeShape(reviewRange, artifact, result) {
     addViolation(result, 'D230', artifact, '/reviewRange', 'reviewRange must be an object', 'object', reviewRange);
     return;
   }
-  const required = ['baseCommit', 'baseTree', 'targetTree', 'excludedFiles'];
-  const allowed = [...required, 'seedCommit', 'boundCommit'];
+  const required = ['baseCommit', 'baseTree', 'targetTree', 'boundCommit', 'excludedFiles'];
+  const allowed = required;
   requireFields(reviewRange, artifact, result, 'D231', '/reviewRange', required);
   rejectUnsupportedFields(reviewRange, artifact, result, 'D232', '/reviewRange', allowed, 'reviewRange');
-  ['baseCommit', 'baseTree', 'seedCommit', 'targetTree', 'boundCommit'].forEach((field) => {
+  ['baseCommit', 'baseTree', 'targetTree', 'boundCommit'].forEach((field) => {
     if (reviewRange[field] !== undefined && !GIT_OID_RE.test(reviewRange[field])) {
       addViolation(result, 'D233', artifact, `/reviewRange/${field}`, `${field} must be a normalized Git object ID`, '40 or 64 lowercase hex', reviewRange[field]);
     }
   });
   validateRepoPathArray(reviewRange.excludedFiles, artifact, result, 'D234', '/reviewRange/excludedFiles');
+  if (asArray(reviewRange.excludedFiles).length > 0) {
+    addViolation(result, 'D245', artifact, '/reviewRange/excludedFiles', 'commit-only rules-review requires the complete commit range', [], reviewRange.excludedFiles);
+  }
 }
 
 function validateRuleSnapshotShape(dispatch, artifact, result) {
@@ -822,21 +678,15 @@ function verifyTreeDispatchInputs(dispatch, currentInputPath, artifact, result) 
     const range = dispatch.reviewRange;
     const baseCommit = resolveCommit(root, range.baseCommit);
     const baseTree = resolveTree(root, range.baseTree);
-    const targetTree = resolveTreeObject(root, range.targetTree);
+    const targetTree = resolveNormalizedTreeObject(root, range.targetTree);
     if (baseCommit !== range.baseCommit || baseTree !== range.baseTree || targetTree !== range.targetTree) throw new Error('reviewRange objects must use normalized IDs');
     if (resolveTree(root, `${baseCommit}^{tree}`) !== baseTree) throw new Error('baseCommit tree does not match baseTree');
-    if (range.seedCommit && resolveCommit(root, range.seedCommit) !== range.seedCommit) throw new Error('seedCommit is missing or not normalized');
-    if (range.boundCommit) {
-      const boundCommit = resolveCommit(root, range.boundCommit);
-      if (resolveTree(root, `${boundCommit}^{tree}`) !== targetTree) throw new Error('boundCommit tree does not match targetTree');
-    }
+    const boundCommit = resolveCommit(root, range.boundCommit);
+    if (boundCommit !== range.boundCommit) throw new Error('boundCommit must use its normalized commit ID');
+    if (resolveTree(root, `${boundCommit}^{tree}`) !== targetTree) throw new Error('boundCommit tree does not match targetTree');
 
     const changedFiles = listTreeChangedFiles(root, baseTree, targetTree);
     assertRegularChangedEntries(root, baseTree, targetTree, changedFiles);
-    const excludedFiles = new Set(asArray(range.excludedFiles));
-    changedFiles.forEach((repoPath) => {
-      if (excludedFiles.has(repoPath)) throw new Error(`excluded file remains changed in targetTree: ${repoPath}`);
-    });
     const changedUnitRefs = new Set(asArray(dispatch.targets && dispatch.targets.changedUnits).flatMap((target) => asArray(target && target.inputRefs)));
     changedFiles.filter((repoPath) => !isRuleInputPath(repoPath)).forEach((repoPath) => {
       if (!changedUnitRefs.has(repoPath)) throw new Error(`targetTree changed file is not covered by changedUnits.inputRefs: ${repoPath}`);
@@ -1461,10 +1311,11 @@ function validateTaskTreeInputs(task, currentInputPath, artifact, result) {
     const { root } = loadRepository(currentInputPath);
     const baseCommit = resolveCommit(root, task.reviewRange.baseCommit);
     const baseTree = resolveTree(root, task.reviewRange.baseTree);
-    const targetTree = resolveTreeObject(root, task.reviewRange.targetTree);
+    const targetTree = resolveNormalizedTreeObject(root, task.reviewRange.targetTree);
     if (resolveTree(root, `${baseCommit}^{tree}`) !== baseTree) throw new Error('task baseCommit tree does not match baseTree');
-    if (task.reviewRange.seedCommit) resolveCommit(root, task.reviewRange.seedCommit);
-    if (task.reviewRange.boundCommit && resolveTree(root, `${resolveCommit(root, task.reviewRange.boundCommit)}^{tree}`) !== targetTree) {
+    const boundCommit = resolveCommit(root, task.reviewRange.boundCommit);
+    if (boundCommit !== task.reviewRange.boundCommit) throw new Error('task boundCommit must use its normalized commit ID');
+    if (resolveTree(root, `${boundCommit}^{tree}`) !== targetTree) {
       throw new Error('task boundCommit tree does not match targetTree');
     }
     task.inputSnapshot.files.forEach((entry) => {
@@ -1980,12 +1831,8 @@ function validateTaskAgainstDispatch(task, dispatch, batch, reviewItems, artifac
   if (task.runId !== dispatch.runId) addViolation(result, 'RUN020', artifact, '/runId', 'task runId must match dispatch runId', dispatch.runId, task.runId);
   if (task.reviewBatchId !== batch.reviewBatchId) addViolation(result, 'RUN021', artifact, '/reviewBatchId', 'task reviewBatchId must match reviewBatchId', batch.reviewBatchId, task.reviewBatchId);
   if (task.ruleSetId !== dispatch.ruleSet.ruleSetId) addViolation(result, 'RUN022', artifact, '/ruleSetId', 'task ruleSetId must match dispatch ruleSetId', dispatch.ruleSet.ruleSetId, task.ruleSetId);
-  const dispatchTaskRange = { ...dispatch.reviewRange };
-  const taskRange = { ...task.reviewRange };
-  delete dispatchTaskRange.boundCommit;
-  delete taskRange.boundCommit;
-  if (canonicalStringify(taskRange) !== canonicalStringify(dispatchTaskRange)) {
-    addViolation(result, 'RUN038', artifact, '/reviewRange', 'task reviewRange must equal dispatch reviewRange except post-review boundCommit', dispatchTaskRange, taskRange);
+  if (canonicalStringify(task.reviewRange) !== canonicalStringify(dispatch.reviewRange)) {
+    addViolation(result, 'RUN038', artifact, '/reviewRange', 'task reviewRange must equal dispatch reviewRange', dispatch.reviewRange, task.reviewRange);
   }
   if (canonicalStringify(task.inputSnapshot) !== canonicalStringify(dispatch.inputSnapshot)) {
     addViolation(result, 'RUN039', artifact, '/inputSnapshot', 'task inputSnapshot must equal dispatch inputSnapshot', dispatch.inputSnapshot, task.inputSnapshot);
@@ -2474,7 +2321,10 @@ function validateFinalReviewShape(finalReview, artifact, result) {
   if (!SEMANTIC_VERDICTS.includes(finalReview.semanticVerdict)) addViolation(result, 'FR008', artifact, '/semanticVerdict', 'semanticVerdict must be valid', SEMANTIC_VERDICTS, finalReview.semanticVerdict);
   validateIssueSummary(finalReview.issueSummary, artifact, result, 'FR015', '/issueSummary');
   if (!RECOMMENDATIONS.includes(finalReview.recommendation)) addViolation(result, 'FR016', artifact, '/recommendation', 'recommendation must be valid', RECOMMENDATIONS, finalReview.recommendation);
-  validateRepoPathArray(finalReview.excludedFiles, artifact, result, 'FR079', '/excludedFiles');
+  const excludedFiles = validateRepoPathArray(finalReview.excludedFiles, artifact, result, 'FR079', '/excludedFiles');
+  if (excludedFiles.length > 0) {
+    addViolation(result, 'FR081', artifact, '/excludedFiles', 'commit-only rules-review requires excludedFiles to be exactly []', [], finalReview.excludedFiles);
+  }
   validateStringSet(finalReview.excludedRuleRefs, artifact, result, 'FR009', '/excludedRuleRefs');
   if (!Array.isArray(finalReview.findings)) addViolation(result, 'FR010', artifact, '/findings', 'findings must be array', 'array', finalReview.findings);
   if (!Array.isArray(finalReview.observations)) addViolation(result, 'FR058', artifact, '/observations', 'observations must be array', 'array', finalReview.observations);

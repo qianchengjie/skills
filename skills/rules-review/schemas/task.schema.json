@@ -7,7 +7,7 @@
   "required": ["kind", "schemaVersion", "runId", "reviewBatchId", "taskHash", "ruleSetId", "reviewRange", "ruleSnapshot", "inputSnapshot", "reviewItems", "rules", "targets", "applicabilityMatrix", "outputContract"],
   "properties": {
     "kind": { "const": "rules-review-task" },
-    "schemaVersion": { "const": 4 },
+    "schemaVersion": { "const": 5 },
     "runId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "reviewBatchId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "taskHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
