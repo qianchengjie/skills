@@ -65,7 +65,7 @@ async function expectFailure(args, pattern, cwd = repoRoot) {
 }
 
 function createRepository() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-v6-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-v7-"));
   fs.mkdirSync(path.join(root, ".agents/rules"), { recursive: true });
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
   fs.writeFileSync(path.join(root, ".gitignore"), ".rules-review-tmp/\n");
@@ -82,7 +82,7 @@ function createRepository() {
 }
 
 function draft({
-  runId = "run-v6",
+  runId = "run-v7",
   inputRefs = ["src/main.js"],
   excludedFiles = [],
   candidateRuleRefs = ["CORE-001"],
@@ -94,7 +94,7 @@ function draft({
 } = {}) {
   return {
     kind: "rules-review-dispatch",
-    schemaVersion: 6,
+    schemaVersion: 7,
     runId,
     reviewRange: { excludedFiles },
     ruleSnapshot: { files: [] },
@@ -173,7 +173,7 @@ function draft({
 }
 
 function createDraft(root, options = {}) {
-  const file = path.join(root, ".rules-review-tmp", options.runId || "run-v6", "dispatch.json");
+  const file = path.join(root, ".rules-review-tmp", options.runId || "run-v7", "dispatch.json");
   writeJson(file, draft(options));
   return file;
 }
@@ -228,7 +228,7 @@ function assertWorkspaceEqual(before, after) {
 function passedShard(dispatch, task) {
   return {
     kind: "rules-review-shard",
-    schemaVersion: 6,
+    schemaVersion: 7,
     runId: dispatch.runId,
     reviewBatchId: "B001",
     targetTree: dispatch.reviewRange.targetTree,
@@ -314,6 +314,119 @@ test("其他关注项只按需展示，不影响 rules-review 结论和计数", 
   response = fs.readFileSync(path.join(runDir, "response.md"), "utf8");
   assert.equal("otherConcerns" in finalReview, false);
   assert.doesNotMatch(response, /## 其他关注项/);
+});
+
+test("语义切片分别审查，最终 finding 按显式 rootCause 合并并保留全部证据组", async (t) => {
+  const root = createRepository();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
+  fs.writeFileSync(path.join(root, "src/other.js"), "export const other = 2;\n");
+  fs.writeFileSync(path.join(root, "src/host.js"), "export const backendRoute = true;\n");
+
+  const dispatchFile = createDraft(root, { runId: "root-cause-grouping" });
+  const draftDispatch = readJson(dispatchFile);
+  const targetSpecs = [
+    ["T001", "src/main.js", "CI 是否组装 backend 制品"],
+    ["T002", "src/other.js", "WebView 是否允许进入 /backend"],
+    ["T003", "src/host.js", "独立宿主是否生成 /backend 路由"],
+  ];
+  draftDispatch.targets.changedUnits = targetSpecs.map(([targetId, inputRef, summary]) => ({
+    targetId,
+    targetKind: "changed_unit",
+    inputRefs: [inputRef],
+    loc: `${inputRef}:1`,
+    summary,
+  }));
+  draftDispatch.applicabilityMatrix = targetSpecs.map(([targetId, inputRef], index) => ({
+    ruleRef: "CORE-001",
+    targetId,
+    targetKind: "changed_unit",
+    applicability: "applicable",
+    reviewItemId: `RI${String(index + 1).padStart(3, "0")}`,
+    evidence: [{ loc: `${inputRef}:1`, summary: "适用性已判断" }],
+  }));
+  draftDispatch.reviewItems = targetSpecs.map(([targetId], index) => ({
+    reviewItemId: `RI${String(index + 1).padStart(3, "0")}`,
+    ruleRef: "CORE-001",
+    targetKind: "changed_unit",
+    targetId,
+    required: true,
+  }));
+  draftDispatch.executionPlan.metrics = {
+    changedUnits: 3,
+    candidates: 0,
+    targets: 3,
+    requiredRuleRefs: 1,
+    reviewItems: 3,
+  };
+  draftDispatch.reviewBatches[0].reviewItemIds = ["RI001", "RI002", "RI003"];
+  writeJson(dispatchFile, draftDispatch);
+
+  const dispatch = await seal(dispatchFile);
+  const runDir = path.dirname(dispatchFile);
+  const taskDir = path.join(runDir, "tasks");
+  await run(["--mode", "build-tasks", "--dispatch", dispatchFile, "--out", taskDir]);
+  const task = readJson(path.join(taskDir, "B001.json"));
+  const rootCause = "制品可用性没有成为构建、路由和入口的共同门禁。";
+  const shard = {
+    kind: "rules-review-shard",
+    schemaVersion: 7,
+    runId: dispatch.runId,
+    reviewBatchId: "B001",
+    targetTree: dispatch.reviewRange.targetTree,
+    taskHash: task.taskHash,
+    results: dispatch.reviewItems.map((item, index) => ({
+      reviewItemId: item.reviewItemId,
+      status: "finding",
+      rootCause,
+      origin: "introduced_by_change",
+      evidence: [{
+        loc: `${targetSpecs[index][1]}:1`,
+        summary: targetSpecs[index][2],
+      }],
+    })),
+  };
+  const shardFile = path.join(runDir, "shards/B001.json");
+  writeJson(shardFile, shard);
+  await run(["--mode", "shard", "--task", path.join(taskDir, "B001.json"), "--input", shardFile]);
+
+  const invalidShardFile = path.join(root, "missing-root-cause.json");
+  const invalidShard = structuredClone(shard);
+  delete invalidShard.results[0].rootCause;
+  writeJson(invalidShardFile, invalidShard);
+  await expectFailure(
+    ["--mode", "shard", "--task", path.join(taskDir, "B001.json"), "--input", invalidShardFile],
+    /finding result requires an explicit rootCause/,
+  );
+
+  for (const args of [
+    ["--mode", "aggregate-final", "--dir", runDir, "--output", path.join(runDir, "finalReview.json")],
+    ["--mode", "render-final", "--input", path.join(runDir, "finalReview.json"), "--dispatch", dispatchFile, "--output", path.join(runDir, "final.md")],
+    ["--mode", "render-response", "--dir", runDir],
+  ]) {
+    await run(args);
+  }
+
+  const finalReview = readJson(path.join(runDir, "finalReview.json"));
+  const response = fs.readFileSync(path.join(runDir, "response.md"), "utf8");
+  assert.deepEqual(finalReview.issueSummary, { findings: 1, mustFix: 1, shouldFix: 0, cannotVerify: 0, observations: 0 });
+  assert.equal(finalReview.recommendation, "must_fix_before_merge");
+  assert.equal(finalReview.findings.length, 1);
+  assert.equal(finalReview.findings[0].rootCause, rootCause);
+  assert.deepEqual(finalReview.findings[0].evidenceGroups.map((group) => group.reviewItemId), ["RI001", "RI002", "RI003"]);
+  assert.equal(finalReview.findings[0].evidenceGroups.length, 3);
+  assert.equal("otherConcerns" in finalReview, false);
+  assert.equal(response.split(rootCause).length - 1, 1);
+  assert.match(response, /目标：T001/);
+  assert.match(response, /目标：T002/);
+  assert.match(response, /目标：T003/);
+
+  shard.results[2].rootCause = "独立宿主单独缺少 backend 路由门禁。";
+  writeJson(shardFile, shard);
+  await run(["--mode", "aggregate-final", "--dir", runDir, "--output", path.join(runDir, "finalReview.json")]);
+  const splitFinalReview = readJson(path.join(runDir, "finalReview.json"));
+  assert.equal(splitFinalReview.findings.length, 2, "aggregator 不应按相似措辞推断同一根因");
+  assert.deepEqual(splitFinalReview.issueSummary, { findings: 2, mustFix: 2, shouldFix: 0, cannotVerify: 0, observations: 0 });
 });
 
 test("target-commit 固定完整提交范围，且封印过程不写 Git object 或修改工作区", async (t) => {
@@ -669,7 +782,7 @@ test("commit 文件范围必须完整，scopeMode 只由规则排除事实派生
   );
 });
 
-test("v6 finalReview 独立校验和 schema 均拒绝文件排除", async (t) => {
+test("v7 finalReview 独立校验和 schema 均拒绝文件排除", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
@@ -852,7 +965,7 @@ test("boundCommit 是必填的规范 commit，且其 tree 必须等于 targetTre
   await expectFailure(["--mode", "dispatch", "--input", file], /boundCommit tree does not match targetTree/);
 });
 
-test("v5 工件与旧 incremental 字段明确拒绝，v6 工件通过", async (t) => {
+test("v6 工件与旧 incremental 字段明确拒绝，v7 工件通过", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
@@ -862,11 +975,11 @@ test("v5 工件与旧 incremental 字段明确拒绝，v6 工件通过", async (
   const current = await runJson(["--mode", "dispatch", "--input", file]);
   assert.equal(current.ok, true);
 
-  dispatch.schemaVersion = 5;
+  dispatch.schemaVersion = 6;
   writeJson(file, dispatch);
   await expectFailure(["--mode", "dispatch", "--input", file], /schemaVersion must match rules-review protocol/);
 
-  dispatch.schemaVersion = 6;
+  dispatch.schemaVersion = 7;
   dispatch.continuation = { baseRunId: "old-run" };
   dispatch.fullReason = "legacy";
   dispatch.inputSource = { mode: "worktree" };
@@ -882,18 +995,18 @@ test("v5 工件与旧 incremental 字段明确拒绝，v6 工件通过", async (
     "final-review.schema.json",
   ]) {
     const schema = readJson(path.join(repoRoot, "skills/rules-review/schemas", schemaFile));
-    assert.equal(schema.properties.schemaVersion.const, 6, schemaFile);
+    assert.equal(schema.properties.schemaVersion.const, 7, schemaFile);
   }
 });
 
 test("retry-task 只升级 schemaVersion，不增加规则来源或快照字段", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const file = path.join(root, ".rules-review-tmp", "retry-v6.json");
+  const file = path.join(root, ".rules-review-tmp", "retry-v7.json");
   const retryTask = {
     kind: "rules-review-retry-task",
-    schemaVersion: 6,
-    runId: "retry-v6",
+    schemaVersion: 7,
+    runId: "retry-v7",
     retryAttempt: 1,
     reason: "修正格式错误",
     originalTaskRef: "tasks/B001.json",
@@ -920,7 +1033,7 @@ test("retry-task 只升级 schemaVersion，不增加规则来源或快照字段"
   assert.equal("ruleInputSource" in schema.properties, false);
   assert.equal("ruleSnapshot" in schema.properties, false);
 
-  retryTask.schemaVersion = 5;
+  retryTask.schemaVersion = 6;
   writeJson(file, retryTask);
   await expectFailure(["--mode", "retry-task", "--input", file], /schemaVersion must match rules-review protocol/);
 });
@@ -953,6 +1066,9 @@ test("文档声明 commit-only、每 TARGET fresh run 与临时生命周期", ()
   assert.match(skill, /不继承旧结果/);
   assert.match(skill, /不承诺跨会话、跨环境、跨天或长期恢复/);
   assert.match(skill, /git diff <baseTree> <targetTree>/);
+  assert.match(skill, /不能在发现首个问题后停止/);
+  assert.match(skill, /同一显式 `rootCause`/);
+  assert.match(skill, /不得降级到 `otherConcerns`/);
   assert.match(reviewer, /git show <targetTree>:<path>/);
   assert.doesNotMatch(skill, /--current|--staged|--target-tree|bind-commit/);
   assert.doesNotMatch(skill, /baseRunId|effectiveResults|fullReason/);

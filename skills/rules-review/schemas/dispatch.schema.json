@@ -7,7 +7,7 @@
   "required": ["kind", "schemaVersion", "runId", "reviewRange", "ruleInputSource", "ruleSnapshot", "inputSnapshot", "ruleSet", "targets", "applicabilityMatrix", "reviewItems", "executionPlan", "reviewBatches"],
   "properties": {
     "kind": { "const": "rules-review-dispatch" },
-    "schemaVersion": { "const": 6 },
+    "schemaVersion": { "const": 7 },
     "runId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "reviewRange": {
       "type": "object",

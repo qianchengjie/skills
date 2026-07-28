@@ -1,6 +1,6 @@
 # rules-review reviewer 契约
 
-仅在 controller 已生成并校验 v6 task 后使用。每个 reviewer 只处理一个 `reviewBatchId`。
+仅在 controller 已生成并校验 v7 task 后使用。每个 reviewer 只处理一个 `reviewBatchId`。
 
 ## 分派
 
@@ -18,7 +18,7 @@ git diff <baseTree> <targetTree>
 git show <targetTree>:<path>
 ```
 
-必须逐项处理 task 中的全部 reviewItems。规则只读取 task 的 `ruleSnapshot`，即使 `ruleInputSource.kind = workspace` 也不得回读当前同名规则文件。不得读取当前同名代码文件、真实 index 或其它 TARGET 的 run 来替代封印 blob。Git object 缺失、tree identity 不一致或任务内容不足时返回 `cannot_verify`，并通知 controller 将 run 置为 blocked；不得猜测内容。
+必须逐项处理 task 中的全部 reviewItems，发现一个问题后也继续检查剩余项。语义相连的 targets 仍分别返回 result。规则只读取 task 的 `ruleSnapshot`，即使 `ruleInputSource.kind = workspace` 也不得回读当前同名规则文件。不得读取当前同名代码文件、真实 index 或其它 TARGET 的 run 来替代封印 blob。Git object 缺失、tree identity 不一致或任务内容不足时返回 `cannot_verify`，并通知 controller 将 run 置为 blocked；不得猜测内容。
 
 ## 输出
 
@@ -27,9 +27,10 @@ git show <targetTree>:<path>
 - `runId`、`reviewBatchId` 与 task 一致，`targetTree` 等于 task 的 `reviewRange.targetTree`，`taskHash` 原样回显 task 的机械身份。
 - 每个 task reviewItem 恰好返回一个 result。
 - `passed` 包含 evidence 与 failureChecks。
-- `finding` 包含 origin 与 evidence，不含 findingId。
+- `finding` 包含 origin、evidence 与非空 `rootCause`，不含 findingId。
 - `observation` 包含 origin，以及 reason 或 evidence。
 - required reviewItem 不返回 `not_applicable`；无法判断时返回 `cannot_verify`。
-- 规则外事项不得放进 result。仅当审查中自然注意到且值得提醒时，可在 shard 顶层写 `otherConcerns: string[]`；不要求 evidence，不为此额外阅读、测试或重试，没有则省略。字段中的非字符串、空字符串和重复项由 aggregator 忽略。
+- 多个 finding results 属于同一根因时，分别保留 result，并填写字节完全相同的 `rootCause`；aggregator 会合并展示并保留各自 evidence。不同根因不得复用同一文本。
+- 规则外事项不得放进 result。仅当审查中自然注意到且值得提醒时，可在 shard 顶层写 `otherConcerns: string[]`；不要求 evidence，不为此额外阅读、测试或重试，没有则省略。明确违反 task 规则的事项不得放入 `otherConcerns`。字段中的非字符串、空字符串和重复项由 aggregator 忽略。
 
 完成后 controller 先运行 shard validator，再聚合当前 run。格式错误或结果缺项不能由 controller 代写修补，只能要求原 reviewer 返还合规 shard。

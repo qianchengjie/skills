@@ -20,7 +20,7 @@ const MODES = new Set([
   'run',
 ]);
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 const RETURN_STATUSES = ['not_started', 'started', 'returned', 'not_returned', 'format_invalid', 'untrusted'];
 const AGGREGATE_STATUSES = ['aggregated', 'not_aggregated'];
 const RESULT_STATUSES = ['passed', 'finding', 'observation', 'not_applicable', 'cannot_verify'];
@@ -266,7 +266,7 @@ function sealDispatchMode(args, result) {
   const draft = readJson(args.input, args.input, result, 'D001');
   if (!draft) return;
   if (draft.schemaVersion !== SCHEMA_VERSION) {
-    addViolation(result, 'SD001', args.input, '/schemaVersion', 'seal-dispatch only accepts schemaVersion 6 rules-review drafts', SCHEMA_VERSION, draft.schemaVersion, 2);
+    addViolation(result, 'SD001', args.input, '/schemaVersion', 'seal-dispatch only accepts schemaVersion 7 rules-review drafts', SCHEMA_VERSION, draft.schemaVersion, 2);
     return;
   }
 
@@ -1530,6 +1530,9 @@ function validateReviewResult(reviewResult, artifact, result, pointer, prefix, t
   }
 
   if (reviewResult && reviewResult.status === 'finding') {
+    if (!isNonEmptyString(reviewResult.rootCause)) {
+      addViolation(result, `${prefix}013`, artifact, `${pointer}/rootCause`, 'finding result requires an explicit rootCause', 'non-empty rootCause', reviewResult.rootCause);
+    }
     validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}014`, `${pointer}/evidence`, 'finding result requires evidence');
     validateReviewResultDisposition(reviewResult, taskContext, artifact, result, pointer, prefix);
   }
@@ -2073,11 +2076,11 @@ function deriveSemanticVerdict(results, protocolGate) {
 }
 
 function deriveIssueSummary(results, dispatch) {
-  const findings = asArray(results).filter((reviewResult) => reviewResult && reviewResult.status === 'finding');
+  const findings = deriveFindingItems(results, dispatch);
   return {
     findings: findings.length,
-    mustFix: findings.filter((reviewResult) => deriveFindingPriority(reviewResult, dispatch) === 'must_fix').length,
-    shouldFix: findings.filter((reviewResult) => deriveFindingPriority(reviewResult, dispatch) === 'should_fix').length,
+    mustFix: findings.filter((finding) => finding.priority === 'must_fix').length,
+    shouldFix: findings.filter((finding) => finding.priority === 'should_fix').length,
     cannotVerify: asArray(results).filter((reviewResult) => reviewResult && reviewResult.status === 'cannot_verify').length,
     observations: asArray(results).filter((reviewResult) => reviewResult && reviewResult.status === 'observation').length,
   };
@@ -2129,12 +2132,13 @@ function ruleLevelForDispatchResult(reviewResult, dispatch) {
 function deriveFindingItems(results, dispatch) {
   const reviewItems = new Map(asArray(dispatch && dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
   const ruleSources = new Map(asArray(dispatch && dispatch.ruleSet && dispatch.ruleSet.ruleSources).map((source) => [source.ruleRef, source]));
-  const findings = asArray(results)
+  const occurrences = asArray(results)
     .filter((reviewResult) => reviewResult && reviewResult.status === 'finding')
     .map((reviewResult) => {
       const item = reviewItems.get(reviewResult.reviewItemId) || {};
       const source = ruleSources.get(item.ruleRef) || {};
-      const finding = {
+      const occurrence = {
+        rootCause: reviewResult.rootCause,
         reviewItemId: reviewResult.reviewItemId,
         ruleRef: item.ruleRef || 'unknown',
         targetId: item.targetId || 'unknown',
@@ -2143,25 +2147,37 @@ function deriveFindingItems(results, dispatch) {
         priority: deriveFindingPriority(reviewResult, dispatch),
         evidence: reviewResult.evidence,
       };
-      copyOptionalFields(reviewResult, finding, ['priorityReason', 'upgradeReason', 'originReason']);
-      return finding;
+      copyOptionalFields(reviewResult, occurrence, ['priorityReason', 'upgradeReason', 'originReason']);
+      return occurrence;
     })
     .sort((left, right) => {
       const leftId = numericId(left.reviewItemId, REVIEW_ITEM_RE);
       const rightId = numericId(right.reviewItemId, REVIEW_ITEM_RE);
       return leftId < rightId ? -1 : leftId > rightId ? 1 : compareStrings(left.reviewItemId, right.reviewItemId);
-    })
-    .map((finding, index) => ({ findingId: `F${String(index + 1).padStart(3, '0')}`, ...finding }));
+    });
+  const groups = new Map();
+  occurrences.forEach((occurrence) => {
+    const key = isNonEmptyString(occurrence.rootCause) ? occurrence.rootCause : `\0${occurrence.reviewItemId}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(occurrence);
+  });
+  const findings = Array.from(groups.values()).map((group, index) => ({
+    findingId: `F${String(index + 1).padStart(3, '0')}`,
+    rootCause: group[0].rootCause,
+    priority: group.some((occurrence) => occurrence.priority === 'must_fix') ? 'must_fix' : 'should_fix',
+    evidenceGroups: group.map((occurrence) => {
+      const evidenceGroup = { ...occurrence };
+      delete evidenceGroup.rootCause;
+      return evidenceGroup;
+    }),
+  }));
   return findings.sort(compareFindingItems);
 }
 
 function compareFindingItems(left, right) {
   return (FINDING_PRIORITIES.indexOf(left.priority) - FINDING_PRIORITIES.indexOf(right.priority))
     || (left.findingId.length - right.findingId.length)
-    || left.findingId.localeCompare(right.findingId)
-    || String(left.reviewItemId).localeCompare(String(right.reviewItemId))
-    || String(left.ruleRef).localeCompare(String(right.ruleRef))
-    || String(left.targetId).localeCompare(String(right.targetId));
+    || left.findingId.localeCompare(right.findingId);
 }
 
 function deriveObservationItems(results, dispatch) {
@@ -2400,17 +2416,31 @@ function validateFinalReviewShape(finalReview, artifact, result) {
   if (finalReview.cannotVerifyItems !== undefined) validateCannotVerifyItems(finalReview.cannotVerifyItems, artifact, result);
   if (finalReview.otherConcerns !== undefined) validateStringSet(finalReview.otherConcerns, artifact, result, 'FR082', '/otherConcerns');
   asArray(finalReview.findings).forEach((finding, index) => {
-    requireFields(finding, artifact, result, 'FR012', `/findings/${index}`, ['findingId', 'reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin', 'priority', 'evidence']);
+    const pointer = `/findings/${index}`;
+    requireFields(finding, artifact, result, 'FR012', pointer, ['findingId', 'rootCause', 'priority', 'evidenceGroups']);
     if (!FINDING_RE.test(finding && finding.findingId)) addViolation(result, 'FR074', artifact, `/findings/${index}/findingId`, 'final findingId must match F followed by at least three digits', 'Fxxx...', finding && finding.findingId);
-    if (!REVIEW_ITEM_RE.test(finding && finding.reviewItemId)) addViolation(result, 'FR076', artifact, `/findings/${index}/reviewItemId`, 'final finding reviewItemId must match RI followed by at least three digits', 'RIxxx...', finding && finding.reviewItemId);
-    if (!TARGET_RE.test((finding && finding.targetId) || '')) addViolation(result, 'FR077', artifact, `/findings/${index}/targetId`, 'final finding targetId must match T followed by at least three digits', 'Txxx...', finding && finding.targetId);
-    if (!RULE_LEVELS.includes(finding && finding.ruleLevel)) addViolation(result, 'FR059', artifact, `/findings/${index}/ruleLevel`, 'final finding ruleLevel must be valid', RULE_LEVELS, finding && finding.ruleLevel);
-    if (!FINDING_ORIGINS.includes(finding && finding.origin)) addViolation(result, 'FR060', artifact, `/findings/${index}/origin`, 'final finding origin must be valid', FINDING_ORIGINS, finding && finding.origin);
+    if (!isNonEmptyString(finding && finding.rootCause)) addViolation(result, 'FR085', artifact, `${pointer}/rootCause`, 'final finding rootCause must be non-empty string', 'non-empty rootCause', finding && finding.rootCause);
     if (!FINDING_PRIORITIES.includes(finding && finding.priority)) addViolation(result, 'FR061', artifact, `/findings/${index}/priority`, 'final finding priority must be valid', FINDING_PRIORITIES, finding && finding.priority);
     if (finding && Object.prototype.hasOwnProperty.call(finding, 'acceptedRisk')) {
       addViolation(result, 'FR062', artifact, `/findings/${index}/acceptedRisk`, 'finalReview finding must not contain acceptedRisk', 'field absent', finding.acceptedRisk);
     }
-    validateEvidenceArray(finding && finding.evidence, artifact, result, 'FR013', `/findings/${index}/evidence`, 'final finding requires evidence');
+    if (!Array.isArray(finding && finding.evidenceGroups) || finding.evidenceGroups.length === 0) {
+      addViolation(result, 'FR013', artifact, `${pointer}/evidenceGroups`, 'final finding requires non-empty evidenceGroups', 'non-empty evidenceGroups[]', finding && finding.evidenceGroups);
+    }
+    asArray(finding && finding.evidenceGroups).forEach((evidenceGroup, groupIndex) => {
+      const groupPointer = `${pointer}/evidenceGroups/${groupIndex}`;
+      requireFields(evidenceGroup, artifact, result, 'FR086', groupPointer, ['reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin', 'priority', 'evidence']);
+      if (!REVIEW_ITEM_RE.test(evidenceGroup && evidenceGroup.reviewItemId)) addViolation(result, 'FR076', artifact, `${groupPointer}/reviewItemId`, 'finding evidenceGroup reviewItemId must match RI followed by at least three digits', 'RIxxx...', evidenceGroup && evidenceGroup.reviewItemId);
+      if (!isNonEmptyString(evidenceGroup && evidenceGroup.ruleRef)) addViolation(result, 'FR087', artifact, `${groupPointer}/ruleRef`, 'finding evidenceGroup ruleRef must be non-empty string', 'string', evidenceGroup && evidenceGroup.ruleRef);
+      if (!TARGET_RE.test((evidenceGroup && evidenceGroup.targetId) || '')) addViolation(result, 'FR077', artifact, `${groupPointer}/targetId`, 'finding evidenceGroup targetId must match T followed by at least three digits', 'Txxx...', evidenceGroup && evidenceGroup.targetId);
+      if (!RULE_LEVELS.includes(evidenceGroup && evidenceGroup.ruleLevel)) addViolation(result, 'FR059', artifact, `${groupPointer}/ruleLevel`, 'finding evidenceGroup ruleLevel must be valid', RULE_LEVELS, evidenceGroup && evidenceGroup.ruleLevel);
+      if (!FINDING_ORIGINS.includes(evidenceGroup && evidenceGroup.origin)) addViolation(result, 'FR060', artifact, `${groupPointer}/origin`, 'finding evidenceGroup origin must be valid', FINDING_ORIGINS, evidenceGroup && evidenceGroup.origin);
+      if (!FINDING_PRIORITIES.includes(evidenceGroup && evidenceGroup.priority)) addViolation(result, 'FR088', artifact, `${groupPointer}/priority`, 'finding evidenceGroup priority must be valid', FINDING_PRIORITIES, evidenceGroup && evidenceGroup.priority);
+      if (evidenceGroup && Object.prototype.hasOwnProperty.call(evidenceGroup, 'acceptedRisk')) {
+        addViolation(result, 'FR089', artifact, `${groupPointer}/acceptedRisk`, 'finding evidenceGroup must not contain acceptedRisk', 'field absent', evidenceGroup.acceptedRisk);
+      }
+      validateEvidenceArray(evidenceGroup && evidenceGroup.evidence, artifact, result, 'FR090', `${groupPointer}/evidence`, 'finding evidenceGroup requires evidence');
+    });
   });
   asArray(finalReview.observations).forEach((observation, index) => {
     requireFields(observation, artifact, result, 'FR063', `/observations/${index}`, ['reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin']);
@@ -2709,8 +2739,11 @@ function appendFindingLines(lines, findings) {
     if (items.length === 0) return;
     lines.push(`### ${title}`);
     items.forEach((finding) => {
-      const reason = finding.priorityReason ? `；原因：${finding.priorityReason}` : '';
-      lines.push(`- ${finding.findingId} | ${finding.reviewItemId} | ${finding.ruleRef} | ${finding.ruleLevel} | ${label(finding.origin)} | ${finding.targetId}：${formatEvidence(finding.evidence)}${reason}`);
+      lines.push(`- ${finding.findingId}：${finding.rootCause}`);
+      asArray(finding.evidenceGroups).forEach((evidenceGroup) => {
+        const reason = evidenceGroup.priorityReason ? `；原因：${evidenceGroup.priorityReason}` : '';
+        lines.push(`  - ${evidenceGroup.reviewItemId} | ${evidenceGroup.ruleRef} | ${evidenceGroup.ruleLevel} | ${label(evidenceGroup.origin)} | ${evidenceGroup.targetId}：${formatEvidence(evidenceGroup.evidence)}${reason}`);
+      });
     });
   });
 }
@@ -2725,9 +2758,11 @@ function appendResponseFindingLines(lines, findings) {
     if (items.length === 0) return;
     lines.push(`### ${title}`);
     items.forEach((finding) => {
-      const reason = finding.priorityReason ? `；原因：${finding.priorityReason}` : '';
-      lines.push(`- ${finding.findingId}：${formatEvidence(finding.evidence)}${reason}`);
-      lines.push(`  规则：${finding.ruleRef || '未知'}；目标：${finding.targetId || '未知'}；来源：${label(finding.origin)}`);
+      lines.push(`- ${finding.findingId}：${finding.rootCause}`);
+      asArray(finding.evidenceGroups).forEach((evidenceGroup) => {
+        const reason = evidenceGroup.priorityReason ? `；原因：${evidenceGroup.priorityReason}` : '';
+        lines.push(`  - 规则：${evidenceGroup.ruleRef || '未知'}；目标：${evidenceGroup.targetId || '未知'}；来源：${label(evidenceGroup.origin)}；证据：${formatEvidence(evidenceGroup.evidence)}${reason}`);
+      });
     });
   });
 }
@@ -2923,7 +2958,16 @@ function unorderedItemsEqual(left, right, equal) {
 }
 
 function findingItemEqual(left, right) {
-  const fields = ['findingId', 'reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin', 'priority', 'priorityReason', 'upgradeReason', 'originReason'];
+  const fields = ['findingId', 'rootCause', 'priority'];
+  return fields.every((field) => optionalField(left, field) === optionalField(right, field))
+    && Array.isArray(left && left.evidenceGroups)
+    && Array.isArray(right && right.evidenceGroups)
+    && left.evidenceGroups.length === right.evidenceGroups.length
+    && left.evidenceGroups.every((evidenceGroup, index) => findingEvidenceGroupEqual(evidenceGroup, right.evidenceGroups[index]));
+}
+
+function findingEvidenceGroupEqual(left, right) {
+  const fields = ['reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin', 'priority', 'priorityReason', 'upgradeReason', 'originReason'];
   return fields.every((field) => optionalField(left, field) === optionalField(right, field))
     && evidenceArraysEqual(left && left.evidence, right && right.evidence);
 }

@@ -44,7 +44,7 @@ test('subagent 文档使用当前共享工作区契约', async () => {
   assert.match(reviewer, /同一输入 fresh 重派一次/);
   assert.match(reviewer, /仍失败则写 `AI Review：blocked/);
   assert.match(reviewer, /每个已提交 TARGET 都复制累计 `baseCommit → headCommit`/);
-  assert.match(reviewer, /为当前 TARGET 创建全新 rules-review v6 run/);
+  assert.match(reviewer, /为当前 TARGET 创建全新 rules-review v7 run/);
   assert.match(reviewer, /完整审查本 TARGET 的全部当前 reviewItems/);
   assert.match(reviewer, /不引用旧 run，不继承旧 result/);
   assert.match(reviewer, /rulesReviewReport: <非 ready_for_merge 时为/);
@@ -1158,7 +1158,7 @@ function initGitRepo() {
   execFileSync('git', ['config', 'user.name', 'Test User']);
 }
 
-async function materializeRulesReviewV6RunFixture({
+async function materializeRulesReviewV7RunFixture({
   hasCodeChange = true,
   runId = 'run-pass-full-clean',
 } = {}) {
@@ -1195,7 +1195,7 @@ async function materializeRulesReviewV6RunFixture({
   const inputRefs = hasCodeChange ? ['src/example.ts'] : [];
   const dispatch = {
     kind: 'rules-review-dispatch',
-    schemaVersion: 6,
+    schemaVersion: 7,
     runId,
     reviewRange: { excludedFiles: [] },
     ruleSnapshot: { files: [] },
@@ -1291,7 +1291,7 @@ async function materializeRulesReviewV6RunFixture({
     await fs.mkdir(path.dirname(shardPath), { recursive: true });
     const shard = {
     kind: 'rules-review-shard',
-    schemaVersion: 6,
+    schemaVersion: 7,
     runId,
     targetTree: sealedDispatch.reviewRange.targetTree,
     taskHash: task.taskHash,
@@ -1335,7 +1335,7 @@ async function prepareRulesReviewRunFixture({
     selectedRuleRefs,
     baseCommit,
     targetCommit,
-  } = await materializeRulesReviewV6RunFixture({ hasCodeChange, runId });
+  } = await materializeRulesReviewV7RunFixture({ hasCodeChange, runId });
 
   if (shouldFix || mustFix || cannotVerify) {
     const shardPath = path.join(runDir, 'shards/B001.json');
@@ -1351,6 +1351,7 @@ async function prepareRulesReviewRunFixture({
       : {
         reviewItemId,
         status: 'finding',
+        rootCause: mustFix ? 'CORE-001 约束未成为共同门禁。' : 'TYPE-001 约束未在当前路径生效。',
         origin: 'introduced_by_change',
         evidence: [{
           loc: mustFix ? 'src/example.ts:10' : 'src/example.ts:12',
@@ -1362,6 +1363,7 @@ async function prepareRulesReviewRunFixture({
       shard.results[2] = {
         reviewItemId: 'RI003',
         status: 'finding',
+        rootCause: 'UI-001 约束未在当前路径生效。',
         origin: 'introduced_by_change',
         evidence: [{
           loc: 'src/example.ts:14',
@@ -1436,7 +1438,7 @@ async function prepareNonPassingRulesReviewRunFixture(recommendation) {
     selectedRuleRefs,
     baseCommit,
     targetCommit,
-  } = await materializeRulesReviewV6RunFixture();
+  } = await materializeRulesReviewV7RunFixture();
   const currentDispatch = JSON.parse(await fs.readFile(path.join(runDir, 'dispatch.json'), 'utf8'));
   const blocked = recommendation === 'review_blocked';
   currentDispatch.reviewBatches[0].returnStatus = blocked ? 'format_invalid' : 'not_returned';
@@ -4782,7 +4784,7 @@ test('CLI rule-review-package writes rules-only package when project rule review
     assert.match(reviewPackage, /recommendation: <ready_for_merge/);
     assert.match(reviewPackage, /shouldFix: <integer>/);
     assert.match(reviewPackage, /cannotVerify: <integer>/);
-    assert.match(reviewPackage, /每个新的 TARGET 都创建独立 rules-review v6 run/);
+    assert.match(reviewPackage, /每个新的 TARGET 都创建独立 rules-review v7 run/);
     assert.match(reviewPackage, /不得传文件排除或 `--rules-commit`/);
     assert.match(reviewPackage, /package 不携带旧 runId/);
     assert.match(reviewPackage, /### D1：示例分叉/);
@@ -5628,7 +5630,7 @@ test('CLI close-check blocks required project rule review when boundCommit is mi
   });
 });
 
-test('rules-review v6 的空 TARGET 使用 no_batch 且不伪造 result', async () => {
+test('rules-review v7 的空 TARGET 使用 no_batch 且不伪造 result', async () => {
   await withTempRepo(async () => {
     const rulesReview = await prepareRulesReviewRunFixture({ hasCodeChange: false });
     const dispatch = JSON.parse(await fs.readFile(path.join(rulesReview.runDir, 'dispatch.json'), 'utf8'));

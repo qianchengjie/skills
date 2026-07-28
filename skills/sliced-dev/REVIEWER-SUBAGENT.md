@@ -131,7 +131,7 @@ repair 的结果表：
 当前切片：<S-id>
 Rule review package：<dev-plans/.../review-packages/<S-id>-rules.md>
 
-- 为当前 TARGET 创建全新 rules-review v6 run。
+- 为当前 TARGET 创建全新 rules-review v7 run。
 - 完整审查本 TARGET 的全部当前 reviewItems。
 - 不引用旧 run，不继承旧 result，不扫描目录猜“最新” run。
 - rules-review 使用 package 给出的 `--base <baseCommit> --target-commit <headCommit>` 和 `excludedFiles: []`，不从当前文件或 index 重建代码输入，也不传文件排除或 `--rules-commit`；规则使用封印时的当前工作区。

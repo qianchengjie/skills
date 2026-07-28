@@ -6,7 +6,7 @@
   "required": ["kind", "schemaVersion", "runId", "reviewBatchId", "targetTree", "taskHash", "results"],
   "properties": {
     "kind": { "const": "rules-review-shard" },
-    "schemaVersion": { "const": 6 },
+    "schemaVersion": { "const": 7 },
     "runId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "reviewBatchId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "targetTree": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
@@ -22,6 +22,7 @@
         "reviewItemId": { "type": "string", "pattern": "^RI\\d{3,}$" },
         "status": { "enum": ["passed", "finding", "observation", "not_applicable", "cannot_verify"] },
         "findingId": false,
+        "rootCause": { "type": "string", "minLength": 1 },
         "origin": { "enum": ["introduced_by_change", "worsened_by_change", "exposed_by_change", "pre_existing"] },
         "priority": { "enum": ["must_fix", "should_fix"] },
         "priorityReason": { "type": "string", "minLength": 1 },
@@ -31,7 +32,16 @@
         "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
         "failureChecks": { "type": "array", "items": { "$ref": "#/$defs/failureCheck" } },
         "reason": { "type": "string" }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["status"],
+            "properties": { "status": { "const": "finding" } }
+          },
+          "then": { "required": ["rootCause"] }
+        }
+      ]
     },
     "failureCheck": {
       "type": "object",

@@ -89,7 +89,7 @@ repair 只审直接上一轮全部 open finding 和 `previousHeadCommit → head
 
 ## 项目规则审查 A*
 
-每个 TARGET 使用全新 rules-review v6 run。A* 只投影当前 run 的 fixed summary，不保存旧 run 继承关系：
+每个 TARGET 使用全新 rules-review v7 run。A* 只投影当前 run 的 fixed summary，不保存旧 run 继承关系：
 
 ```markdown
 ### A29：S2 当前项目规则审查结论

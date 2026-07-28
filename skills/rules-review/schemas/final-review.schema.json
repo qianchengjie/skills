@@ -7,7 +7,7 @@
   "required": ["kind", "schemaVersion", "runId", "protocolGate", "scopeMode", "coverageClaim", "semanticVerdict", "excludedFiles", "excludedRuleRefs", "findings", "observations", "issueSummary", "recommendation", "validationResults"],
   "properties": {
     "kind": { "const": "rules-review-final-review" },
-    "schemaVersion": { "const": 6 },
+    "schemaVersion": { "const": 7 },
     "runId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "protocolGate": { "enum": ["passed", "incomplete", "blocked"] },
     "scopeMode": { "enum": ["full", "scoped"] },
@@ -65,9 +65,23 @@
     },
     "finding": {
       "type": "object",
-      "required": ["findingId", "reviewItemId", "ruleRef", "targetId", "ruleLevel", "origin", "priority", "evidence"],
+      "required": ["findingId", "rootCause", "priority", "evidenceGroups"],
       "properties": {
         "findingId": { "type": "string", "pattern": "^F\\d{3,}$" },
+        "rootCause": { "type": "string", "minLength": 1 },
+        "priority": { "enum": ["must_fix", "should_fix"] },
+        "acceptedRisk": false,
+        "evidenceGroups": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/findingEvidenceGroup" }
+        }
+      }
+    },
+    "findingEvidenceGroup": {
+      "type": "object",
+      "required": ["reviewItemId", "ruleRef", "targetId", "ruleLevel", "origin", "priority", "evidence"],
+      "properties": {
         "reviewItemId": { "type": "string", "pattern": "^RI\\d{3,}$" },
         "ruleRef": { "type": "string", "minLength": 1 },
         "targetId": { "type": "string", "pattern": "^T\\d{3,}$" },

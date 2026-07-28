@@ -231,7 +231,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs rule-review-package dev-plans/Y
 
 规则包复制当前 Review Range、累计文件快照和 `baseCommit..headCommit` diff。即使 General Review 当前是 repair，规则包也不缩成 fix diff。
 
-每个新的 TARGET 都创建独立 rules-review v6 run，完整审查当前全部 reviewItems；不得携带 `baseRunId`、continuation、旧 result 或旧 package 协议。sliced-dev 始终传 `--base <baseCommit> --target-commit <headCommit>` 并保持 `excludedFiles: []`，不传 `--rules-commit`；代码 commit 输入和 snapshot 必须来自规则包，不从当前文件或 index 重建，规则使用封印时的当前工作区。
+每个新的 TARGET 都创建独立 rules-review v7 run，完整审查当前全部 reviewItems；不得携带 `baseRunId`、continuation、旧 result 或旧 package 协议。sliced-dev 始终传 `--base <baseCommit> --target-commit <headCommit>` 并保持 `excludedFiles: []`，不传 `--rules-commit`；代码 commit 输入和 snapshot 必须来自规则包，不从当前文件或 index 重建，规则使用封印时的当前工作区。
 
 fixed summary 投影当前新 run 的 `rulesReviewRunId`、recommendation、三个 issueSummary 计数和条件性 `shouldSetHash`。`--target-commit` 在封印时直接固定 `targetTree = headCommit^{tree}`、`boundCommit = headCommit` 和 `excludedFiles = []`，无需后置绑定。
 
@@ -344,7 +344,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/YYYY-MM-D
 - 每个 `done` slice 必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确；最终 claim 状态必须是 `verified` 或 `waived`，不会从 task report 推断完成。
 - 每个 `done` 且 `AI Review：passed` 的 slice 必须存在非空 task brief、结论为 `ready-for-review` 的非空 task report、非空 review-package；JSON report 必须 schema valid；review-package 必须包含 Task Brief、Task Report、Claims、Git Diff 统计、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID；Git Diff 统计必须使用 `text` fence，Git Diff 必须使用 `diff` fence，允许无当前 dirty diff。
 - `AI Review：passed` 的前三个 verdict 必须来自当前最终 `full` A*；当前 A* 为 `repair`、仍有 openFindings、发生 repair 后缺少最终累计 full，或 package/A*/range hash 与 commit identity 不一致时阻塞。Review Range v2 的提交父子关系和文件集合必须闭合。
-- `项目规则审查：required` 时必须选择当前 TARGET 的全新 v6 run。`close-check` 重跑受信任 validator，核对 runId、selectedRuleRefs、recommendation、计数、条件性 hash、完整 commit range、累计 input snapshot、文件 hash/mode、`excludedFiles = []` 和 `boundCommit = headCommit`；不接受 continuation、baseRunId 或旧 package。默认 SHOULD 接受和零已知缺陷规则保持原有 A/D 绑定约束。
+- `项目规则审查：required` 时必须选择当前 TARGET 的全新 v7 run。`close-check` 重跑受信任 validator，核对 runId、selectedRuleRefs、recommendation、计数、条件性 hash、完整 commit range、累计 input snapshot、文件 hash/mode、`excludedFiles = []` 和 `boundCommit = headCommit`；不接受 continuation、baseRunId 或旧 package。默认 SHOULD 接受和零已知缺陷规则保持原有 A/D 绑定约束。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。
 - 启用 `零已知缺陷收口` 时，所有执行型切片都必须完成 AI Review，A 类也不能使用 `AI Review：skipped`。
 - `整任务审查：passed` 或 `整任务审查：blocked` 时，`review-packages/whole-task.md` 必须存在、非空，且包含 `whole-review-package` 生成器承诺的顶层章节，包括 Reviewer Instructions、计划头、全局约束、切片概览、切片交接、Claims 概览、D/A 摘要与全文、切片 AI Review、Task Reports、变更文件、Git Diff 和整任务审查结论模板；`整任务审查：package-generated` 和 `整任务审查：blocked` 都阻塞 `close-check`。

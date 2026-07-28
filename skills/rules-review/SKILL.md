@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # 规范审查
 
-`rules-review` 使用 `schemaVersion = 6`。代码 TARGET 只能是 Git commit；规则输入与代码 TARGET 独立。每个新的 TARGET 都创建全新 run，完整审查该 TARGET 的全部当前 `reviewItems`，不继承旧结果，也不把修复轮当作增量审查。
+`rules-review` 使用 `schemaVersion = 7`。代码 TARGET 只能是 Git commit；规则输入与代码 TARGET 独立。每个新的 TARGET 都创建全新 run，完整审查该 TARGET 的全部当前 `reviewItems`，不继承旧结果，也不把修复轮当作增量审查。
 
 `protocolGate = "passed"` 只表示本轮结构协议闭合，不表示代码无问题。代码结论同时看 `semanticVerdict`、`issueSummary` 和 `recommendation`。
 
@@ -183,24 +183,31 @@ ruleRef x targetId = reviewItem
 - `dispatch.json`：controller 的规则、目标、适用性、固定 range 和分派计划；不得含审查结论。
 - `tasks/*.json`：由 `build-tasks` 从 dispatch 机械投影，携带相同 `reviewRange`、`ruleInputSource`、`inputSnapshot`，以及规则索引和本批规则的 `ruleSnapshot`；`taskHash` 是删除自身字段后整份 task 的 canonical JSON SHA-256。
 - `shards/*.json`：reviewer 对本 batch 的当前结果，必须回显 task 的 `targetTree` 与 `taskHash`；是产生 `passed / finding / observation / not_applicable / cannot_verify` 的唯一位置。可选的 `otherConcerns` 只承载审查过程中自然注意到的规则外事项。
-- `finalReview.json`：由 `aggregate-final` 仅从当前 run 的 shards 聚合。
+- `finalReview.json`：由 `aggregate-final` 仅从当前 run 的 shards 聚合；同一显式 `rootCause` 的 finding results 合并为一个 finding，并逐项保留 `evidenceGroups`。
 - `final.md`、`response.md`：展示层，不是事实源。
 
 不允许从旧 run 复制 result，不允许扫描目录猜测前序 run，不允许在 dispatch 中引用旧 review 工件。
 
 ## 6. reviewer 执行
 
-reviewer 必须按 task 中的全部 reviewItems 返回结果，不能依赖主线程历史补齐规则或目标。审查代码只能使用固定 tree diff/blob；规则正文只以 task 与 `ruleSnapshot` 的封印内容为准，不因 `ruleInputSource = workspace` 回读当前工作区。
+reviewer 必须按 task 中的全部 reviewItems 分别完成审查并返回结果，不能在发现首个问题后停止，也不能依赖主线程历史补齐规则或目标。语义相连的 targets 仍是独立 reviewItems；审查代码只能使用固定 tree diff/blob；规则正文只以 task 与 `ruleSnapshot` 的封印内容为准，不因 `ruleInputSource = workspace` 回读当前工作区。
 
 结果要求：
 
 - `passed`：包含 evidence 与 failureChecks。
-- `finding`：包含 origin、evidence；MUST finding 为 must_fix。
+- `finding`：包含 origin、evidence 和非空 `rootCause`；MUST finding 为 must_fix。
 - `observation`：包含 origin，以及 reason 或 evidence。
 - `not_applicable`：只允许非 required reviewItem，包含 reason。
 - `cannot_verify`：包含 reason 或 evidence。
 
-阅读规则判断所需的业务链路是允许的；顺带发现规则外问题也可能发生，但不得把它写成 finding 或 observation。若值得提醒，只能写入 shard 顶层可选的 `otherConcerns: string[]`：
+多个 reviewItem 分别违反规则但属于同一根因时，每项仍返回 `finding`，并使用字节完全相同的 `rootCause` 描述共同失效的不变量。aggregator 只按这个显式值机械分组，不根据措辞相似度、代码位置或证据内容猜测：
+
+- final finding 的 priority 取组内最高级别，`must_fix` 优先于 `should_fix`。
+- 每个原始 finding result 都保留为独立 `evidenceGroups` 项，不能因合并而丢失 target、ruleRef、origin、priority 或 evidence。
+- 同一 batch 由 reviewer 完成根因对齐；跨 batch 疑似同根因时，controller 只能要求原 reviewer 复核并对齐 `rootCause`，不得自行改写 shard。
+- 根因是否相同是 reviewer 的语义判断；validator 只校验 `rootCause` 已记录、精确分组和结果引用闭合。
+
+阅读规则判断所需的业务链路是允许的；顺带发现规则外问题也可能发生，但不得把它写成 finding 或 observation。若值得提醒，只能写入 shard 顶层可选的 `otherConcerns: string[]`。已违反当前 task 规则的事项必须保留为对应 reviewItem 的正式 result，即使它与其它 result 同根因，也不得降级到 `otherConcerns`：
 
 - 每项是普通文本，不要求 evidence、`ruleRef`、优先级或 finding ID。
 - 不为它额外阅读、测试或重试，也不自动启动普通代码 review；非字符串、空字符串和重复项在聚合时直接忽略。
@@ -256,6 +263,7 @@ validator 明确不检查：
 
 - BASE 选择是否符合业务意图。
 - 候选规则发现、元数据提取、规则投影语义、适用性结论和 finding 是否正确。
+- 多个 finding results 是否确属同一根因，以及 `rootCause` 表述是否准确。
 - evidence 强度或可信度。
 - target、inputRefs 与 hunk 的业务归属。
 - review 是否足够深入。
