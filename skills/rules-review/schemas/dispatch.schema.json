@@ -4,10 +4,10 @@
   "title": "rules-review dispatch",
   "type": "object",
   "additionalProperties": false,
-  "required": ["kind", "schemaVersion", "runId", "reviewRange", "ruleSnapshot", "inputSnapshot", "ruleSet", "targets", "applicabilityMatrix", "reviewItems", "executionPlan", "reviewBatches"],
+  "required": ["kind", "schemaVersion", "runId", "reviewRange", "ruleInputSource", "ruleSnapshot", "inputSnapshot", "ruleSet", "targets", "applicabilityMatrix", "reviewItems", "executionPlan", "reviewBatches"],
   "properties": {
     "kind": { "const": "rules-review-dispatch" },
-    "schemaVersion": { "const": 5 },
+    "schemaVersion": { "const": 6 },
     "runId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "reviewRange": {
       "type": "object",
@@ -26,6 +26,7 @@
         }
       }
     },
+    "ruleInputSource": { "$ref": "#/$defs/ruleInputSource" },
     "ruleSnapshot": {
       "type": "object",
       "additionalProperties": false,
@@ -119,6 +120,27 @@
     }
   ],
   "$defs": {
+    "ruleInputSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "workspace" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "commit"],
+          "properties": {
+            "kind": { "const": "commit" },
+            "commit": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" }
+          }
+        }
+      ]
+    },
     "executionPlan": {
       "type": "object",
       "required": ["mode", "selectedBy", "policyVersion", "metrics", "signals", "reason", "humanOverride"],

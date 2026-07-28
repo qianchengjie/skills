@@ -44,7 +44,7 @@ test('subagent 文档使用当前共享工作区契约', async () => {
   assert.match(reviewer, /同一输入 fresh 重派一次/);
   assert.match(reviewer, /仍失败则写 `AI Review：blocked/);
   assert.match(reviewer, /每个已提交 TARGET 都复制累计 `baseCommit → headCommit`/);
-  assert.match(reviewer, /为当前 TARGET 创建全新 rules-review v5 run/);
+  assert.match(reviewer, /为当前 TARGET 创建全新 rules-review v6 run/);
   assert.match(reviewer, /完整审查本 TARGET 的全部当前 reviewItems/);
   assert.match(reviewer, /不引用旧 run，不继承旧 result/);
   assert.match(reviewer, /rulesReviewReport: <非 ready_for_merge 时为/);
@@ -1158,7 +1158,7 @@ function initGitRepo() {
   execFileSync('git', ['config', 'user.name', 'Test User']);
 }
 
-async function materializeRulesReviewV5RunFixture({
+async function materializeRulesReviewV6RunFixture({
   hasCodeChange = true,
   runId = 'run-pass-full-clean',
 } = {}) {
@@ -1195,7 +1195,7 @@ async function materializeRulesReviewV5RunFixture({
   const inputRefs = hasCodeChange ? ['src/example.ts'] : [];
   const dispatch = {
     kind: 'rules-review-dispatch',
-    schemaVersion: 5,
+    schemaVersion: 6,
     runId,
     reviewRange: { excludedFiles: [] },
     ruleSnapshot: { files: [] },
@@ -1276,6 +1276,7 @@ async function materializeRulesReviewV5RunFixture({
   ]);
   assert.equal(seal.status, 0, `${seal.stdout}\n${seal.stderr}`);
   const sealedDispatch = JSON.parse(await fs.readFile(dispatchPath, 'utf8'));
+  assert.deepEqual(sealedDispatch.ruleInputSource, { kind: 'workspace' });
   const buildTasks = spawnSync(process.execPath, [
     rulesReviewValidator,
     '--mode', 'build-tasks',
@@ -1290,7 +1291,7 @@ async function materializeRulesReviewV5RunFixture({
     await fs.mkdir(path.dirname(shardPath), { recursive: true });
     const shard = {
     kind: 'rules-review-shard',
-    schemaVersion: 5,
+    schemaVersion: 6,
     runId,
     targetTree: sealedDispatch.reviewRange.targetTree,
     taskHash: task.taskHash,
@@ -1334,7 +1335,7 @@ async function prepareRulesReviewRunFixture({
     selectedRuleRefs,
     baseCommit,
     targetCommit,
-  } = await materializeRulesReviewV5RunFixture({ hasCodeChange, runId });
+  } = await materializeRulesReviewV6RunFixture({ hasCodeChange, runId });
 
   if (shouldFix || mustFix || cannotVerify) {
     const shardPath = path.join(runDir, 'shards/B001.json');
@@ -1435,7 +1436,7 @@ async function prepareNonPassingRulesReviewRunFixture(recommendation) {
     selectedRuleRefs,
     baseCommit,
     targetCommit,
-  } = await materializeRulesReviewV5RunFixture();
+  } = await materializeRulesReviewV6RunFixture();
   const currentDispatch = JSON.parse(await fs.readFile(path.join(runDir, 'dispatch.json'), 'utf8'));
   const blocked = recommendation === 'review_blocked';
   currentDispatch.reviewBatches[0].returnStatus = blocked ? 'format_invalid' : 'not_returned';
@@ -4781,7 +4782,8 @@ test('CLI rule-review-package writes rules-only package when project rule review
     assert.match(reviewPackage, /recommendation: <ready_for_merge/);
     assert.match(reviewPackage, /shouldFix: <integer>/);
     assert.match(reviewPackage, /cannotVerify: <integer>/);
-    assert.match(reviewPackage, /每个新的 TARGET 都创建独立 rules-review v5 run/);
+    assert.match(reviewPackage, /每个新的 TARGET 都创建独立 rules-review v6 run/);
+    assert.match(reviewPackage, /不得传文件排除或 `--rules-commit`/);
     assert.match(reviewPackage, /package 不携带旧 runId/);
     assert.match(reviewPackage, /### D1：示例分叉/);
     assert.doesNotMatch(reviewPackage, /baseRunId|continuation|effectiveResults/);
@@ -4841,6 +4843,9 @@ test('rule-review-package 对 repair 仍提交累计 baseCommit..headCommit', as
     assert.match(rulePackage, new RegExp(`"baseCommit": "${repairedRange.baseCommit}"`));
     assert.match(rulePackage, new RegExp(`"headCommit": "${repairedRange.headCommit}"`));
     assert.match(rulePackage, new RegExp(`--base ${repairedRange.baseCommit} --target-commit ${repairedRange.headCommit}`));
+    const sealCommand = /rules-review 必须使用 `([^`]+)`/.exec(rulePackage)?.[1];
+    assert.equal(sealCommand, `--base ${repairedRange.baseCommit} --target-commit ${repairedRange.headCommit}`);
+    assert.doesNotMatch(sealCommand, /--rules-commit/);
     assert.match(rulePackage, /excludedFiles: \[\]/);
     assert.match(rulePackage, /-export const value = 1;[\s\S]*\+export const value = 3;/);
     assert.doesNotMatch(rulePackage, /baseRunId|continuation|effectiveResults/);
@@ -5623,7 +5628,7 @@ test('CLI close-check blocks required project rule review when boundCommit is mi
   });
 });
 
-test('rules-review v5 的空 TARGET 使用 no_batch 且不伪造 result', async () => {
+test('rules-review v6 的空 TARGET 使用 no_batch 且不伪造 result', async () => {
   await withTempRepo(async () => {
     const rulesReview = await prepareRulesReviewRunFixture({ hasCodeChange: false });
     const dispatch = JSON.parse(await fs.readFile(path.join(rulesReview.runDir, 'dispatch.json'), 'utf8'));

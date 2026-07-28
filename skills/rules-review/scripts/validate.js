@@ -20,7 +20,7 @@ const MODES = new Set([
   'run',
 ]);
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 const RETURN_STATUSES = ['not_started', 'started', 'returned', 'not_returned', 'format_invalid', 'untrusted'];
 const AGGREGATE_STATUSES = ['aggregated', 'not_aggregated'];
 const RESULT_STATUSES = ['passed', 'finding', 'observation', 'not_applicable', 'cannot_verify'];
@@ -266,15 +266,18 @@ function sealDispatchMode(args, result) {
   const draft = readJson(args.input, args.input, result, 'D001');
   if (!draft) return;
   if (draft.schemaVersion !== SCHEMA_VERSION) {
-    addViolation(result, 'SD001', args.input, '/schemaVersion', 'seal-dispatch only accepts schemaVersion 5 rules-review drafts', SCHEMA_VERSION, draft.schemaVersion, 2);
+    addViolation(result, 'SD001', args.input, '/schemaVersion', 'seal-dispatch only accepts schemaVersion 6 rules-review drafts', SCHEMA_VERSION, draft.schemaVersion, 2);
     return;
   }
 
   let sealed;
   try {
-    const { root, dispatchPath } = loadRepository(args.input);
+    const { root } = loadRepository(args.input);
     if (draft.reviewRange && Object.prototype.hasOwnProperty.call(draft.reviewRange, 'targetTree')) {
       throw new Error('sealed dispatch cannot be resealed; create a fresh run for a new TARGET');
+    }
+    if (Object.prototype.hasOwnProperty.call(draft, 'ruleInputSource')) {
+      throw new Error('draft dispatch must not declare ruleInputSource; seal-dispatch derives it from --rules-commit');
     }
     if (!isNonEmptyString(args.base)) throw new Error('seal-dispatch requires --base <revision>');
     const unsupportedSelectors = ['current', 'staged', 'target-tree']
@@ -288,8 +291,21 @@ function sealDispatchMode(args, result) {
     const baseTree = resolveTree(root, `${baseCommit}^{tree}`);
     const boundCommit = resolveCommit(root, args['target-commit']);
     const targetTree = resolveTree(root, `${boundCommit}^{tree}`);
+    let ruleInputSource;
+    let snapshotRule;
+    if (args['rules-commit'] === undefined) {
+      ruleInputSource = { kind: 'workspace' };
+      snapshotRule = (repoPath) => snapshotWorkspaceRuleFile(root, repoPath);
+    } else {
+      if (!isNonEmptyString(args['rules-commit'])) throw new Error('--rules-commit requires a Git revision');
+      const rulesCommit = resolveCommit(root, args['rules-commit']);
+      const rulesTree = resolveTree(root, `${rulesCommit}^{tree}`);
+      ruleInputSource = { kind: 'commit', commit: rulesCommit };
+      snapshotRule = (repoPath) => snapshotRuleFile(root, rulesTree, repoPath);
+    }
 
     sealed = JSON.parse(JSON.stringify(draft));
+    sealed.ruleInputSource = ruleInputSource;
     const excludedFiles = validateSealingExcludedFiles(sealed.reviewRange && sealed.reviewRange.excludedFiles);
     if (excludedFiles.length > 0) throw new Error('commit-only rules-review requires reviewRange.excludedFiles to be exactly []');
     const changedFiles = listTreeChangedFiles(root, baseTree, targetTree);
@@ -316,7 +332,7 @@ function sealDispatchMode(args, result) {
       rulePaths.push(source.sourceFile);
     });
     sealed.ruleSnapshot = {
-      files: [...new Set(rulePaths)].sort(compareStrings).map((repoPath) => snapshotRuleFile(root, targetTree, repoPath)),
+      files: [...new Set(rulePaths)].sort(compareStrings).map(snapshotRule),
     };
     const ruleSnapshotByPath = new Map(sealed.ruleSnapshot.files.map((entry) => [entry.path, entry]));
     sealed.ruleSet.sourceIndexHash = ruleSnapshotByPath.get('.agents/rules/index.md').contentHash;
@@ -324,7 +340,7 @@ function sealDispatchMode(args, result) {
       source.sourceHash = ruleSnapshotByPath.get(source.sourceFile).contentHash;
     });
   } catch (error) {
-    addViolation(result, 'SD002', args.input, null, `seal-dispatch failed closed: ${error.message}`, 'unambiguous Git base and committed TARGET', error.message, 2);
+    addViolation(result, 'SD002', args.input, null, `seal-dispatch failed closed: ${error.message}`, 'unambiguous Git base, committed TARGET, and rule source', error.message, 2);
     return;
   }
 
@@ -518,6 +534,20 @@ function snapshotRuleFile(root, tree, repoPath) {
   return { path: repoPath, content, contentHash: hashBytes(blob.content) };
 }
 
+function snapshotWorkspaceRuleFile(root, repoPath) {
+  assertSafeRepoRelativePath(repoPath);
+  const filePath = path.resolve(root, ...repoPath.split('/'));
+  assertPathInsideRoot(root, filePath, `workspace rule ${repoPath}`);
+  const stat = fs.lstatSync(filePath);
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`workspace rule input must be a regular non-symlink file: ${repoPath}`);
+  const realPath = fs.realpathSync(filePath);
+  assertPathInsideRoot(root, realPath, `workspace rule ${repoPath}`);
+  const bytes = fs.readFileSync(realPath);
+  const content = bytes.toString('utf8');
+  if (!Buffer.from(content, 'utf8').equals(bytes)) throw new Error(`rule snapshot must be valid UTF-8 text: ${repoPath}`);
+  return { path: repoPath, content, contentHash: hashBytes(bytes) };
+}
+
 function validateSealedInputShape(dispatch, reviewItems, artifact, result) {
   validateReviewRangeShape(dispatch.reviewRange, artifact, result);
   const referencedTargetIds = new Set([...reviewItems.values()].map((item) => item && item.targetId).filter(Boolean));
@@ -607,6 +637,27 @@ function validateReviewRangeShape(reviewRange, artifact, result) {
   if (asArray(reviewRange.excludedFiles).length > 0) {
     addViolation(result, 'D245', artifact, '/reviewRange/excludedFiles', 'commit-only rules-review requires the complete commit range', [], reviewRange.excludedFiles);
   }
+}
+
+function validateRuleInputSource(ruleInputSource, artifact, result, code) {
+  if (!isObject(ruleInputSource)) {
+    addViolation(result, code, artifact, '/ruleInputSource', 'ruleInputSource must be an object', 'workspace or commit rule source', ruleInputSource);
+    return;
+  }
+  if (ruleInputSource.kind === 'workspace') {
+    requireFields(ruleInputSource, artifact, result, code, '/ruleInputSource', ['kind']);
+    rejectUnsupportedFields(ruleInputSource, artifact, result, code, '/ruleInputSource', ['kind'], 'workspace ruleInputSource');
+    return;
+  }
+  if (ruleInputSource.kind === 'commit') {
+    requireFields(ruleInputSource, artifact, result, code, '/ruleInputSource', ['kind', 'commit']);
+    rejectUnsupportedFields(ruleInputSource, artifact, result, code, '/ruleInputSource', ['kind', 'commit'], 'commit ruleInputSource');
+    if (!GIT_OID_RE.test(ruleInputSource.commit || '')) {
+      addViolation(result, code, artifact, '/ruleInputSource/commit', 'ruleInputSource commit must be a normalized Git commit ID', '40 or 64 lowercase hex', ruleInputSource.commit);
+    }
+    return;
+  }
+  addViolation(result, code, artifact, '/ruleInputSource/kind', 'ruleInputSource kind must be workspace or commit', ['workspace', 'commit'], ruleInputSource.kind);
 }
 
 function validateRuleSnapshotShape(dispatch, artifact, result) {
@@ -700,13 +751,24 @@ function verifyTreeDispatchInputs(dispatch, currentInputPath, artifact, result) 
       }
     });
 
-    asArray(dispatch.ruleSnapshot && dispatch.ruleSnapshot.files).forEach((entry) => {
-      const actual = snapshotRuleFile(root, targetTree, entry.path);
-      if (canonicalStringify(actual) !== canonicalStringify(entry)) throw new Error(`targetTree rule snapshot mismatch for ${entry.path}`);
-    });
+    verifyRuleSnapshotSource(root, dispatch.ruleInputSource, dispatch.ruleSnapshot && dispatch.ruleSnapshot.files, 'dispatch');
   } catch (error) {
     addViolation(result, 'D240', artifact, null, `Git tree input verification failed closed: ${error.message}`, 'sealed baseTree, targetTree, blobs, and snapshots', error.message, 2);
   }
+}
+
+function verifyRuleSnapshotSource(root, ruleInputSource, files, labelText) {
+  if (ruleInputSource && ruleInputSource.kind === 'workspace') return;
+  if (!ruleInputSource || ruleInputSource.kind !== 'commit') throw new Error(`${labelText} ruleInputSource is invalid`);
+  const rulesCommit = resolveCommit(root, ruleInputSource.commit);
+  if (rulesCommit !== ruleInputSource.commit) throw new Error(`${labelText} ruleInputSource commit must use its normalized commit ID`);
+  const rulesTree = resolveTree(root, `${rulesCommit}^{tree}`);
+  asArray(files).forEach((entry) => {
+    const actual = snapshotRuleFile(root, rulesTree, entry.path);
+    if (canonicalStringify(actual) !== canonicalStringify(entry)) {
+      throw new Error(`${labelText} rules commit snapshot mismatch for ${entry.path}`);
+    }
+  });
 }
 
 function isRuleInputPath(repoPath) {
@@ -720,10 +782,11 @@ function compareStrings(left, right) {
 function validateDispatch(dispatch, artifact, result, currentInputPath = artifact) {
   expectKind(dispatch, artifact, result, 'D002', 'rules-review-dispatch');
   validateDispatchSchemaVersion(dispatch, artifact, result);
-  const requiredFields = ['kind', 'schemaVersion', 'runId', 'reviewRange', 'ruleSnapshot', 'inputSnapshot', 'ruleSet', 'targets', 'applicabilityMatrix', 'reviewItems', 'executionPlan', 'reviewBatches'];
+  const requiredFields = ['kind', 'schemaVersion', 'runId', 'reviewRange', 'ruleInputSource', 'ruleSnapshot', 'inputSnapshot', 'ruleSet', 'targets', 'applicabilityMatrix', 'reviewItems', 'executionPlan', 'reviewBatches'];
   requireFields(dispatch, artifact, result, 'D004', '', requiredFields);
   rejectUnsupportedFields(dispatch, artifact, result, 'D006', '', requiredFields, 'dispatch');
   if (!isSafeToken(dispatch && dispatch.runId)) addViolation(result, 'D005', artifact, '/runId', 'runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', dispatch && dispatch.runId);
+  validateRuleInputSource(dispatch && dispatch.ruleInputSource, artifact, result, 'D246');
 
   const ruleSet = validateRuleSet(dispatch.ruleSet, artifact, result);
   const targets = validateTargets(dispatch.targets, artifact, result);
@@ -1240,7 +1303,7 @@ function validateExecutionModeAgainstPolicy(executionPlan, dispatch, artifact, r
 function validateTask(task, artifact, result, currentInputPath = artifact) {
   expectKind(task, artifact, result, 'T002', 'rules-review-task');
   validateSchemaVersion(task, artifact, result, 'T003');
-  const requiredFields = ['kind', 'schemaVersion', 'runId', 'reviewBatchId', 'taskHash', 'ruleSetId', 'reviewRange', 'ruleSnapshot', 'inputSnapshot', 'reviewItems', 'rules', 'targets', 'applicabilityMatrix', 'outputContract'];
+  const requiredFields = ['kind', 'schemaVersion', 'runId', 'reviewBatchId', 'taskHash', 'ruleSetId', 'reviewRange', 'ruleInputSource', 'ruleSnapshot', 'inputSnapshot', 'reviewItems', 'rules', 'targets', 'applicabilityMatrix', 'outputContract'];
   requireFields(task, artifact, result, 'T004', '', requiredFields);
   rejectUnsupportedFields(task, artifact, result, 'T042', '', requiredFields, 'task');
   if (!isSafeToken(task && task.runId)) addViolation(result, 'T022', artifact, '/runId', 'task runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', task && task.runId);
@@ -1256,6 +1319,7 @@ function validateTask(task, artifact, result, currentInputPath = artifact) {
   if (!Array.isArray(task.targets)) addViolation(result, 'T007', artifact, '/targets', 'targets must be array', 'array', task.targets);
   if (!Array.isArray(task.applicabilityMatrix)) addViolation(result, 'T018', artifact, '/applicabilityMatrix', 'applicabilityMatrix must be array', 'array', task.applicabilityMatrix);
   validateReviewRangeShape(task.reviewRange, artifact, result);
+  validateRuleInputSource(task && task.ruleInputSource, artifact, result, 'T049');
   const ruleIndexSnapshot = asArray(task && task.ruleSnapshot && task.ruleSnapshot.files)
     .find((entry) => entry && entry.path === '.agents/rules/index.md');
   validateRuleSnapshotShape({
@@ -1322,10 +1386,7 @@ function validateTaskTreeInputs(task, currentInputPath, artifact, result) {
       const actual = snapshotTreeInput(root, targetTree, entry.inputRef);
       if (canonicalStringify(actual) !== canonicalStringify(entry)) throw new Error(`task targetTree input snapshot mismatch for ${entry.inputRef}`);
     });
-    task.ruleSnapshot.files.forEach((entry) => {
-      const actual = snapshotRuleFile(root, targetTree, entry.path);
-      if (canonicalStringify(actual) !== canonicalStringify(entry)) throw new Error(`task targetTree rule snapshot mismatch for ${entry.path}`);
-    });
+    verifyRuleSnapshotSource(root, task.ruleInputSource, task.ruleSnapshot.files, 'task');
   } catch (error) {
     addViolation(result, 'T045', artifact, '/reviewRange', `task Git tree verification failed closed: ${error.message}`, 'available immutable range and blobs', error.message, 2);
   }
@@ -1839,6 +1900,9 @@ function validateTaskAgainstDispatch(task, dispatch, batch, reviewItems, artifac
   if (canonicalStringify(task.inputSnapshot) !== canonicalStringify(dispatch.inputSnapshot)) {
     addViolation(result, 'RUN039', artifact, '/inputSnapshot', 'task inputSnapshot must equal dispatch inputSnapshot', dispatch.inputSnapshot, task.inputSnapshot);
   }
+  if (canonicalStringify(task.ruleInputSource) !== canonicalStringify(dispatch.ruleInputSource)) {
+    addViolation(result, 'RUN053', artifact, '/ruleInputSource', 'task ruleInputSource must equal dispatch ruleInputSource', dispatch.ruleInputSource, task.ruleInputSource);
+  }
   const expectedRuleSnapshot = projectRuleSnapshot(dispatch.ruleSnapshot, task.rules);
   if (canonicalStringify(task.ruleSnapshot) !== canonicalStringify(expectedRuleSnapshot)) {
     addViolation(result, 'RUN052', artifact, '/ruleSnapshot', 'task ruleSnapshot must equal the sealed dispatch snapshot for its rules', expectedRuleSnapshot, task.ruleSnapshot);
@@ -2206,6 +2270,7 @@ function buildTasks(dispatch) {
         reviewBatchId: batch.reviewBatchId,
         ruleSetId: dispatch.ruleSet.ruleSetId,
         reviewRange: dispatch.reviewRange,
+        ruleInputSource: dispatch.ruleInputSource,
         ruleSnapshot: projectRuleSnapshot(dispatch.ruleSnapshot, rules),
         inputSnapshot: dispatch.inputSnapshot,
         reviewItems,
@@ -2519,7 +2584,11 @@ function validateFinalMarkdown(finalReview, markdownPath, result, dispatch) {
       `reviewBatches：${asArray(dispatch.reviewBatches).length}`,
       `baseTree：${dispatch.reviewRange && dispatch.reviewRange.baseTree}`,
       `targetTree：${dispatch.reviewRange && dispatch.reviewRange.targetTree}`,
+      `规则来源类型：${dispatch.ruleInputSource && dispatch.ruleInputSource.kind}`,
     );
+    if (dispatch.ruleInputSource && dispatch.ruleInputSource.kind === 'commit') {
+      required.push(`规则来源 commit：${dispatch.ruleInputSource.commit}`);
+    }
   }
   if (asArray(finalReview.otherConcerns).length > 0) {
     required.push('其他关注项', ...finalReview.otherConcerns);
@@ -3051,12 +3120,14 @@ function protocolGateLabel(value) {
 
 function formatAuditLines(finalReview, dispatch, runDir) {
   const ruleSet = dispatch && dispatch.ruleSet ? dispatch.ruleSet : {};
+  const ruleInputSource = dispatch && dispatch.ruleInputSource ? dispatch.ruleInputSource : {};
   const targets = dispatch && dispatch.targets ? dispatch.targets : {};
   const validation = getRunValidationSummary(finalReview);
   const lines = [
     `- runId：${finalReview.runId || '未知'}`,
     `- ruleSetId：${ruleSet.ruleSetId || '未知'}`,
     `- sourceIndexHash：${ruleSet.sourceIndexHash || '未知'}`,
+    `- 规则来源类型：${ruleInputSource.kind || '未知'}`,
     `- candidateRuleRefs：${asArray(ruleSet.candidateRuleRefs).length}`,
     `- selectedRuleRefs：${asArray(ruleSet.selectedRuleRefs).length}`,
     `- requiredRuleRefs：${asArray(ruleSet.requiredRuleRefs).length}`,
@@ -3074,6 +3145,7 @@ function formatAuditLines(finalReview, dispatch, runDir) {
     `- boundCommit：${dispatch && dispatch.reviewRange && dispatch.reviewRange.boundCommit || '无'}`,
     `- excludedFiles：${asArray(dispatch && dispatch.reviewRange && dispatch.reviewRange.excludedFiles).length}`,
   ];
+  if (ruleInputSource.kind === 'commit') lines.push(`- 规则来源 commit：${ruleInputSource.commit || '未知'}`);
   lines.push(
     `- 验证命令：\`${formatRunCommand(runDir)}\``,
     `- 验证摘要：protocolGate=${validation.protocolGate || '未知'}，semanticVerdict=${validation.semanticVerdict || '未知'}，findings=${formatMetric(validation.issueSummary && validation.issueSummary.findings)}，mustFix=${formatMetric(validation.issueSummary && validation.issueSummary.mustFix)}，shouldFix=${formatMetric(validation.issueSummary && validation.issueSummary.shouldFix)}，cannotVerify=${formatMetric(validation.issueSummary && validation.issueSummary.cannotVerify)}，observations=${formatMetric(validation.issueSummary && validation.issueSummary.observations)}，recommendation=${validation.recommendation || '未知'}`,

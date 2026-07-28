@@ -1,6 +1,6 @@
 # rules-review reviewer 契约
 
-仅在 controller 已生成并校验 v5 task 后使用。每个 reviewer 只处理一个 `reviewBatchId`。
+仅在 controller 已生成并校验 v6 task 后使用。每个 reviewer 只处理一个 `reviewBatchId`。
 
 ## 分派
 
@@ -18,7 +18,7 @@ git diff <baseTree> <targetTree>
 git show <targetTree>:<path>
 ```
 
-必须逐项处理 task 中的全部 reviewItems。不得读取当前同名工作文件、真实 index 或其它 TARGET 的 run 来替代封印 blob。Git object 缺失、tree identity 不一致或任务内容不足时返回 `cannot_verify`，并通知 controller 将 run 置为 blocked；不得猜测内容。
+必须逐项处理 task 中的全部 reviewItems。规则只读取 task 的 `ruleSnapshot`，即使 `ruleInputSource.kind = workspace` 也不得回读当前同名规则文件。不得读取当前同名代码文件、真实 index 或其它 TARGET 的 run 来替代封印 blob。Git object 缺失、tree identity 不一致或任务内容不足时返回 `cannot_verify`，并通知 controller 将 run 置为 blocked；不得猜测内容。
 
 ## 输出
 
