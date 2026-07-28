@@ -155,7 +155,7 @@ ruleRef x targetId = reviewItem
 
 - `dispatch.json`：controller 的规则、目标、适用性、固定 range 和分派计划；不得含审查结论。
 - `tasks/*.json`：由 `build-tasks` 从 dispatch 机械投影，携带相同 `reviewRange`、`inputSnapshot`，以及规则索引和本批规则的 `ruleSnapshot`；`taskHash` 是删除自身字段后整份 task 的 canonical JSON SHA-256。
-- `shards/*.json`：reviewer 对本 batch 的当前结果，必须回显 task 的 `targetTree` 与 `taskHash`；是产生 `passed / finding / observation / not_applicable / cannot_verify` 的唯一位置。
+- `shards/*.json`：reviewer 对本 batch 的当前结果，必须回显 task 的 `targetTree` 与 `taskHash`；是产生 `passed / finding / observation / not_applicable / cannot_verify` 的唯一位置。可选的 `otherConcerns` 只承载审查过程中自然注意到的规则外事项。
 - `finalReview.json`：由 `aggregate-final` 仅从当前 run 的 shards 聚合。
 - `final.md`、`response.md`：展示层，不是事实源。
 
@@ -172,6 +172,13 @@ reviewer 必须按 task 中的全部 reviewItems 返回结果，不能依赖主�
 - `observation`：包含 origin，以及 reason 或 evidence。
 - `not_applicable`：只允许非 required reviewItem，包含 reason。
 - `cannot_verify`：包含 reason 或 evidence。
+
+阅读规则判断所需的业务链路是允许的；顺带发现规则外问题也可能发生，但不得把它写成 finding 或 observation。若值得提醒，只能写入 shard 顶层可选的 `otherConcerns: string[]`：
+
+- 每项是普通文本，不要求 evidence、`ruleRef`、优先级或 finding ID。
+- 不为它额外阅读、测试或重试，也不自动启动普通代码 review；非字符串、空字符串和重复项在聚合时直接忽略。
+- 不进入 `findings`、`observations`、`issueSummary`，不改变 `semanticVerdict`、`recommendation` 或协议门禁。
+- 没有内容时省略；最终仅在有内容时输出 `## 其他关注项`。
 
 机器只验证结构、引用和结果闭合，不根据内容猜测结果是否正确。
 
@@ -229,4 +236,4 @@ validator 明确不检查：
 
 ## 9. 输出
 
-最终回复直接复用 `render-response` 生成的 `response.md`。第一眼同时展示审查结论、问题数、无法验证数量与修复建议；不得把 `protocolGate = "passed"` 简写成“代码通过”。
+最终回复直接复用 `render-response` 生成的 `response.md`。第一眼同时展示审查结论、问题数、无法验证数量与修复建议；不得把 `protocolGate = "passed"` 简写成“代码通过”。只有存在 `otherConcerns` 时才追加 `## 其他关注项`，且该小节不改变前述结论。

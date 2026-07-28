@@ -22,6 +22,7 @@
     "excludedRuleRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
     "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
     "observations": { "type": "array", "items": { "$ref": "#/$defs/observation" } },
+    "otherConcerns": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
     "issueSummary": { "$ref": "#/$defs/issueSummary" },
     "recommendation": { "enum": ["ready_for_merge", "must_fix_before_merge", "should_review_before_merge", "manual_verification_required", "review_incomplete", "review_blocked"] },
     "cannotVerifyItems": { "type": "array", "items": { "$ref": "#/$defs/cannotVerifyItem" } },

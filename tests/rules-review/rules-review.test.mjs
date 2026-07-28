@@ -249,6 +249,56 @@ async function materializePassingRun(dispatchFile) {
   return runDir;
 }
 
+test("其他关注项只按需展示，不影响 rules-review 结论和计数", async (t) => {
+  const root = createRepository();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
+  const dispatchFile = createDraft(root);
+  const dispatch = await seal(dispatchFile);
+  const runDir = path.dirname(dispatchFile);
+  const taskDir = path.join(runDir, "tasks");
+  await run(["--mode", "build-tasks", "--dispatch", dispatchFile, "--out", taskDir]);
+  const shardFile = path.join(runDir, "shards/B001.json");
+  const shard = passedShard(dispatch, readJson(path.join(taskDir, "B001.json")));
+  shard.otherConcerns = [
+    "普通代码 review 可进一步确认该调用链的异常处理。",
+    "",
+    { summary: "非普通文本不应阻断审查" },
+    "普通代码 review 可进一步确认该调用链的异常处理。",
+  ];
+  writeJson(shardFile, shard);
+
+  for (const args of [
+    ["--mode", "aggregate-final", "--dir", runDir, "--output", path.join(runDir, "finalReview.json")],
+    ["--mode", "render-final", "--input", path.join(runDir, "finalReview.json"), "--dispatch", dispatchFile, "--output", path.join(runDir, "final.md")],
+    ["--mode", "render-response", "--dir", runDir],
+  ]) {
+    await run(args);
+  }
+  let finalReview = readJson(path.join(runDir, "finalReview.json"));
+  let response = fs.readFileSync(path.join(runDir, "response.md"), "utf8");
+  assert.equal(finalReview.semanticVerdict, "clean");
+  assert.equal(finalReview.recommendation, "ready_for_merge");
+  assert.deepEqual(finalReview.issueSummary, { findings: 0, mustFix: 0, shouldFix: 0, cannotVerify: 0, observations: 0 });
+  assert.deepEqual(finalReview.otherConcerns, ["普通代码 review 可进一步确认该调用链的异常处理。"]);
+  assert.match(response, /## 其他关注项/);
+  assert.match(response, /普通代码 review 可进一步确认/);
+
+  delete shard.otherConcerns;
+  writeJson(shardFile, shard);
+  for (const args of [
+    ["--mode", "aggregate-final", "--dir", runDir, "--output", path.join(runDir, "finalReview.json")],
+    ["--mode", "render-final", "--input", path.join(runDir, "finalReview.json"), "--dispatch", dispatchFile, "--output", path.join(runDir, "final.md")],
+    ["--mode", "render-response", "--dir", runDir],
+  ]) {
+    await run(args);
+  }
+  finalReview = readJson(path.join(runDir, "finalReview.json"));
+  response = fs.readFileSync(path.join(runDir, "response.md"), "utf8");
+  assert.equal("otherConcerns" in finalReview, false);
+  assert.doesNotMatch(response, /## 其他关注项/);
+});
+
 test("target-commit 固定完整提交范围，且封印过程不写 Git object 或修改工作区", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

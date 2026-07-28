@@ -30,5 +30,6 @@ git show <targetTree>:<path>
 - `finding` 包含 origin 与 evidence，不含 findingId。
 - `observation` 包含 origin，以及 reason 或 evidence。
 - required reviewItem 不返回 `not_applicable`；无法判断时返回 `cannot_verify`。
+- 规则外事项不得放进 result。仅当审查中自然注意到且值得提醒时，可在 shard 顶层写 `otherConcerns: string[]`；不要求 evidence，不为此额外阅读、测试或重试，没有则省略。字段中的非字符串、空字符串和重复项由 aggregator 忽略。
 
 完成后 controller 先运行 shard validator，再聚合当前 run。格式错误或结果缺项不能由 controller 代写修补，只能要求原 reviewer 返还合规 shard。

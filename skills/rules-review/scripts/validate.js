@@ -1607,13 +1607,13 @@ function validateRun(runDir, result) {
   const finalReview = readJson(finalReviewPath, rel(runDir, finalReviewPath), result, 'FR001');
   if (finalReview) validateFinalReviewShape(finalReview, rel(runDir, finalReviewPath), result);
 
-  const runState = dispatch ? validateRunArtifacts(runDir, dispatch, result) : { results: [], resultOwners: new Map() };
+  const runState = dispatch ? validateRunArtifacts(runDir, dispatch, result) : { results: [], resultOwners: new Map(), otherConcerns: [] };
   if (dispatch) validateCurrentBatchResults(dispatch, runState.results, runState.resultOwners, result);
   const currentResults = dispatch ? runState.results : [];
   if (dispatch) validateCompleteResults(dispatch, currentResults, result);
 
   const beforeFinalGate = calculateGate(dispatch, currentResults, result);
-  if (finalReview && dispatch) validateFinalReviewAgainstComputed(finalReview, dispatch, currentResults, beforeFinalGate, rel(runDir, finalReviewPath), result);
+  if (finalReview && dispatch) validateFinalReviewAgainstComputed(finalReview, dispatch, currentResults, beforeFinalGate, runState.otherConcerns, rel(runDir, finalReviewPath), result);
   result.gate = calculateGate(dispatch, currentResults, result);
   if (finalReview && result.gate.recommendation === 'should_review_before_merge') {
     result.gate.shouldSetHash = calculateShouldSetHash(finalReview);
@@ -1714,6 +1714,7 @@ function validateRunArtifacts(runDir, dispatch, result) {
   const reviewItems = new Map(asArray(dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
   const results = [];
   const resultOwners = new Map();
+  const otherConcerns = [];
 
   if (dispatch.executionPlan && dispatch.executionPlan.mode === 'no_batch') {
     const reviewerArtifacts = collectFiles(runDir)
@@ -1722,7 +1723,7 @@ function validateRunArtifacts(runDir, dispatch, result) {
     if (reviewerArtifacts.length > 0) {
       addViolation(result, 'RUN009', rel(runDir, 'dispatch.json'), null, 'no_batch run must not contain reviewer JSON artifacts', [], reviewerArtifacts);
     }
-    return { results, resultOwners };
+    return { results, resultOwners, otherConcerns };
   }
 
   validateRetryArtifacts(runDir, dispatch, result);
@@ -1772,6 +1773,7 @@ function validateRunArtifacts(runDir, dispatch, result) {
     if (!shard) return;
     validateShard(shard, task, shardArtifact, result);
     validateShardAgainstBatch(shard, batch, shardArtifact, result);
+    otherConcerns.push(...asArray(shard.otherConcerns).filter(isNonEmptyString));
 
     asArray(shard.results).forEach((reviewResult, resultIndex) => {
       if (reviewResult && reviewResult.reviewItemId) {
@@ -1782,7 +1784,7 @@ function validateRunArtifacts(runDir, dispatch, result) {
     });
   });
 
-  return { results, resultOwners };
+  return { results, resultOwners, otherConcerns: [...new Set(otherConcerns)] };
 }
 
 function mergeValidationResult(target, source) {
@@ -2248,21 +2250,21 @@ function aggregateFinalMode(args, result) {
   const dispatch = readJson(dispatchPath, rel(runDir, dispatchPath), result, 'D001');
   if (dispatch) validateDispatch(dispatch, rel(runDir, dispatchPath), result, dispatchPath);
   if (!dispatch || result.violations.length > 0) return;
-  const runState = dispatch ? validateRunArtifacts(runDir, dispatch, result) : { results: [], resultOwners: new Map() };
+  const runState = dispatch ? validateRunArtifacts(runDir, dispatch, result) : { results: [], resultOwners: new Map(), otherConcerns: [] };
   if (dispatch) validateCurrentBatchResults(dispatch, runState.results, runState.resultOwners, result);
   const currentResults = dispatch ? runState.results : [];
   if (dispatch) validateCompleteResults(dispatch, currentResults, result);
   const gate = calculateGate(dispatch, currentResults, result);
   result.gate = gate;
-  const finalReview = buildFinalReview(dispatch, currentResults, gate);
+  const finalReview = buildFinalReview(dispatch, currentResults, gate, runState.otherConcerns);
   fs.mkdirSync(path.dirname(args.output), { recursive: true });
   fs.writeFileSync(args.output, `${JSON.stringify(finalReview, null, 2)}\n`);
   validateFinalReviewShape(finalReview, args.output, result);
-  validateFinalReviewAgainstComputed(finalReview, dispatch, currentResults, gate, args.output, result);
+  validateFinalReviewAgainstComputed(finalReview, dispatch, currentResults, gate, runState.otherConcerns, args.output, result);
   result.rendered = args.output;
 }
 
-function buildFinalReview(dispatch, results, gate) {
+function buildFinalReview(dispatch, results, gate, otherConcerns) {
   const finalReview = {
     kind: 'rules-review-final-review',
     schemaVersion: SCHEMA_VERSION,
@@ -2290,6 +2292,7 @@ function buildFinalReview(dispatch, results, gate) {
   };
   const cannotVerifyItems = deriveCannotVerifyItems(results, dispatch);
   if (cannotVerifyItems.length > 0) finalReview.cannotVerifyItems = cannotVerifyItems;
+  if (asArray(otherConcerns).length > 0) finalReview.otherConcerns = otherConcerns;
   return finalReview;
 }
 
@@ -2313,7 +2316,7 @@ function validateFinalReviewShape(finalReview, artifact, result) {
     'validationResults',
   ];
   requireFields(finalReview, artifact, result, 'FR004', '', requiredFields);
-  rejectUnsupportedFields(finalReview, artifact, result, 'FR078', '', [...requiredFields, 'cannotVerifyItems', 'summary'], 'finalReview');
+  rejectUnsupportedFields(finalReview, artifact, result, 'FR078', '', [...requiredFields, 'cannotVerifyItems', 'otherConcerns', 'summary'], 'finalReview');
   if (!isSafeToken(finalReview && finalReview.runId)) addViolation(result, 'FR075', artifact, '/runId', 'finalReview runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', finalReview && finalReview.runId);
   if (!PROTOCOL_GATES.includes(finalReview.protocolGate)) addViolation(result, 'FR005', artifact, '/protocolGate', 'protocolGate must be valid', PROTOCOL_GATES, finalReview.protocolGate);
   if (!SCOPE_MODES.includes(finalReview.scopeMode)) addViolation(result, 'FR006', artifact, '/scopeMode', 'scopeMode must be valid', SCOPE_MODES, finalReview.scopeMode);
@@ -2330,6 +2333,7 @@ function validateFinalReviewShape(finalReview, artifact, result) {
   if (!Array.isArray(finalReview.observations)) addViolation(result, 'FR058', artifact, '/observations', 'observations must be array', 'array', finalReview.observations);
   validateValidationResults(finalReview, artifact, result);
   if (finalReview.cannotVerifyItems !== undefined) validateCannotVerifyItems(finalReview.cannotVerifyItems, artifact, result);
+  if (finalReview.otherConcerns !== undefined) validateStringSet(finalReview.otherConcerns, artifact, result, 'FR082', '/otherConcerns');
   asArray(finalReview.findings).forEach((finding, index) => {
     requireFields(finding, artifact, result, 'FR012', `/findings/${index}`, ['findingId', 'reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin', 'priority', 'evidence']);
     if (!FINDING_RE.test(finding && finding.findingId)) addViolation(result, 'FR074', artifact, `/findings/${index}/findingId`, 'final findingId must match F followed by at least three digits', 'Fxxx...', finding && finding.findingId);
@@ -2358,7 +2362,7 @@ function validateFinalReviewShape(finalReview, artifact, result) {
   });
 }
 
-function validateFinalReviewAgainstComputed(finalReview, dispatch, results, computed, artifact, result) {
+function validateFinalReviewAgainstComputed(finalReview, dispatch, results, computed, otherConcerns, artifact, result) {
   if (finalReview.runId !== dispatch.runId) addViolation(result, 'FR020', artifact, '/runId', 'finalReview runId must match dispatch runId', dispatch.runId, finalReview.runId);
 
   const excludedFiles = asArray(dispatch.reviewRange && dispatch.reviewRange.excludedFiles);
@@ -2401,6 +2405,7 @@ function validateFinalReviewAgainstComputed(finalReview, dispatch, results, comp
   validateCannotVerifyItemsAgainstComputed(finalReview, deriveCannotVerifyItems(results, dispatch), artifact, result);
   validateFindingItemsAgainstComputed(finalReview, deriveFindingItems(results, dispatch), artifact, result);
   validateObservationItemsAgainstComputed(finalReview, deriveObservationItems(results, dispatch), artifact, result);
+  validateOtherConcernsAgainstComputed(finalReview, otherConcerns, artifact, result);
 }
 
 function renderFinalMode(args, result) {
@@ -2434,7 +2439,7 @@ function renderFinalMode(args, result) {
     validateCompleteResults(dispatch, currentResults, computedResult);
     const gate = calculateGate(dispatch, currentResults, computedResult);
     mergeValidationResult(result, computedResult);
-    validateFinalReviewAgainstComputed(finalReview, dispatch, currentResults, gate, args.input, result);
+    validateFinalReviewAgainstComputed(finalReview, dispatch, currentResults, gate, runState.otherConcerns, args.input, result);
   }
   if (result.violations.length > 0) return;
   const runDir = path.dirname(path.resolve(args.input));
@@ -2516,6 +2521,9 @@ function validateFinalMarkdown(finalReview, markdownPath, result, dispatch) {
       `targetTree：${dispatch.reviewRange && dispatch.reviewRange.targetTree}`,
     );
   }
+  if (asArray(finalReview.otherConcerns).length > 0) {
+    required.push('其他关注项', ...finalReview.otherConcerns);
+  }
   required.forEach((token, index) => {
     if (!markdown.includes(token)) addViolation(result, `FM00${index + 2}`, markdownPath, null, 'final Markdown must include rendered finalReview status labels', token, markdown);
   });
@@ -2561,6 +2569,7 @@ function renderFinalMarkdown(finalReview, dispatch, runDir) {
       });
     }
   }
+  appendOtherConcerns(lines, finalReview.otherConcerns);
   lines.push(
     '',
     '## 范围',
@@ -2608,6 +2617,7 @@ function renderResponseMarkdown(runDir, finalReview, gate) {
     findings.length === 0 ? '- 无' : null,
   ].filter((line) => line !== null);
   appendResponseFindingLines(lines, findings);
+  appendOtherConcerns(lines, finalReview.otherConcerns);
   lines.push(
     '',
     '## 报告',
@@ -2651,6 +2661,13 @@ function appendResponseFindingLines(lines, findings) {
       lines.push(`  规则：${finding.ruleRef || '未知'}；目标：${finding.targetId || '未知'}；来源：${label(finding.origin)}`);
     });
   });
+}
+
+function appendOtherConcerns(lines, otherConcerns) {
+  const items = asArray(otherConcerns);
+  if (items.length === 0) return;
+  lines.push('', '## 其他关注项');
+  items.forEach((item) => lines.push(`- ${item}`));
 }
 
 function expectKind(doc, artifact, result, code, expected) {
@@ -2804,6 +2821,13 @@ function validateObservationItemsAgainstComputed(finalReview, expectedItems, art
   }
   if (!observationItemsEqual(actualItems, expectedItems)) {
     addViolation(result, 'FR072', artifact, '/observations', 'finalReview observations must equal validator result', expectedItems, actualItems);
+  }
+}
+
+function validateOtherConcernsAgainstComputed(finalReview, expectedItems, artifact, result) {
+  const actualItems = asArray(finalReview.otherConcerns);
+  if (JSON.stringify(actualItems) !== JSON.stringify(asArray(expectedItems))) {
+    addViolation(result, 'FR084', artifact, '/otherConcerns', 'finalReview otherConcerns must equal current shard otherConcerns', expectedItems, actualItems);
   }
 }
 
