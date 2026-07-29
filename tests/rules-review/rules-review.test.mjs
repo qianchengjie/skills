@@ -301,6 +301,7 @@ test("response 摘要按需展示无法验证和其他关注项，其他关注�
   assert.match(response, /## 其他关注项/);
   assert.match(response, /普通代码 review 可进一步确认/);
   assert.doesNotMatch(response, /## 无法验证/);
+  const cleanResponse = response;
 
   shard.results[0] = {
     reviewItemId: "RI001",
@@ -319,9 +320,11 @@ test("response 摘要按需展示无法验证和其他关注项，其他关注�
   response = fs.readFileSync(path.join(runDir, "response.md"), "utf8");
   assert.deepEqual(finalReview.issueSummary, { findings: 0, mustFix: 0, shouldFix: 0, cannotVerify: 1, observations: 0 });
   assert.match(response, /## 无法验证\n- CORE-001｜T001：缺少独立宿主运行环境，无法确认 \/backend 路由。/);
-  assert.ok(response.indexOf("## 问题") < response.indexOf("## 无法验证"));
+  assert.doesNotMatch(response, /## 问题(?:\n|$)/);
+  assert.doesNotMatch(response, /未发现需要修复或人工验证的项目/);
   assert.ok(response.indexOf("## 无法验证") < response.indexOf("## 其他关注项"));
   assert.ok(response.indexOf("## 其他关注项") < response.indexOf("## 报告"));
+  assert.match(cleanResponse, /## 审查结果\n- 未发现需要修复或人工验证的项目。/);
 
   delete shard.otherConcerns;
   writeJson(shardFile, shard);
@@ -337,6 +340,7 @@ test("response 摘要按需展示无法验证和其他关注项，其他关注�
   assert.equal("otherConcerns" in finalReview, false);
   assert.doesNotMatch(response, /## 其他关注项/);
   assert.match(response, /## 无法验证/);
+  assert.doesNotMatch(response, /## 问题(?:\n|$)|未发现需要修复或人工验证的项目/);
 });
 
 test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause 合并并保留全部证据组", async (t) => {
@@ -480,6 +484,8 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
   assert.equal(finalReview.findings[0].evidenceGroups.length, 3);
   assert.equal("otherConcerns" in finalReview, false);
   assert.equal(response.split(rootCause).length - 1, 1);
+  assert.match(response, /## 问题/);
+  assert.doesNotMatch(response, /## 审查结果/);
   assert.match(finalMarkdown, /优先级：must_fix/);
   assert.match(finalMarkdown, /优先级：should_fix/);
   assert.ok(response.includes([

@@ -2724,17 +2724,20 @@ function renderResponseMarkdown(runDir, finalReview, gate) {
     `- 建议修复：${issueSummary.shouldFix}`,
     `- 无法验证：${issueSummary.cannotVerify}`,
     `- 观察项：${issueSummary.observations}`,
-    '',
-    '## 问题',
-    findings.length === 0 ? '- 无' : null,
-  ].filter((line) => line !== null);
-  appendResponseFindingLines(lines, findings);
+  ];
   const cannotVerifyItems = asArray(finalReview.cannotVerifyItems);
+  if (findings.length > 0) {
+    lines.push('', '## 问题');
+    appendResponseFindingLines(lines, findings);
+  }
   if (cannotVerifyItems.length > 0) {
     lines.push('', '## 无法验证');
     cannotVerifyItems.forEach((item) => {
       lines.push(`- ${item.ruleRef || '未知'}｜${item.targetId || '未知'}：${item.reason || '未记录原因'}`);
     });
+  }
+  if (findings.length === 0 && cannotVerifyItems.length === 0) {
+    lines.push('', '## 审查结果', '- 未发现需要修复或人工验证的项目。');
   }
   appendOtherConcerns(lines, finalReview.otherConcerns);
   lines.push(
