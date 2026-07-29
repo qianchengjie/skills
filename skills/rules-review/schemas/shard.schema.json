@@ -55,6 +55,7 @@
     },
     "evidence": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["summary"],
       "anyOf": [
         { "required": ["loc"] },

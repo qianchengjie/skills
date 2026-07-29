@@ -1533,18 +1533,18 @@ function validateReviewResult(reviewResult, artifact, result, pointer, prefix, t
     if (!isNonEmptyString(reviewResult.rootCause)) {
       addViolation(result, `${prefix}013`, artifact, `${pointer}/rootCause`, 'finding result requires an explicit rootCause', 'non-empty rootCause', reviewResult.rootCause);
     }
-    validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}014`, `${pointer}/evidence`, 'finding result requires evidence');
+    validateShardEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}014`, `${pointer}/evidence`, 'finding result requires evidence');
     validateReviewResultDisposition(reviewResult, taskContext, artifact, result, pointer, prefix);
   }
   if (reviewResult && reviewResult.status === 'observation') {
     if (!hasValidEvidenceArray(reviewResult.evidence) && !isNonEmptyString(reviewResult.reason)) {
       addViolation(result, `${prefix}019`, artifact, pointer, 'observation result requires reason or evidence', 'reason or evidence[]', reviewResult);
     }
-    if (reviewResult.evidence !== undefined) validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}020`, `${pointer}/evidence`, 'observation evidence must be reviewable when present');
+    if (reviewResult.evidence !== undefined) validateShardEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}020`, `${pointer}/evidence`, 'observation evidence must be reviewable when present');
     validateReviewResultDisposition(reviewResult, taskContext, artifact, result, pointer, prefix);
   }
   if (reviewResult && reviewResult.status === 'passed') {
-    validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}015`, `${pointer}/evidence`, 'passed result requires evidence');
+    validateShardEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}015`, `${pointer}/evidence`, 'passed result requires evidence');
     validateFailureChecks(reviewResult, taskContext, artifact, result, pointer, prefix);
   }
   if (reviewResult && reviewResult.status === 'not_applicable') {
@@ -1559,8 +1559,11 @@ function validateReviewResult(reviewResult, artifact, result, pointer, prefix, t
   if (reviewResult && reviewResult.status === 'cannot_verify' && !isNonEmptyString(reviewResult.reason) && !hasValidEvidenceArray(reviewResult.evidence)) {
     addViolation(result, `${prefix}017`, artifact, pointer, 'cannot_verify result requires reason or evidence', 'reason or evidence[]', reviewResult);
   }
+  if (reviewResult && reviewResult.status === 'cannot_verify' && reviewResult.evidence !== undefined) {
+    validateShardEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}041`, `${pointer}/evidence`, 'cannot_verify evidence must be reviewable when present');
+  }
   if (reviewResult && reviewResult.status === 'not_applicable' && reviewResult.evidence !== undefined) {
-    validateEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}018`, `${pointer}/evidence`, 'not_applicable evidence must be reviewable when present');
+    validateShardEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}018`, `${pointer}/evidence`, 'not_applicable evidence must be reviewable when present');
   }
 }
 
@@ -1579,7 +1582,7 @@ function validateFailureChecks(reviewResult, taskContext, artifact, result, poin
     requireFields(check, artifact, result, `${prefix}031`, checkPointer, ['condition', 'outcome', 'evidence']);
     if (!isNonEmptyString(check && check.condition)) addViolation(result, `${prefix}032`, artifact, `${checkPointer}/condition`, 'failureCheck condition must be non-empty string', 'string', check && check.condition);
     if (!FAILURE_CHECK_OUTCOMES.includes(check && check.outcome)) addViolation(result, `${prefix}033`, artifact, `${checkPointer}/outcome`, 'failureCheck outcome must be valid', FAILURE_CHECK_OUTCOMES, check && check.outcome);
-    validateEvidenceArray(check && check.evidence, artifact, result, `${prefix}034`, `${checkPointer}/evidence`, 'failureCheck requires evidence');
+    validateShardEvidenceArray(check && check.evidence, artifact, result, `${prefix}034`, `${checkPointer}/evidence`, 'failureCheck requires evidence');
     if (check && check.conditionId !== undefined) {
       if (!isNonEmptyString(check.conditionId)) {
         addViolation(result, `${prefix}035`, artifact, `${checkPointer}/conditionId`, 'failureCheck conditionId must be non-empty string when present', 'string', check.conditionId);
@@ -3077,6 +3080,13 @@ function validateEvidenceArray(evidence, artifact, result, code, pointer, messag
   if (!hasValidEvidenceArray(evidence)) {
     addViolation(result, code, artifact, pointer, message, 'non-empty evidence[] with summary and loc/source', evidence);
   }
+}
+
+function validateShardEvidenceArray(evidence, artifact, result, code, pointer, message) {
+  validateEvidenceArray(evidence, artifact, result, code, pointer, message);
+  asArray(evidence).forEach((item, index) => {
+    rejectUnsupportedFields(item, artifact, result, 'S040', `${pointer}/${index}`, ['summary', 'loc', 'source'], 'shard evidence');
+  });
 }
 
 function validateFinalReviewEvidenceArray(evidence, artifact, result, code, pointer, message) {

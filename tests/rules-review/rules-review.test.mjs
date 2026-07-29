@@ -404,6 +404,39 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
     /finding result requires an explicit rootCause/,
   );
 
+  const invalidEvidenceCases = [
+    ["finding", (() => {
+      const value = structuredClone(shard);
+      value.results[0].evidence[0].command = "npm test";
+      return value;
+    })()],
+    ["cannot-verify", (() => {
+      const value = structuredClone(shard);
+      value.results[0] = {
+        reviewItemId: "RI001",
+        status: "cannot_verify",
+        reason: "需要运行时环境",
+        evidence: [{ loc: "src/main.js:1", summary: "缺少运行时环境", command: "npm test" }],
+      };
+      return value;
+    })()],
+    ["failure-check", (() => {
+      const value = passedShard(dispatch, task);
+      value.results[0].failureChecks[0].evidence[0].command = "npm test";
+      return value;
+    })()],
+  ];
+  for (const [name, value] of invalidEvidenceCases) {
+    const file = path.join(root, `${name}-unknown-evidence.json`);
+    writeJson(file, value);
+    await expectFailure(
+      ["--mode", "shard", "--task", path.join(taskDir, "B001.json"), "--input", file],
+      /shard evidence contains unsupported field/,
+    );
+  }
+  const shardSchema = readJson(path.join(repoRoot, "skills/rules-review/schemas/shard.schema.json"));
+  assert.equal(shardSchema.$defs.evidence.additionalProperties, false);
+
   for (const args of [
     ["--mode", "aggregate-final", "--dir", runDir, "--output", path.join(runDir, "finalReview.json")],
     ["--mode", "render-final", "--input", path.join(runDir, "finalReview.json"), "--dispatch", dispatchFile, "--output", path.join(runDir, "final.md")],
