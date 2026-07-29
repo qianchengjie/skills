@@ -353,10 +353,18 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
   const dispatchFile = createDraft(root, { runId: "root-cause-grouping" });
   const draftDispatch = readJson(dispatchFile);
   draftDispatch.ruleSet.ruleSources[0].ruleLevel = "SHOULD";
+  draftDispatch.ruleSet.candidateRuleRefs.push("AUX-001");
+  draftDispatch.ruleSet.selectedRuleRefs.push("AUX-001");
+  draftDispatch.ruleSet.requiredRuleRefs.push("AUX-001");
+  draftDispatch.ruleSet.ruleSources.push({
+    ...draftDispatch.ruleSet.ruleSources[0],
+    namespace: "AUX",
+    ruleRef: "AUX-001",
+  });
   const targetSpecs = [
-    ["T001", "src/main.js", "CI 是否组装 backend 制品"],
-    ["T002", "src/other.js", "WebView 是否允许进入 /backend"],
-    ["T003", "src/host.js", "独立宿主是否生成 /backend 路由"],
+    ["T001", "src/main.js", "CI 是否组装 backend 制品", "CORE-001"],
+    ["T002", "src/other.js", "WebView 是否允许进入 /backend", "CORE-001"],
+    ["T003", "src/host.js", "独立宿主是否生成 /backend 路由", "AUX-001"],
   ];
   draftDispatch.targets.changedUnits = targetSpecs.map(([targetId, inputRef, summary]) => ({
     targetId,
@@ -365,17 +373,30 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
     loc: `${inputRef}:1`,
     summary,
   }));
-  draftDispatch.applicabilityMatrix = targetSpecs.map(([targetId, inputRef], index) => ({
-    ruleRef: "CORE-001",
-    targetId,
-    targetKind: "changed_unit",
-    applicability: "applicable",
+  draftDispatch.applicabilityMatrix = draftDispatch.ruleSet.requiredRuleRefs.flatMap((ruleRef) => (
+    targetSpecs.map(([targetId, inputRef, , applicableRuleRef], index) => (
+      ruleRef === applicableRuleRef
+        ? {
+          ruleRef,
+          targetId,
+          targetKind: "changed_unit",
+          applicability: "applicable",
+          reviewItemId: `RI${String(index + 1).padStart(3, "0")}`,
+          evidence: [{ loc: `${inputRef}:1`, summary: "适用性已判断" }],
+        }
+        : {
+          ruleRef,
+          targetId,
+          targetKind: "changed_unit",
+          applicability: "not_applicable",
+          reason: `${ruleRef} 不适用于 ${targetId}`,
+          evidence: [{ loc: `${inputRef}:1`, summary: "不适用性已判断" }],
+        }
+    ))
+  ));
+  draftDispatch.reviewItems = targetSpecs.map(([targetId, , , ruleRef], index) => ({
     reviewItemId: `RI${String(index + 1).padStart(3, "0")}`,
-    evidence: [{ loc: `${inputRef}:1`, summary: "适用性已判断" }],
-  }));
-  draftDispatch.reviewItems = targetSpecs.map(([targetId], index) => ({
-    reviewItemId: `RI${String(index + 1).padStart(3, "0")}`,
-    ruleRef: "CORE-001",
+    ruleRef,
     targetKind: "changed_unit",
     targetId,
     required: true,
@@ -384,7 +405,7 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
     changedUnits: 3,
     candidates: 0,
     targets: 3,
-    requiredRuleRefs: 1,
+    requiredRuleRefs: 2,
     reviewItems: 3,
   };
   draftDispatch.reviewBatches[0].reviewItemIds = ["RI001", "RI002", "RI003"];
@@ -480,6 +501,7 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
   assert.equal(finalReview.findings.length, 1);
   assert.equal(finalReview.findings[0].rootCause, rootCause);
   assert.deepEqual(finalReview.findings[0].evidenceGroups.map((group) => group.reviewItemId), ["RI001", "RI002", "RI003"]);
+  assert.deepEqual(finalReview.findings[0].evidenceGroups.map((group) => group.ruleRef), ["CORE-001", "CORE-001", "AUX-001"]);
   assert.deepEqual(finalReview.findings[0].evidenceGroups.map((group) => group.priority), ["must_fix", "should_fix", "should_fix"]);
   assert.equal(finalReview.findings[0].evidenceGroups.length, 3);
   assert.equal("otherConcerns" in finalReview, false);
@@ -490,9 +512,11 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
   assert.match(finalMarkdown, /优先级：should_fix/);
   assert.ok(response.includes([
     `- F001：${rootCause}`,
-    "  - CORE-001｜src/main.js:1：CI 是否组装 backend 制品",
-    "  - CORE-001｜src/other.js:1：WebView 是否允许进入 /backend",
-    "  - CORE-001｜src/host.js:1：独立宿主是否生成 /backend 路由",
+    "  - CORE-001",
+    "    - CI 是否组装 backend 制品｜src/main.js:1",
+    "    - WebView 是否允许进入 /backend｜src/other.js:1",
+    "  - AUX-001",
+    "    - 独立宿主是否生成 /backend 路由｜src/host.js:1",
   ].join("\n")));
   assert.doesNotMatch(response, /目标：T00[123]|来源：|优先级：(must_fix|should_fix)/);
 

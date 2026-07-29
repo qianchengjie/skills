@@ -2782,9 +2782,16 @@ function appendResponseFindingLines(lines, findings) {
     lines.push(`### ${title}`);
     items.forEach((finding) => {
       lines.push(`- ${finding.findingId}：${finding.rootCause}`);
+      const evidenceByRuleRef = new Map();
       asArray(finding.evidenceGroups).forEach((evidenceGroup) => {
-        asArray(evidenceGroup.evidence).forEach((evidence) => {
-          lines.push(`  - ${evidenceGroup.ruleRef || '未知'}｜${evidence.loc || evidence.source || '未知位置'}：${evidence.summary || '未记录证据'}`);
+        const ruleRef = evidenceGroup.ruleRef || '未知';
+        if (!evidenceByRuleRef.has(ruleRef)) evidenceByRuleRef.set(ruleRef, []);
+        evidenceByRuleRef.get(ruleRef).push(...asArray(evidenceGroup.evidence));
+      });
+      evidenceByRuleRef.forEach((evidenceItems, ruleRef) => {
+        lines.push(`  - ${ruleRef}`);
+        evidenceItems.forEach((evidence) => {
+          lines.push(`    - ${evidence.summary || '未记录证据'}｜${evidence.loc || evidence.source || '未知位置'}`);
         });
       });
     });
