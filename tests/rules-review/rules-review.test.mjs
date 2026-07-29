@@ -266,7 +266,7 @@ async function materializePassingRun(dispatchFile) {
   return runDir;
 }
 
-test("其他关注项只按需展示，不影响 rules-review 结论和计数", async (t) => {
+test("response 摘要按需展示无法验证和其他关注项，其他关注项不影响结论", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
@@ -300,6 +300,28 @@ test("其他关注项只按需展示，不影响 rules-review 结论和计数", 
   assert.deepEqual(finalReview.otherConcerns, ["普通代码 review 可进一步确认该调用链的异常处理。"]);
   assert.match(response, /## 其他关注项/);
   assert.match(response, /普通代码 review 可进一步确认/);
+  assert.doesNotMatch(response, /## 无法验证/);
+
+  shard.results[0] = {
+    reviewItemId: "RI001",
+    status: "cannot_verify",
+    reason: "缺少独立宿主运行环境，无法确认 /backend 路由。",
+  };
+  writeJson(shardFile, shard);
+  for (const args of [
+    ["--mode", "aggregate-final", "--dir", runDir, "--output", path.join(runDir, "finalReview.json")],
+    ["--mode", "render-final", "--input", path.join(runDir, "finalReview.json"), "--dispatch", dispatchFile, "--output", path.join(runDir, "final.md")],
+    ["--mode", "render-response", "--dir", runDir],
+  ]) {
+    await run(args);
+  }
+  finalReview = readJson(path.join(runDir, "finalReview.json"));
+  response = fs.readFileSync(path.join(runDir, "response.md"), "utf8");
+  assert.deepEqual(finalReview.issueSummary, { findings: 0, mustFix: 0, shouldFix: 0, cannotVerify: 1, observations: 0 });
+  assert.match(response, /## 无法验证\n- CORE-001｜T001：缺少独立宿主运行环境，无法确认 \/backend 路由。/);
+  assert.ok(response.indexOf("## 问题") < response.indexOf("## 无法验证"));
+  assert.ok(response.indexOf("## 无法验证") < response.indexOf("## 其他关注项"));
+  assert.ok(response.indexOf("## 其他关注项") < response.indexOf("## 报告"));
 
   delete shard.otherConcerns;
   writeJson(shardFile, shard);
@@ -314,6 +336,7 @@ test("其他关注项只按需展示，不影响 rules-review 结论和计数", 
   response = fs.readFileSync(path.join(runDir, "response.md"), "utf8");
   assert.equal("otherConcerns" in finalReview, false);
   assert.doesNotMatch(response, /## 其他关注项/);
+  assert.match(response, /## 无法验证/);
 });
 
 test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause 合并并保留全部证据组", async (t) => {
@@ -459,11 +482,13 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
   assert.equal(response.split(rootCause).length - 1, 1);
   assert.match(finalMarkdown, /优先级：must_fix/);
   assert.match(finalMarkdown, /优先级：should_fix/);
-  assert.match(response, /优先级：must_fix/);
-  assert.match(response, /优先级：should_fix/);
-  assert.match(response, /目标：T001/);
-  assert.match(response, /目标：T002/);
-  assert.match(response, /目标：T003/);
+  assert.ok(response.includes([
+    `- F001：${rootCause}`,
+    "  - CORE-001｜src/main.js:1：CI 是否组装 backend 制品",
+    "  - CORE-001｜src/other.js:1：WebView 是否允许进入 /backend",
+    "  - CORE-001｜src/host.js:1：独立宿主是否生成 /backend 路由",
+  ].join("\n")));
+  assert.doesNotMatch(response, /目标：T00[123]|来源：|优先级：(must_fix|should_fix)/);
 
   const schema = readJson(path.join(repoRoot, "skills/rules-review/schemas/final-review.schema.json"));
   for (const definition of ["issueSummary", "cannotVerifyItem", "validationResult", "finding", "findingEvidenceGroup", "observation", "evidence"]) {

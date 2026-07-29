@@ -2729,6 +2729,13 @@ function renderResponseMarkdown(runDir, finalReview, gate) {
     findings.length === 0 ? '- 无' : null,
   ].filter((line) => line !== null);
   appendResponseFindingLines(lines, findings);
+  const cannotVerifyItems = asArray(finalReview.cannotVerifyItems);
+  if (cannotVerifyItems.length > 0) {
+    lines.push('', '## 无法验证');
+    cannotVerifyItems.forEach((item) => {
+      lines.push(`- ${item.ruleRef || '未知'}｜${item.targetId || '未知'}：${item.reason || '未记录原因'}`);
+    });
+  }
   appendOtherConcerns(lines, finalReview.otherConcerns);
   lines.push(
     '',
@@ -2773,8 +2780,9 @@ function appendResponseFindingLines(lines, findings) {
     items.forEach((finding) => {
       lines.push(`- ${finding.findingId}：${finding.rootCause}`);
       asArray(finding.evidenceGroups).forEach((evidenceGroup) => {
-        const reason = evidenceGroup.priorityReason ? `；原因：${evidenceGroup.priorityReason}` : '';
-        lines.push(`  - 规则：${evidenceGroup.ruleRef || '未知'}；目标：${evidenceGroup.targetId || '未知'}；来源：${label(evidenceGroup.origin)}；优先级：${evidenceGroup.priority || '未知'}；证据：${formatEvidence(evidenceGroup.evidence)}${reason}`);
+        asArray(evidenceGroup.evidence).forEach((evidence) => {
+          lines.push(`  - ${evidenceGroup.ruleRef || '未知'}｜${evidence.loc || evidence.source || '未知位置'}：${evidence.summary || '未记录证据'}`);
+        });
       });
     });
   });
