@@ -2647,6 +2647,7 @@ function renderFinalMarkdown(finalReview, dispatch, runDir) {
   const issueSummary = issueSummaryFromFinalReview(finalReview);
   const recommendation = finalReview.recommendation || deriveRecommendation(finalReview.protocolGate, issueSummary);
   const executionPlan = dispatch && dispatch.executionPlan;
+  const repositoryRoot = loadRepository(path.join(runDir, 'dispatch.json')).root;
   const lines = [
     `# ${reviewTitle(finalReview.protocolGate, issueSummary)}`,
     '',
@@ -2663,7 +2664,7 @@ function renderFinalMarkdown(finalReview, dispatch, runDir) {
     '## 问题',
     findings.length === 0 ? '- 无' : null,
   ].filter((line) => line !== null);
-  appendFindingLines(lines, findings);
+  appendFindingLines(lines, findings, repositoryRoot);
   if (observations.length > 0) {
     lines.push('', '## 观察项');
     observations.forEach((observation) => {
@@ -2708,6 +2709,13 @@ function renderResponseMarkdown(runDir, finalReview, gate) {
   const finalReviewPath = path.resolve(runDir, 'finalReview.json');
   const dispatchPath = path.resolve(runDir, 'dispatch.json');
   const findings = asArray(finalReview.findings);
+  const finalFindingLines = new Map();
+  if (fs.existsSync(finalMdPath)) {
+    fs.readFileSync(finalMdPath, 'utf8').split('\n').forEach((line, index) => {
+      const match = line.match(/^(?:####|-)\s+(F\d{3,})：/);
+      if (match) finalFindingLines.set(match[1], index + 1);
+    });
+  }
   const issueSummary = gate && gate.issueSummary ? gate.issueSummary : issueSummaryFromFinalReview(finalReview);
   const protocolGate = gate && gate.protocolGate ? gate.protocolGate : finalReview.protocolGate;
   const recommendation = gate && gate.recommendation ? gate.recommendation : finalReview.recommendation || deriveRecommendation(protocolGate, issueSummary);
@@ -2728,7 +2736,7 @@ function renderResponseMarkdown(runDir, finalReview, gate) {
   const cannotVerifyItems = asArray(finalReview.cannotVerifyItems);
   if (findings.length > 0) {
     lines.push('', '## 问题');
-    appendResponseFindingLines(lines, findings);
+    appendResponseFindingLines(lines, findings, finalMdPath, finalFindingLines);
   }
   if (cannotVerifyItems.length > 0) {
     lines.push('', '## 无法验证');
@@ -2752,7 +2760,7 @@ function renderResponseMarkdown(runDir, finalReview, gate) {
   return lines.join('\n');
 }
 
-function appendFindingLines(lines, findings) {
+function appendFindingLines(lines, findings, repositoryRoot) {
   const groups = [
     ['must_fix', '必须修复'],
     ['should_fix', '建议修复'],
@@ -2760,18 +2768,21 @@ function appendFindingLines(lines, findings) {
   groups.forEach(([priority, title]) => {
     const items = findings.filter((finding) => finding && finding.priority === priority);
     if (items.length === 0) return;
-    lines.push(`### ${title}`);
+    lines.push('', `### ${title}`);
     items.forEach((finding) => {
-      lines.push(`- ${finding.findingId}：${finding.rootCause}`);
+      lines.push('', `#### ${finding.findingId}：${finding.rootCause}`);
       asArray(finding.evidenceGroups).forEach((evidenceGroup) => {
-        const reason = evidenceGroup.priorityReason ? `；原因：${evidenceGroup.priorityReason}` : '';
-        lines.push(`  - ${evidenceGroup.reviewItemId} | ${evidenceGroup.ruleRef} | ${evidenceGroup.ruleLevel} | 优先级：${evidenceGroup.priority} | ${label(evidenceGroup.origin)} | ${evidenceGroup.targetId}：${formatEvidence(evidenceGroup.evidence)}${reason}`);
+        lines.push(`- ${evidenceGroup.reviewItemId}｜${evidenceGroup.ruleRef}（${evidenceGroup.ruleLevel}）｜${evidenceGroup.targetId}｜${label(evidenceGroup.origin)}`);
+        if (evidenceGroup.priorityReason) lines.push(`  - 优先级原因：${evidenceGroup.priorityReason}`);
+        asArray(evidenceGroup.evidence).forEach((evidence) => {
+          lines.push(`  - ${evidence.summary || '未记录证据'}｜${formatEvidenceLocation(evidence, repositoryRoot)}`);
+        });
       });
     });
   });
 }
 
-function appendResponseFindingLines(lines, findings) {
+function appendResponseFindingLines(lines, findings, finalMdPath, finalFindingLines) {
   const groups = [
     ['must_fix', '必须修复'],
     ['should_fix', '建议修复'],
@@ -2781,19 +2792,9 @@ function appendResponseFindingLines(lines, findings) {
     if (items.length === 0) return;
     lines.push(`### ${title}`);
     items.forEach((finding) => {
-      lines.push(`- ${finding.findingId}：${finding.rootCause}`);
-      const evidenceByRuleRef = new Map();
-      asArray(finding.evidenceGroups).forEach((evidenceGroup) => {
-        const ruleRef = evidenceGroup.ruleRef || '未知';
-        if (!evidenceByRuleRef.has(ruleRef)) evidenceByRuleRef.set(ruleRef, []);
-        evidenceByRuleRef.get(ruleRef).push(...asArray(evidenceGroup.evidence));
-      });
-      evidenceByRuleRef.forEach((evidenceItems, ruleRef) => {
-        lines.push(`  - ${ruleRef}`);
-        evidenceItems.forEach((evidence) => {
-          lines.push(`    - ${evidence.summary || '未记录证据'}｜${evidence.loc || evidence.source || '未知位置'}`);
-        });
-      });
+      const finalLine = finalFindingLines.get(finding.findingId);
+      const target = finalLine ? `${finalMdPath}:${finalLine}` : finalMdPath;
+      lines.push(`- ${formatMarkdownFileLink(finding.findingId, target)}：${finding.rootCause}`);
     });
   });
 }
@@ -3330,6 +3331,21 @@ function formatEvidence(evidence) {
     if (item && typeof item.summary === 'string') return item.summary;
     return JSON.stringify(item);
   }).join('；');
+}
+
+function formatEvidenceLocation(evidence, repositoryRoot) {
+  const location = evidence && (evidence.loc || evidence.source);
+  if (!isNonEmptyString(location) || !isNonEmptyString(evidence && evidence.loc)) return location || '未知位置';
+  const match = location.match(/^(.+?):(\d+)(?:-\d+)?$/);
+  const repoPath = match ? match[1] : location;
+  try {
+    assertSafeRepoRelativePath(repoPath);
+  } catch {
+    return location;
+  }
+  const filePath = path.join(repositoryRoot, repoPath);
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return location;
+  return formatMarkdownFileLink(location, match ? `${filePath}:${match[2]}` : filePath);
 }
 
 function escapeTableCell(value) {

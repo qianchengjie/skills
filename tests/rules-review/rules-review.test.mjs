@@ -508,17 +508,23 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
   assert.equal(response.split(rootCause).length - 1, 1);
   assert.match(response, /## 问题/);
   assert.doesNotMatch(response, /## 审查结果/);
-  assert.match(finalMarkdown, /优先级：must_fix/);
-  assert.match(finalMarkdown, /优先级：should_fix/);
-  assert.ok(response.includes([
-    `- F001：${rootCause}`,
-    "  - CORE-001",
-    "    - CI 是否组装 backend 制品｜src/main.js:1",
-    "    - WebView 是否允许进入 /backend｜src/other.js:1",
-    "  - AUX-001",
-    "    - 独立宿主是否生成 /backend 路由｜src/host.js:1",
+  const finalFindingLine = finalMarkdown.split("\n").findIndex((line) => line === `#### F001：${rootCause}`) + 1;
+  const repositoryRoot = fs.realpathSync(root);
+  assert.ok(finalFindingLine > 0);
+  assert.ok(finalMarkdown.includes([
+    `#### F001：${rootCause}`,
+    "- RI001｜CORE-001（SHOULD）｜T001｜本次引入",
+    "  - 优先级原因：共同门禁缺失会让无制品入口进入生产路径。",
+    `  - CI 是否组装 backend 制品｜[src/main.js:1](${path.join(repositoryRoot, "src/main.js")}:1)`,
+    "- RI002｜CORE-001（SHOULD）｜T002｜本次引入",
+    `  - WebView 是否允许进入 /backend｜[src/other.js:1](${path.join(repositoryRoot, "src/other.js")}:1)`,
+    "- RI003｜AUX-001（SHOULD）｜T003｜本次引入",
+    `  - 独立宿主是否生成 /backend 路由｜[src/host.js:1](${path.join(repositoryRoot, "src/host.js")}:1)`,
   ].join("\n")));
-  assert.doesNotMatch(response, /目标：T00[123]|来源：|优先级：(must_fix|should_fix)/);
+  assert.ok(response.includes([
+    `- [F001](${path.join(runDir, "final.md")}:${finalFindingLine})：${rootCause}`,
+  ].join("\n")));
+  assert.doesNotMatch(response, /CORE-001|AUX-001|src\/(?:main|other|host)\.js:1|目标：T00[123]|来源：|优先级：(must_fix|should_fix)/);
 
   const schema = readJson(path.join(repoRoot, "skills/rules-review/schemas/final-review.schema.json"));
   for (const definition of ["issueSummary", "cannotVerifyItem", "validationResult", "finding", "findingEvidenceGroup", "observation", "evidence"]) {
