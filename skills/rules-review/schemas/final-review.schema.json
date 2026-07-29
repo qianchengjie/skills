@@ -32,6 +32,7 @@
   "$defs": {
     "issueSummary": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["findings", "mustFix", "shouldFix", "cannotVerify", "observations"],
       "properties": {
         "findings": { "type": "integer", "minimum": 0 },
@@ -43,6 +44,7 @@
     },
     "cannotVerifyItem": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["reviewItemId", "ruleRef", "targetId", "reason"],
       "properties": {
         "reviewItemId": { "type": "string", "pattern": "^RI\\d{3,}$" },
@@ -53,6 +55,7 @@
     },
     "validationResult": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["mode", "ok", "protocolGate", "semanticVerdict", "issueSummary", "recommendation"],
       "properties": {
         "mode": { "type": "string", "minLength": 1 },
@@ -65,6 +68,7 @@
     },
     "finding": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["findingId", "rootCause", "priority", "evidenceGroups"],
       "properties": {
         "findingId": { "type": "string", "pattern": "^F\\d{3,}$" },
@@ -80,6 +84,7 @@
     },
     "findingEvidenceGroup": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["reviewItemId", "ruleRef", "targetId", "ruleLevel", "origin", "priority", "evidence"],
       "properties": {
         "reviewItemId": { "type": "string", "pattern": "^RI\\d{3,}$" },
@@ -97,6 +102,7 @@
     },
     "observation": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["reviewItemId", "ruleRef", "targetId", "ruleLevel", "origin"],
       "anyOf": [
         { "required": ["reason"] },
@@ -128,6 +134,7 @@
     },
     "evidence": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["summary"],
       "anyOf": [
         { "required": ["loc"] },

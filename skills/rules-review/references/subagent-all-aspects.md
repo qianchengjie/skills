@@ -30,7 +30,7 @@ git show <targetTree>:<path>
 - `finding` 包含 origin、evidence 与非空 `rootCause`，不含 findingId。
 - `observation` 包含 origin，以及 reason 或 evidence。
 - required reviewItem 不返回 `not_applicable`；无法判断时返回 `cannot_verify`。
-- 多个 finding results 属于同一根因时，分别保留 result，并填写字节完全相同的 `rootCause`；aggregator 会合并展示并保留各自 evidence。不同根因不得复用同一文本。
+- 本 batch 内多个 finding results 属于同一根因时，分别保留 result，并填写字节完全相同的 `rootCause`；aggregator 会合并展示并保留各自 evidence。不同根因不得复用同一文本；不同 batch 不做根因合并。
 - 规则外事项不得放进 result。仅当审查中自然注意到且值得提醒时，可在 shard 顶层写 `otherConcerns: string[]`；不要求 evidence，不为此额外阅读、测试或重试，没有则省略。明确违反 task 规则的事项不得放入 `otherConcerns`。字段中的非字符串、空字符串和重复项由 aggregator 忽略。
 
 完成后 controller 先运行 shard validator，再聚合当前 run。格式错误或结果缺项不能由 controller 代写修补，只能要求原 reviewer 返还合规 shard。

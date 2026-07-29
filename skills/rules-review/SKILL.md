@@ -183,7 +183,7 @@ ruleRef x targetId = reviewItem
 - `dispatch.json`：controller 的规则、目标、适用性、固定 range 和分派计划；不得含审查结论。
 - `tasks/*.json`：由 `build-tasks` 从 dispatch 机械投影，携带相同 `reviewRange`、`ruleInputSource`、`inputSnapshot`，以及规则索引和本批规则的 `ruleSnapshot`；`taskHash` 是删除自身字段后整份 task 的 canonical JSON SHA-256。
 - `shards/*.json`：reviewer 对本 batch 的当前结果，必须回显 task 的 `targetTree` 与 `taskHash`；是产生 `passed / finding / observation / not_applicable / cannot_verify` 的唯一位置。可选的 `otherConcerns` 只承载审查过程中自然注意到的规则外事项。
-- `finalReview.json`：由 `aggregate-final` 仅从当前 run 的 shards 聚合；同一显式 `rootCause` 的 finding results 合并为一个 finding，并逐项保留 `evidenceGroups`。
+- `finalReview.json`：由 `aggregate-final` 仅从当前 run 的 shards 聚合；同一 batch 内相同显式 `rootCause` 的 finding results 合并为一个 finding，并逐项保留 `evidenceGroups`。
 - `final.md`、`response.md`：展示层，不是事实源。
 
 不允许从旧 run 复制 result，不允许扫描目录猜测前序 run，不允许在 dispatch 中引用旧 review 工件。
@@ -200,11 +200,12 @@ reviewer 必须按 task 中的全部 reviewItems 分别完成审查并返回结�
 - `not_applicable`：只允许非 required reviewItem，包含 reason。
 - `cannot_verify`：包含 reason 或 evidence。
 
-多个 reviewItem 分别违反规则但属于同一根因时，每项仍返回 `finding`，并使用字节完全相同的 `rootCause` 描述共同失效的不变量。aggregator 只按这个显式值机械分组，不根据措辞相似度、代码位置或证据内容猜测：
+同一 batch 内多个 reviewItem 分别违反规则但属于同一根因时，每项仍返回 `finding`，并使用字节完全相同的 `rootCause` 描述共同失效的不变量。aggregator 只按 batch 身份与这个显式值机械分组，不根据措辞相似度、代码位置或证据内容猜测：
 
 - final finding 的 priority 取组内最高级别，`must_fix` 优先于 `should_fix`。
 - 每个原始 finding result 都保留为独立 `evidenceGroups` 项，不能因合并而丢失 target、ruleRef、origin、priority 或 evidence。
-- 同一 batch 由 reviewer 完成根因对齐；跨 batch 疑似同根因时，controller 只能要求原 reviewer 复核并对齐 `rootCause`，不得自行改写 shard。
+- 同一 batch 由 reviewer 完成根因对齐；不同 batch 即使 `rootCause` 字节完全相同也不合并。
+- v7 不支持跨 batch 根因身份；后续如需支持，必须引入经显式确认的独立身份，不能依赖自由文本碰撞。
 - 根因是否相同是 reviewer 的语义判断；validator 只校验 `rootCause` 已记录、精确分组和结果引用闭合。
 
 阅读规则判断所需的业务链路是允许的；顺带发现规则外问题也可能发生，但不得把它写成 finding 或 observation。若值得提醒，只能写入 shard 顶层可选的 `otherConcerns: string[]`。已违反当前 task 规则的事项必须保留为对应 reviewItem 的正式 result，即使它与其它 result 同根因，也不得降级到 `otherConcerns`：

@@ -2132,12 +2132,16 @@ function ruleLevelForDispatchResult(reviewResult, dispatch) {
 function deriveFindingItems(results, dispatch) {
   const reviewItems = new Map(asArray(dispatch && dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
   const ruleSources = new Map(asArray(dispatch && dispatch.ruleSet && dispatch.ruleSet.ruleSources).map((source) => [source.ruleRef, source]));
+  const reviewBatchIds = new Map(asArray(dispatch && dispatch.reviewBatches).flatMap((batch) => (
+    asArray(batch && batch.reviewItemIds).map((reviewItemId) => [reviewItemId, batch.reviewBatchId])
+  )));
   const occurrences = asArray(results)
     .filter((reviewResult) => reviewResult && reviewResult.status === 'finding')
     .map((reviewResult) => {
       const item = reviewItems.get(reviewResult.reviewItemId) || {};
       const source = ruleSources.get(item.ruleRef) || {};
       const occurrence = {
+        reviewBatchId: reviewBatchIds.get(reviewResult.reviewItemId) || `\0${reviewResult.reviewItemId}`,
         rootCause: reviewResult.rootCause,
         reviewItemId: reviewResult.reviewItemId,
         ruleRef: item.ruleRef || 'unknown',
@@ -2157,7 +2161,8 @@ function deriveFindingItems(results, dispatch) {
     });
   const groups = new Map();
   occurrences.forEach((occurrence) => {
-    const key = isNonEmptyString(occurrence.rootCause) ? occurrence.rootCause : `\0${occurrence.reviewItemId}`;
+    const rootCause = isNonEmptyString(occurrence.rootCause) ? occurrence.rootCause : `\0${occurrence.reviewItemId}`;
+    const key = JSON.stringify([occurrence.reviewBatchId, rootCause]);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(occurrence);
   });
@@ -2167,6 +2172,7 @@ function deriveFindingItems(results, dispatch) {
     priority: group.some((occurrence) => occurrence.priority === 'must_fix') ? 'must_fix' : 'should_fix',
     evidenceGroups: group.map((occurrence) => {
       const evidenceGroup = { ...occurrence };
+      delete evidenceGroup.reviewBatchId;
       delete evidenceGroup.rootCause;
       return evidenceGroup;
     }),
@@ -2418,6 +2424,7 @@ function validateFinalReviewShape(finalReview, artifact, result) {
   asArray(finalReview.findings).forEach((finding, index) => {
     const pointer = `/findings/${index}`;
     requireFields(finding, artifact, result, 'FR012', pointer, ['findingId', 'rootCause', 'priority', 'evidenceGroups']);
+    rejectUnsupportedFields(finding, artifact, result, 'FR091', pointer, ['findingId', 'rootCause', 'priority', 'evidenceGroups'], 'finalReview finding');
     if (!FINDING_RE.test(finding && finding.findingId)) addViolation(result, 'FR074', artifact, `/findings/${index}/findingId`, 'final findingId must match F followed by at least three digits', 'Fxxx...', finding && finding.findingId);
     if (!isNonEmptyString(finding && finding.rootCause)) addViolation(result, 'FR085', artifact, `${pointer}/rootCause`, 'final finding rootCause must be non-empty string', 'non-empty rootCause', finding && finding.rootCause);
     if (!FINDING_PRIORITIES.includes(finding && finding.priority)) addViolation(result, 'FR061', artifact, `/findings/${index}/priority`, 'final finding priority must be valid', FINDING_PRIORITIES, finding && finding.priority);
@@ -2430,6 +2437,7 @@ function validateFinalReviewShape(finalReview, artifact, result) {
     asArray(finding && finding.evidenceGroups).forEach((evidenceGroup, groupIndex) => {
       const groupPointer = `${pointer}/evidenceGroups/${groupIndex}`;
       requireFields(evidenceGroup, artifact, result, 'FR086', groupPointer, ['reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin', 'priority', 'evidence']);
+      rejectUnsupportedFields(evidenceGroup, artifact, result, 'FR092', groupPointer, ['reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin', 'priority', 'priorityReason', 'upgradeReason', 'originReason', 'evidence'], 'finalReview finding evidenceGroup');
       if (!REVIEW_ITEM_RE.test(evidenceGroup && evidenceGroup.reviewItemId)) addViolation(result, 'FR076', artifact, `${groupPointer}/reviewItemId`, 'finding evidenceGroup reviewItemId must match RI followed by at least three digits', 'RIxxx...', evidenceGroup && evidenceGroup.reviewItemId);
       if (!isNonEmptyString(evidenceGroup && evidenceGroup.ruleRef)) addViolation(result, 'FR087', artifact, `${groupPointer}/ruleRef`, 'finding evidenceGroup ruleRef must be non-empty string', 'string', evidenceGroup && evidenceGroup.ruleRef);
       if (!TARGET_RE.test((evidenceGroup && evidenceGroup.targetId) || '')) addViolation(result, 'FR077', artifact, `${groupPointer}/targetId`, 'finding evidenceGroup targetId must match T followed by at least three digits', 'Txxx...', evidenceGroup && evidenceGroup.targetId);
@@ -2439,11 +2447,13 @@ function validateFinalReviewShape(finalReview, artifact, result) {
       if (evidenceGroup && Object.prototype.hasOwnProperty.call(evidenceGroup, 'acceptedRisk')) {
         addViolation(result, 'FR089', artifact, `${groupPointer}/acceptedRisk`, 'finding evidenceGroup must not contain acceptedRisk', 'field absent', evidenceGroup.acceptedRisk);
       }
-      validateEvidenceArray(evidenceGroup && evidenceGroup.evidence, artifact, result, 'FR090', `${groupPointer}/evidence`, 'finding evidenceGroup requires evidence');
+      validateFinalReviewEvidenceArray(evidenceGroup && evidenceGroup.evidence, artifact, result, 'FR090', `${groupPointer}/evidence`, 'finding evidenceGroup requires evidence');
     });
   });
   asArray(finalReview.observations).forEach((observation, index) => {
-    requireFields(observation, artifact, result, 'FR063', `/observations/${index}`, ['reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin']);
+    const pointer = `/observations/${index}`;
+    requireFields(observation, artifact, result, 'FR063', pointer, ['reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin']);
+    rejectUnsupportedFields(observation, artifact, result, 'FR093', pointer, ['reviewItemId', 'ruleRef', 'targetId', 'ruleLevel', 'origin', 'reason', 'upgradeReason', 'originReason', 'evidence'], 'finalReview observation');
     if (!REVIEW_ITEM_RE.test(observation && observation.reviewItemId)) addViolation(result, 'FR064', artifact, `/observations/${index}/reviewItemId`, 'observation reviewItemId must match RIxxx', 'RIxxx', observation && observation.reviewItemId);
     if (!isNonEmptyString(observation && observation.ruleRef)) addViolation(result, 'FR065', artifact, `/observations/${index}/ruleRef`, 'observation ruleRef must be non-empty string', 'string', observation && observation.ruleRef);
     if (!TARGET_RE.test((observation && observation.targetId) || '')) addViolation(result, 'FR066', artifact, `/observations/${index}/targetId`, 'observation targetId must match T followed by at least three digits', 'Txxx...', observation && observation.targetId);
@@ -2453,7 +2463,7 @@ function validateFinalReviewShape(finalReview, artifact, result) {
       validateEvidenceArray(observation.evidence, artifact, result, 'FR073', `/observations/${index}/evidence`, 'non-ADVISORY observation with exposed_by_change or pre_existing requires evidence');
     }
     if (!hasValidEvidenceArray(observation && observation.evidence) && !isNonEmptyString(observation && observation.reason)) addViolation(result, 'FR069', artifact, `/observations/${index}`, 'observation requires reason or evidence', 'reason or evidence[]', observation);
-    if (observation && observation.evidence !== undefined) validateEvidenceArray(observation.evidence, artifact, result, 'FR070', `/observations/${index}/evidence`, 'observation evidence must be reviewable when present');
+    if (observation && observation.evidence !== undefined) validateFinalReviewEvidenceArray(observation.evidence, artifact, result, 'FR070', `/observations/${index}/evidence`, 'observation evidence must be reviewable when present');
   });
 }
 
@@ -2742,7 +2752,7 @@ function appendFindingLines(lines, findings) {
       lines.push(`- ${finding.findingId}：${finding.rootCause}`);
       asArray(finding.evidenceGroups).forEach((evidenceGroup) => {
         const reason = evidenceGroup.priorityReason ? `；原因：${evidenceGroup.priorityReason}` : '';
-        lines.push(`  - ${evidenceGroup.reviewItemId} | ${evidenceGroup.ruleRef} | ${evidenceGroup.ruleLevel} | ${label(evidenceGroup.origin)} | ${evidenceGroup.targetId}：${formatEvidence(evidenceGroup.evidence)}${reason}`);
+        lines.push(`  - ${evidenceGroup.reviewItemId} | ${evidenceGroup.ruleRef} | ${evidenceGroup.ruleLevel} | 优先级：${evidenceGroup.priority} | ${label(evidenceGroup.origin)} | ${evidenceGroup.targetId}：${formatEvidence(evidenceGroup.evidence)}${reason}`);
       });
     });
   });
@@ -2761,7 +2771,7 @@ function appendResponseFindingLines(lines, findings) {
       lines.push(`- ${finding.findingId}：${finding.rootCause}`);
       asArray(finding.evidenceGroups).forEach((evidenceGroup) => {
         const reason = evidenceGroup.priorityReason ? `；原因：${evidenceGroup.priorityReason}` : '';
-        lines.push(`  - 规则：${evidenceGroup.ruleRef || '未知'}；目标：${evidenceGroup.targetId || '未知'}；来源：${label(evidenceGroup.origin)}；证据：${formatEvidence(evidenceGroup.evidence)}${reason}`);
+        lines.push(`  - 规则：${evidenceGroup.ruleRef || '未知'}；目标：${evidenceGroup.targetId || '未知'}；来源：${label(evidenceGroup.origin)}；优先级：${evidenceGroup.priority || '未知'}；证据：${formatEvidence(evidenceGroup.evidence)}${reason}`);
       });
     });
   });
@@ -2823,6 +2833,7 @@ function validateIssueSummary(value, artifact, result, code, pointer) {
     addViolation(result, code, artifact, pointer, 'issueSummary must be object', 'object', value);
     return;
   }
+  rejectUnsupportedFields(value, artifact, result, code, pointer, ISSUE_SUMMARY_FIELDS, 'issueSummary');
   ISSUE_SUMMARY_FIELDS.forEach((field) => {
     if (!Number.isInteger(value[field]) || value[field] < 0) {
       addViolation(result, code, artifact, `${pointer}/${field}`, 'issueSummary count must be non-negative integer', 'non-negative integer', value[field]);
@@ -2842,6 +2853,7 @@ function validateValidationResults(finalReview, artifact, result) {
   asArray(finalReview.validationResults).forEach((validation, index) => {
     const pointer = `/validationResults/${index}`;
     requireFields(validation, artifact, result, 'FR041', pointer, ['mode', 'ok', 'protocolGate', 'semanticVerdict', 'issueSummary', 'recommendation']);
+    rejectUnsupportedFields(validation, artifact, result, 'FR096', pointer, ['mode', 'ok', 'protocolGate', 'semanticVerdict', 'issueSummary', 'recommendation'], 'validationResult');
     if (!isNonEmptyString(validation && validation.mode)) addViolation(result, 'FR042', artifact, `${pointer}/mode`, 'validation mode must be non-empty string', 'string', validation && validation.mode);
     if (typeof (validation && validation.ok) !== 'boolean') addViolation(result, 'FR043', artifact, `${pointer}/ok`, 'validation ok must be boolean', 'boolean', validation && validation.ok);
     if (!PROTOCOL_GATES.includes(validation && validation.protocolGate)) addViolation(result, 'FR044', artifact, `${pointer}/protocolGate`, 'validation protocolGate must be valid', PROTOCOL_GATES, validation && validation.protocolGate);
@@ -2883,7 +2895,9 @@ function validateCannotVerifyItems(value, artifact, result) {
     return;
   }
   value.forEach((item, index) => {
-    requireFields(item, artifact, result, 'FR037', `/cannotVerifyItems/${index}`, ['reviewItemId', 'ruleRef', 'targetId', 'reason']);
+    const pointer = `/cannotVerifyItems/${index}`;
+    requireFields(item, artifact, result, 'FR037', pointer, ['reviewItemId', 'ruleRef', 'targetId', 'reason']);
+    rejectUnsupportedFields(item, artifact, result, 'FR094', pointer, ['reviewItemId', 'ruleRef', 'targetId', 'reason'], 'finalReview cannotVerify item');
     if (!REVIEW_ITEM_RE.test(item && item.reviewItemId)) addViolation(result, 'FR057', artifact, `/cannotVerifyItems/${index}/reviewItemId`, 'cannotVerify item reviewItemId must match RIxxx', 'RIxxx', item && item.reviewItemId);
     if (!isNonEmptyString(item && item.ruleRef)) addViolation(result, 'FR038', artifact, `/cannotVerifyItems/${index}/ruleRef`, 'cannotVerify item ruleRef must be non-empty string', 'string', item && item.ruleRef);
     if (!TARGET_RE.test((item && item.targetId) || '')) addViolation(result, 'FR039', artifact, `/cannotVerifyItems/${index}/targetId`, 'cannotVerify item targetId must match T followed by at least three digits', 'Txxx...', item && item.targetId);
@@ -3063,6 +3077,13 @@ function validateEvidenceArray(evidence, artifact, result, code, pointer, messag
   if (!hasValidEvidenceArray(evidence)) {
     addViolation(result, code, artifact, pointer, message, 'non-empty evidence[] with summary and loc/source', evidence);
   }
+}
+
+function validateFinalReviewEvidenceArray(evidence, artifact, result, code, pointer, message) {
+  validateEvidenceArray(evidence, artifact, result, code, pointer, message);
+  asArray(evidence).forEach((item, index) => {
+    rejectUnsupportedFields(item, artifact, result, 'FR095', `${pointer}/${index}`, ['summary', 'loc', 'source'], 'finalReview evidence');
+  });
 }
 
 function hasValidEvidenceArray(evidence) {

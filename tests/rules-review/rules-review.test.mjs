@@ -316,7 +316,7 @@ test("其他关注项只按需展示，不影响 rules-review 结论和计数", 
   assert.doesNotMatch(response, /## 其他关注项/);
 });
 
-test("语义切片分别审查，最终 finding 按显式 rootCause 合并并保留全部证据组", async (t) => {
+test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause 合并并保留全部证据组", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
@@ -325,6 +325,7 @@ test("语义切片分别审查，最终 finding 按显式 rootCause 合并并保
 
   const dispatchFile = createDraft(root, { runId: "root-cause-grouping" });
   const draftDispatch = readJson(dispatchFile);
+  draftDispatch.ruleSet.ruleSources[0].ruleLevel = "SHOULD";
   const targetSpecs = [
     ["T001", "src/main.js", "CI 是否组装 backend 制品"],
     ["T002", "src/other.js", "WebView 是否允许进入 /backend"],
@@ -380,6 +381,10 @@ test("语义切片分别审查，最终 finding 按显式 rootCause 合并并保
       status: "finding",
       rootCause,
       origin: "introduced_by_change",
+      ...(index === 0 ? {
+        priority: "must_fix",
+        priorityReason: "共同门禁缺失会让无制品入口进入生产路径。",
+      } : {}),
       evidence: [{
         loc: `${targetSpecs[index][1]}:1`,
         summary: targetSpecs[index][2],
@@ -408,25 +413,167 @@ test("语义切片分别审查，最终 finding 按显式 rootCause 合并并保
   }
 
   const finalReview = readJson(path.join(runDir, "finalReview.json"));
+  const finalMarkdown = fs.readFileSync(path.join(runDir, "final.md"), "utf8");
   const response = fs.readFileSync(path.join(runDir, "response.md"), "utf8");
   assert.deepEqual(finalReview.issueSummary, { findings: 1, mustFix: 1, shouldFix: 0, cannotVerify: 0, observations: 0 });
   assert.equal(finalReview.recommendation, "must_fix_before_merge");
   assert.equal(finalReview.findings.length, 1);
   assert.equal(finalReview.findings[0].rootCause, rootCause);
   assert.deepEqual(finalReview.findings[0].evidenceGroups.map((group) => group.reviewItemId), ["RI001", "RI002", "RI003"]);
+  assert.deepEqual(finalReview.findings[0].evidenceGroups.map((group) => group.priority), ["must_fix", "should_fix", "should_fix"]);
   assert.equal(finalReview.findings[0].evidenceGroups.length, 3);
   assert.equal("otherConcerns" in finalReview, false);
   assert.equal(response.split(rootCause).length - 1, 1);
+  assert.match(finalMarkdown, /优先级：must_fix/);
+  assert.match(finalMarkdown, /优先级：should_fix/);
+  assert.match(response, /优先级：must_fix/);
+  assert.match(response, /优先级：should_fix/);
   assert.match(response, /目标：T001/);
   assert.match(response, /目标：T002/);
   assert.match(response, /目标：T003/);
+
+  const schema = readJson(path.join(repoRoot, "skills/rules-review/schemas/final-review.schema.json"));
+  for (const definition of ["issueSummary", "cannotVerifyItem", "validationResult", "finding", "findingEvidenceGroup", "observation", "evidence"]) {
+    assert.equal(schema.$defs[definition].additionalProperties, false, `${definition} 必须拒绝未知字段`);
+  }
+  const invalidFinalReviewFile = path.join(root, "invalid-final-review.json");
+  const unsupportedFieldCases = [
+    ["finding 旧版字段", (value) => { value.findings[0].reviewItemId = "RI999"; }, /finalReview finding contains unsupported field/],
+    ["evidenceGroup findingId", (value) => { value.findings[0].evidenceGroups[0].findingId = "F999"; }, /finalReview finding evidenceGroup contains unsupported field/],
+    ["evidenceGroup 第二个 rootCause", (value) => { value.findings[0].evidenceGroups[0].rootCause = "矛盾根因"; }, /finalReview finding evidenceGroup contains unsupported field/],
+    ["evidence 未知字段", (value) => { value.findings[0].evidenceGroups[0].evidence[0].unknown = true; }, /finalReview evidence contains unsupported field/],
+    ["observation 未知字段", (value) => {
+      value.observations = [{
+        reviewItemId: "RI001",
+        ruleRef: "CORE-001",
+        targetId: "T001",
+        ruleLevel: "SHOULD",
+        origin: "introduced_by_change",
+        reason: "观察原因",
+        unknown: true,
+      }];
+    }, /finalReview observation contains unsupported field/],
+    ["cannotVerifyItem 未知字段", (value) => {
+      value.cannotVerifyItems = [{
+        reviewItemId: "RI001",
+        ruleRef: "CORE-001",
+        targetId: "T001",
+        reason: "无法验证",
+        unknown: true,
+      }];
+    }, /finalReview cannotVerify item contains unsupported field/],
+    ["issueSummary 未知字段", (value) => { value.issueSummary.unknown = 1; }, /issueSummary contains unsupported field/],
+    ["validationResult 未知字段", (value) => { value.validationResults[0].unknown = true; }, /validationResult contains unsupported field/],
+  ];
+  for (const [name, mutate, pattern] of unsupportedFieldCases) {
+    const invalidFinalReview = structuredClone(finalReview);
+    mutate(invalidFinalReview);
+    writeJson(invalidFinalReviewFile, invalidFinalReview);
+    await expectFailure(["--mode", "final-review", "--input", invalidFinalReviewFile], pattern)
+      .catch((error) => { throw new Error(`${name}: ${error.message}`, { cause: error }); });
+  }
 
   shard.results[2].rootCause = "独立宿主单独缺少 backend 路由门禁。";
   writeJson(shardFile, shard);
   await run(["--mode", "aggregate-final", "--dir", runDir, "--output", path.join(runDir, "finalReview.json")]);
   const splitFinalReview = readJson(path.join(runDir, "finalReview.json"));
   assert.equal(splitFinalReview.findings.length, 2, "aggregator 不应按相似措辞推断同一根因");
-  assert.deepEqual(splitFinalReview.issueSummary, { findings: 2, mustFix: 2, shouldFix: 0, cannotVerify: 0, observations: 0 });
+  assert.deepEqual(splitFinalReview.issueSummary, { findings: 2, mustFix: 1, shouldFix: 1, cannotVerify: 0, observations: 0 });
+});
+
+test("不同 batch 的相同 rootCause 不会发生隐式跨 batch 合并", async (t) => {
+  const root = createRepository();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
+  fs.writeFileSync(path.join(root, "src/other.js"), "export const other = 2;\n");
+
+  const dispatchFile = createDraft(root, { runId: "cross-batch-root-cause-collision" });
+  const draftDispatch = readJson(dispatchFile);
+  draftDispatch.targets.changedUnits = [
+    {
+      targetId: "T001",
+      targetKind: "changed_unit",
+      inputRefs: ["src/main.js"],
+      loc: "src/main.js:1",
+      summary: "第一条链路",
+    },
+    {
+      targetId: "T002",
+      targetKind: "changed_unit",
+      inputRefs: ["src/other.js"],
+      loc: "src/other.js:1",
+      summary: "第二条链路",
+    },
+  ];
+  draftDispatch.applicabilityMatrix = draftDispatch.targets.changedUnits.map((target, index) => ({
+    ruleRef: "CORE-001",
+    targetId: target.targetId,
+    targetKind: "changed_unit",
+    applicability: "applicable",
+    reviewItemId: `RI${String(index + 1).padStart(3, "0")}`,
+    evidence: [{ loc: target.loc, summary: "适用性已判断" }],
+  }));
+  draftDispatch.reviewItems = draftDispatch.targets.changedUnits.map((target, index) => ({
+    reviewItemId: `RI${String(index + 1).padStart(3, "0")}`,
+    ruleRef: "CORE-001",
+    targetKind: "changed_unit",
+    targetId: target.targetId,
+    required: true,
+  }));
+  draftDispatch.executionPlan.mode = "multi_batch";
+  draftDispatch.executionPlan.metrics = {
+    changedUnits: 2,
+    candidates: 0,
+    targets: 2,
+    requiredRuleRefs: 1,
+    reviewItems: 2,
+  };
+  draftDispatch.executionPlan.reason = "两个独立 reviewer 分别审查一条链路";
+  draftDispatch.reviewBatches = ["B001", "B002"].map((reviewBatchId, index) => ({
+    reviewBatchId,
+    ruleSetId: "RS001",
+    reviewItemIds: [`RI${String(index + 1).padStart(3, "0")}`],
+    taskRef: `tasks/${reviewBatchId}.json`,
+    shardRef: `shards/${reviewBatchId}.json`,
+    returnStatus: "returned",
+    aggregateStatus: "aggregated",
+    unaggregatedReason: null,
+  }));
+  writeJson(dispatchFile, draftDispatch);
+
+  const dispatch = await seal(dispatchFile);
+  const runDir = path.dirname(dispatchFile);
+  const taskDir = path.join(runDir, "tasks");
+  await run(["--mode", "build-tasks", "--dispatch", dispatchFile, "--out", taskDir]);
+  const rootCause = "缺少输入校验";
+  for (const reviewBatchId of ["B001", "B002"]) {
+    const task = readJson(path.join(taskDir, `${reviewBatchId}.json`));
+    writeJson(path.join(runDir, `shards/${reviewBatchId}.json`), {
+      kind: "rules-review-shard",
+      schemaVersion: 7,
+      runId: dispatch.runId,
+      reviewBatchId,
+      targetTree: dispatch.reviewRange.targetTree,
+      taskHash: task.taskHash,
+      results: [{
+        reviewItemId: task.reviewItems[0].reviewItemId,
+        status: "finding",
+        rootCause,
+        origin: "introduced_by_change",
+        evidence: [{
+          loc: task.targets[0].loc,
+          summary: `${reviewBatchId} 独立发现的问题`,
+        }],
+      }],
+    });
+  }
+
+  await run(["--mode", "aggregate-final", "--dir", runDir, "--output", path.join(runDir, "finalReview.json")]);
+  const finalReview = readJson(path.join(runDir, "finalReview.json"));
+  assert.equal(finalReview.findings.length, 2);
+  assert.deepEqual(finalReview.findings.map((finding) => finding.rootCause), [rootCause, rootCause]);
+  assert.deepEqual(finalReview.findings.map((finding) => finding.evidenceGroups.length), [1, 1]);
+  assert.deepEqual(finalReview.issueSummary, { findings: 2, mustFix: 2, shouldFix: 0, cannotVerify: 0, observations: 0 });
 });
 
 test("target-commit 固定完整提交范围，且封印过程不写 Git object 或修改工作区", async (t) => {
@@ -1067,9 +1214,11 @@ test("文档声明 commit-only、每 TARGET fresh run 与临时生命周期", ()
   assert.match(skill, /不承诺跨会话、跨环境、跨天或长期恢复/);
   assert.match(skill, /git diff <baseTree> <targetTree>/);
   assert.match(skill, /不能在发现首个问题后停止/);
-  assert.match(skill, /同一显式 `rootCause`/);
+  assert.match(skill, /同一 batch 内相同显式 `rootCause`/);
+  assert.match(skill, /不同 batch 即使 `rootCause` 字节完全相同也不合并/);
   assert.match(skill, /不得降级到 `otherConcerns`/);
   assert.match(reviewer, /git show <targetTree>:<path>/);
+  assert.match(reviewer, /不同 batch 不做根因合并/);
   assert.doesNotMatch(skill, /--current|--staged|--target-tree|bind-commit/);
   assert.doesNotMatch(skill, /baseRunId|effectiveResults|fullReason/);
 });
