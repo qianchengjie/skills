@@ -1,0 +1,457 @@
+{
+  "kind": "rules-review-dispatch-construction-eval-input",
+  "schemaVersion": 1,
+  "runId": "eval-dispatch-construction",
+  "repository": {
+    "fixture": "project.bundle",
+    "baseCommit": "5a0809a0afc327b0e302ef9b4ff2082949175dc6",
+    "targetCommit": "b528a2e91b85127b09e74252f918059695ab725f",
+    "rulesCommit": "b528a2e91b85127b09e74252f918059695ab725f",
+    "excludedFiles": []
+  },
+  "ruleProjection": {
+    "indexFile": ".agents/rules/index.md",
+    "ruleSourceFiles": {
+      "CORE": ".agents/rules/always/constraints.md"
+    },
+    "ruleSetId": "rules-eval-dispatch-construction",
+    "candidateRuleRefs": [
+      "CORE-001",
+      "CORE-002",
+      "CORE-003",
+      "CORE-004",
+      "CORE-005",
+      "CORE-006",
+      "CORE-007",
+      "CORE-008",
+      "CORE-009",
+      "CORE-010",
+      "CORE-011",
+      "CORE-012",
+      "CORE-013",
+      "CORE-014",
+      "CORE-015",
+      "CORE-016",
+      "CORE-017",
+      "CORE-018",
+      "CORE-019",
+      "CORE-020",
+      "CORE-021",
+      "CORE-022",
+      "CORE-023",
+      "CORE-024",
+      "CORE-025",
+      "CORE-026",
+      "CORE-027",
+      "CORE-028",
+      "CORE-029",
+      "CORE-030",
+      "CORE-031",
+      "CORE-032",
+      "CORE-033",
+      "CORE-034",
+      "CORE-035",
+      "CORE-036",
+      "CORE-037",
+      "CORE-038",
+      "CORE-039",
+      "CORE-040",
+      "CORE-041",
+      "CORE-042",
+      "CORE-043",
+      "CORE-044"
+    ],
+    "selectedRuleRefs": [
+      "CORE-001",
+      "CORE-002",
+      "CORE-003",
+      "CORE-004",
+      "CORE-005",
+      "CORE-006",
+      "CORE-007",
+      "CORE-008",
+      "CORE-009",
+      "CORE-010",
+      "CORE-011",
+      "CORE-012",
+      "CORE-013",
+      "CORE-014",
+      "CORE-015",
+      "CORE-016",
+      "CORE-017",
+      "CORE-018",
+      "CORE-019",
+      "CORE-020",
+      "CORE-021",
+      "CORE-022",
+      "CORE-023",
+      "CORE-024",
+      "CORE-025",
+      "CORE-026",
+      "CORE-027",
+      "CORE-028",
+      "CORE-029",
+      "CORE-030",
+      "CORE-031",
+      "CORE-032"
+    ],
+    "requiredRuleRefs": [
+      "CORE-001",
+      "CORE-002",
+      "CORE-003",
+      "CORE-004",
+      "CORE-005",
+      "CORE-006",
+      "CORE-007",
+      "CORE-008",
+      "CORE-009",
+      "CORE-010",
+      "CORE-011",
+      "CORE-012",
+      "CORE-013",
+      "CORE-014",
+      "CORE-015",
+      "CORE-016",
+      "CORE-017",
+      "CORE-018",
+      "CORE-019",
+      "CORE-020",
+      "CORE-021",
+      "CORE-022",
+      "CORE-023",
+      "CORE-024",
+      "CORE-025",
+      "CORE-026",
+      "CORE-027",
+      "CORE-028",
+      "CORE-029",
+      "CORE-030",
+      "CORE-031",
+      "CORE-032"
+    ],
+    "excludedRuleRefs": [],
+    "globallyNotApplicableRuleRefs": [
+      "CORE-033",
+      "CORE-034",
+      "CORE-035",
+      "CORE-036",
+      "CORE-037",
+      "CORE-038",
+      "CORE-039",
+      "CORE-040",
+      "CORE-041",
+      "CORE-042",
+      "CORE-043",
+      "CORE-044"
+    ]
+  },
+  "targets": {
+    "changedUnits": [
+      {
+        "targetId": "T001",
+        "targetKind": "synthetic_changed_unit_01",
+        "inputRefs": [
+          "src/units/unit-01.txt"
+        ],
+        "loc": "src/units/unit-01.txt:1",
+        "summary": "合成变更单元 01"
+      },
+      {
+        "targetId": "T002",
+        "targetKind": "synthetic_changed_unit_02",
+        "inputRefs": [
+          "src/units/unit-02.txt"
+        ],
+        "loc": "src/units/unit-02.txt:1",
+        "summary": "合成变更单元 02"
+      },
+      {
+        "targetId": "T003",
+        "targetKind": "synthetic_changed_unit_03",
+        "inputRefs": [
+          "src/units/unit-03.txt"
+        ],
+        "loc": "src/units/unit-03.txt:1",
+        "summary": "合成变更单元 03"
+      },
+      {
+        "targetId": "T004",
+        "targetKind": "synthetic_changed_unit_04",
+        "inputRefs": [
+          "src/units/unit-04.txt"
+        ],
+        "loc": "src/units/unit-04.txt:1",
+        "summary": "合成变更单元 04"
+      },
+      {
+        "targetId": "T005",
+        "targetKind": "synthetic_changed_unit_05",
+        "inputRefs": [
+          "src/units/unit-05.txt"
+        ],
+        "loc": "src/units/unit-05.txt:1",
+        "summary": "合成变更单元 05"
+      },
+      {
+        "targetId": "T006",
+        "targetKind": "synthetic_changed_unit_06",
+        "inputRefs": [
+          "src/units/unit-06.txt"
+        ],
+        "loc": "src/units/unit-06.txt:1",
+        "summary": "合成变更单元 06"
+      },
+      {
+        "targetId": "T007",
+        "targetKind": "synthetic_changed_unit_07",
+        "inputRefs": [
+          "src/units/unit-07.txt"
+        ],
+        "loc": "src/units/unit-07.txt:1",
+        "summary": "合成变更单元 07"
+      },
+      {
+        "targetId": "T008",
+        "targetKind": "synthetic_changed_unit_08",
+        "inputRefs": [
+          "src/units/unit-08.txt"
+        ],
+        "loc": "src/units/unit-08.txt:1",
+        "summary": "合成变更单元 08"
+      },
+      {
+        "targetId": "T009",
+        "targetKind": "synthetic_changed_unit_09",
+        "inputRefs": [
+          "src/units/unit-09.txt"
+        ],
+        "loc": "src/units/unit-09.txt:1",
+        "summary": "合成变更单元 09"
+      },
+      {
+        "targetId": "T010",
+        "targetKind": "synthetic_changed_unit_10",
+        "inputRefs": [
+          "src/units/unit-10.txt"
+        ],
+        "loc": "src/units/unit-10.txt:1",
+        "summary": "合成变更单元 10"
+      },
+      {
+        "targetId": "T011",
+        "targetKind": "synthetic_changed_unit_11",
+        "inputRefs": [
+          "src/units/unit-11.txt"
+        ],
+        "loc": "src/units/unit-11.txt:1",
+        "summary": "合成变更单元 11"
+      },
+      {
+        "targetId": "T012",
+        "targetKind": "synthetic_changed_unit_12",
+        "inputRefs": [
+          "src/units/unit-12.txt"
+        ],
+        "loc": "src/units/unit-12.txt:1",
+        "summary": "合成变更单元 12"
+      },
+      {
+        "targetId": "T013",
+        "targetKind": "synthetic_changed_unit_13",
+        "inputRefs": [
+          "src/units/unit-13.txt"
+        ],
+        "loc": "src/units/unit-13.txt:1",
+        "summary": "合成变更单元 13"
+      },
+      {
+        "targetId": "T014",
+        "targetKind": "synthetic_changed_unit_14",
+        "inputRefs": [
+          "src/units/unit-14.txt"
+        ],
+        "loc": "src/units/unit-14.txt:1",
+        "summary": "合成变更单元 14"
+      }
+    ],
+    "candidates": [
+      {
+        "targetId": "T015",
+        "targetKind": "synthetic_context_01",
+        "inputRefs": [
+          "src/context/context-01.txt"
+        ],
+        "loc": "src/context/context-01.txt:1",
+        "summary": "合成上下文候选 01"
+      },
+      {
+        "targetId": "T016",
+        "targetKind": "synthetic_context_02",
+        "inputRefs": [
+          "src/context/context-02.txt"
+        ],
+        "loc": "src/context/context-02.txt:1",
+        "summary": "合成上下文候选 02"
+      }
+    ],
+    "contextExpansions": [
+      {
+        "expansionId": "X001",
+        "reason": "合成规则需要第一个上下文候选",
+        "addedTargetIds": [
+          "T015"
+        ]
+      },
+      {
+        "expansionId": "X002",
+        "reason": "合成规则需要第二个上下文候选",
+        "addedTargetIds": [
+          "T016"
+        ]
+      }
+    ]
+  },
+  "applicability": {
+    "encoding": {
+      "targetOrder": [
+        "T001",
+        "T002",
+        "T003",
+        "T004",
+        "T005",
+        "T006",
+        "T007",
+        "T008",
+        "T009",
+        "T010",
+        "T011",
+        "T012",
+        "T013",
+        "T014",
+        "T015",
+        "T016"
+      ],
+      "legend": {
+        "A": "applicable",
+        "N": "not_applicable"
+      },
+      "rule": "每个 required rule 的字符串必须与 targetOrder 等长；每个字符显式决定对应 ruleRef × targetId，禁止缺省决定。"
+    },
+    "evidenceProjection": {
+      "loc": "{target.loc}",
+      "summary": "合成 fixture 固定 {ruleRef} 对 {target.targetId} 为 {decisionZh}"
+    },
+    "notApplicableReason": "合成 fixture 固定 {ruleRef} 对 {target.targetId} 不适用",
+    "byRule": {
+      "CORE-001": "ANNANNANNANNANNN",
+      "CORE-002": "AANNANNANNANNANN",
+      "CORE-003": "NAANNANNANNANNAN",
+      "CORE-004": "NNAANNANNANNANNA",
+      "CORE-005": "ANNAANNANNANNANN",
+      "CORE-006": "NANNAANNANNANNAN",
+      "CORE-007": "NNANNAANNANNANNA",
+      "CORE-008": "ANNANNAANNANNANN",
+      "CORE-009": "NANNANNAANNANNAN",
+      "CORE-010": "NNANNANNAANNANNA",
+      "CORE-011": "ANNANNANNAANNANN",
+      "CORE-012": "NANNANNANNAANNAN",
+      "CORE-013": "NNANNANNANNAANNA",
+      "CORE-014": "ANNANNANNANNAANN",
+      "CORE-015": "NANNANNANNANNAAN",
+      "CORE-016": "NNANNANNANNANNAA",
+      "CORE-017": "ANNANNANNANNANNA",
+      "CORE-018": "AANNANNANNANNANN",
+      "CORE-019": "NAANNANNANNANNAN",
+      "CORE-020": "NNAANNANNANNANNA",
+      "CORE-021": "ANNAANNANNANNANN",
+      "CORE-022": "NANNAANNANNANNAN",
+      "CORE-023": "NNANNAANNANNANNA",
+      "CORE-024": "ANNANNAANNANNANN",
+      "CORE-025": "NANNANNAANNANNAN",
+      "CORE-026": "NNANNANNAANNANNA",
+      "CORE-027": "ANNANNANNAANNANN",
+      "CORE-028": "NANNANNANNAANNAN",
+      "CORE-029": "NNANNANNANNAANNA",
+      "CORE-030": "ANNANNANNANNAANN",
+      "CORE-031": "NANNANNANNANNAAN",
+      "CORE-032": "NNANNANNANNANNAA"
+    }
+  },
+  "reviewItemProjection": {
+    "required": true,
+    "createFor": "每个 A 决定",
+    "doNotCreateFor": "每个 N 决定"
+  },
+  "executionPlan": {
+    "mode": "multi_batch",
+    "selectedBy": "ai",
+    "policyVersion": "review-execution-policy/v1",
+    "signals": {
+      "userRequestedConcurrency": false
+    },
+    "reason": "191 个合成 reviewItems 超过 30 项硬门槛，固定拆为 5 个 batch",
+    "humanOverride": null,
+    "batchRuleRefs": {
+      "batch-01": [
+        "CORE-001",
+        "CORE-002",
+        "CORE-003",
+        "CORE-004",
+        "CORE-005",
+        "CORE-006",
+        "CORE-007"
+      ],
+      "batch-02": [
+        "CORE-008",
+        "CORE-009",
+        "CORE-010",
+        "CORE-011",
+        "CORE-012",
+        "CORE-013",
+        "CORE-014"
+      ],
+      "batch-03": [
+        "CORE-015",
+        "CORE-016",
+        "CORE-017",
+        "CORE-018",
+        "CORE-019",
+        "CORE-020",
+        "CORE-021"
+      ],
+      "batch-04": [
+        "CORE-022",
+        "CORE-023",
+        "CORE-024",
+        "CORE-025",
+        "CORE-026"
+      ],
+      "batch-05": [
+        "CORE-027",
+        "CORE-028",
+        "CORE-029",
+        "CORE-030",
+        "CORE-031",
+        "CORE-032"
+      ]
+    },
+    "initialBatchState": {
+      "shardRef": null,
+      "returnStatus": "not_started",
+      "aggregateStatus": "not_aggregated"
+    }
+  },
+  "expectedCounts": {
+    "candidateRuleRefs": 44,
+    "selectedRuleRefs": 32,
+    "requiredRuleRefs": 32,
+    "excludedRuleRefs": 0,
+    "globallyNotApplicableRuleRefs": 12,
+    "changedUnits": 14,
+    "candidates": 2,
+    "targets": 16,
+    "applicabilityMatrix": 512,
+    "reviewItems": 191,
+    "reviewBatches": 5
+  }
+}
