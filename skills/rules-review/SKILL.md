@@ -21,7 +21,31 @@ controller 只把用户语法解析为固定的 BASE commit 与 TARGET commit，
 
 BASE、TARGET 或目标解释不唯一时立即 blocked，不任选一种解释。用户要求审查 current、staged、worktree、branch 或裸 tree 时，停止并要求先形成目标 commit；不要把这些入口静默降级为 commit 审查。
 
-内部封印接口：
+调用方已经提供
+`kind = "rules-review-dispatch-construction-eval-input"`、`schemaVersion = 1`
+的紧凑 dispatch 语义输入时，直接使用官方构造入口：
+
+```text
+node scripts/validate.js --mode construct-dispatch \
+  --input <construction-input.json> \
+  --output .rules-review-tmp/<run-id>/dispatch.json
+```
+
+该 v1 输入使用固定字段集合和固定投影描述；其它 kind、未知字段、非规范 commit
+OID 或不符合 `rule-steward` Namespaces 表协议的规则索引一律 fail closed。
+`repository.fixture` 只作为安全的 fixture 来源标识，不参与 Git 定位；当前
+worktree 及三个完整 commit OID 才是输入身份。
+
+入口从当前 Git worktree 读取输入中固定的 BASE、TARGET 和 rules commit，按
+`requiredRuleRefs × targetOrder` 顺序展开适用性矩阵，并按 `A = 适用`、
+`N = 不适用` 连续分配 reviewItem ID。batch key 直接成为 `reviewBatchId`。
+规则投影只读取 `rule-steward` 定义的 active 规则固定字段；规则分区、targets、
+适用性决定和 batch 分组全部来自输入。入口校验 `expectedCounts`，生成快照和
+hash，验证完整 v7 dispatch 后再以“同一 run 仅允许一次成功”的方式原子写入
+最终文件。
+
+没有紧凑语义输入时，controller 先完成语义判断并形成 v7 draft，再使用内部封印
+接口：
 
 ```text
 node scripts/validate.js --mode seal-dispatch \
@@ -222,7 +246,7 @@ reviewer 必须按 task 中的全部 reviewItems 分别完成审查并返回结�
 ## 7. 命令顺序
 
 ```text
-seal-dispatch
+construct-dispatch（已有紧凑语义输入时）或 seal-dispatch
 dispatch
 build-tasks
 task
@@ -236,6 +260,7 @@ render-response
 主要命令：
 
 ```text
+node scripts/validate.js --mode construct-dispatch --input construction-input.json --output .rules-review-tmp/<run-id>/dispatch.json
 node scripts/validate.js --mode dispatch --input dispatch.json
 node scripts/validate.js --mode build-tasks --dispatch dispatch.json --out tasks/
 node scripts/validate.js --mode task --input tasks/<reviewBatchId>.json

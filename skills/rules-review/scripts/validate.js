@@ -7,6 +7,7 @@ const { execFileSync } = require('child_process');
 
 const MODES = new Set([
   'dispatch',
+  'construct-dispatch',
   'seal-dispatch',
   'task',
   'retry-task',
@@ -174,7 +175,9 @@ function run(args) {
   if (mode !== 'render-final' && result.exitCode === 2) return result;
 
   try {
-    if (mode === 'seal-dispatch') {
+    if (mode === 'construct-dispatch') {
+      constructDispatchMode(args, result);
+    } else if (mode === 'seal-dispatch') {
       sealDispatchMode(args, result);
     } else if (mode === 'dispatch') {
       const dispatch = readJson(args.input, args.input, result, 'D001');
@@ -262,6 +265,532 @@ function readText(filePath, artifact, result, code, gateImpact = 'blocked') {
   }
 }
 
+function constructDispatchMode(args, result) {
+  const input = readJson(args.input, args.input, result, 'CD001');
+  if (!input) return;
+  result.artifact = args.output || args.input;
+
+  let temporary = null;
+  try {
+    const root = loadCurrentRepository();
+    const output = resolveConstructionOutput(root, args.output, input.runId);
+    if (fs.existsSync(output)) throw new Error('construct-dispatch output already exists; create a fresh run');
+
+    const draft = buildDispatchDraft(input, root);
+    const sealed = sealDispatchDraft(draft, {
+      base: input.repository.baseCommit,
+      'target-commit': input.repository.targetCommit,
+      'rules-commit': input.repository.rulesCommit,
+    }, root);
+
+    ensureSafeOutputParent(root, output);
+    temporary = path.join(path.dirname(output), `.${path.basename(output)}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`);
+    fs.writeFileSync(temporary, `${JSON.stringify(sealed, null, 2)}\n`, { flag: 'wx' });
+    validateDispatch(sealed, args.output, result, temporary);
+    if (result.violations.length > 0) return;
+    fs.linkSync(temporary, output);
+    fs.unlinkSync(temporary);
+    temporary = null;
+    result.rendered = args.output;
+  } catch (error) {
+    addViolation(result, 'CD002', args.input, null, `construct-dispatch failed closed: ${error.message}`, 'valid compact semantic input and fresh canonical dispatch output', error.message, 2);
+  } finally {
+    if (temporary) {
+      try {
+        fs.unlinkSync(temporary);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    }
+  }
+}
+
+function loadCurrentRepository() {
+  const rootOutput = execFileSync('git', ['-C', process.cwd(), 'rev-parse', '--show-toplevel'], {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  }).trim();
+  if (!rootOutput || rootOutput.includes('\n')) throw new Error('unable to determine a single Git worktree root');
+  return fs.realpathSync(rootOutput);
+}
+
+function resolveConstructionOutput(root, output, runId) {
+  if (!isSafeToken(runId)) throw new Error('construction input runId must be a safe token');
+  if (!isNonEmptyString(output)) throw new Error('construct-dispatch requires --output <relative-path>');
+  assertSafeRepoRelativePath(output);
+  const expected = `.rules-review-tmp/${runId}/dispatch.json`;
+  if (output !== expected) throw new Error(`construct-dispatch output must equal ${expected}`);
+  const resolved = path.resolve(root, ...output.split('/'));
+  assertPathInsideRoot(root, resolved, 'construct-dispatch output');
+  return resolved;
+}
+
+function ensureSafeOutputParent(root, output) {
+  const relative = path.relative(root, path.dirname(output));
+  let current = root;
+  relative.split(path.sep).filter(Boolean).forEach((segment) => {
+    current = path.join(current, segment);
+    try {
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`output parent must be a real directory: ${current}`);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      fs.mkdirSync(current);
+    }
+  });
+}
+
+function buildDispatchDraft(input, root) {
+  if (!isObject(input) || input.schemaVersion !== 1) throw new Error('construction input schemaVersion must equal 1');
+  if (input.kind !== 'rules-review-dispatch-construction-eval-input') {
+    throw new Error('construction input kind must equal rules-review-dispatch-construction-eval-input');
+  }
+  assertConstructionKeys(input, [
+    'kind',
+    'schemaVersion',
+    'runId',
+    'repository',
+    'ruleProjection',
+    'targets',
+    'applicability',
+    'reviewItemProjection',
+    'executionPlan',
+    'expectedCounts',
+  ], 'construction input');
+  const repository = requireConstructionObject(input.repository, 'repository');
+  const ruleProjection = requireConstructionObject(input.ruleProjection, 'ruleProjection');
+  const inputTargets = requireConstructionObject(input.targets, 'targets');
+  const applicability = requireConstructionObject(input.applicability, 'applicability');
+  const inputPlan = requireConstructionObject(input.executionPlan, 'executionPlan');
+  assertConstructionKeys(repository, ['fixture', 'baseCommit', 'targetCommit', 'rulesCommit', 'excludedFiles'], 'repository');
+  assertConstructionKeys(ruleProjection, [
+    'indexFile',
+    'ruleSourceFiles',
+    'ruleSetId',
+    'candidateRuleRefs',
+    'selectedRuleRefs',
+    'requiredRuleRefs',
+    'excludedRuleRefs',
+    'globallyNotApplicableRuleRefs',
+  ], 'ruleProjection');
+  assertConstructionKeys(inputTargets, ['changedUnits', 'candidates', 'contextExpansions'], 'targets');
+  assertConstructionKeys(applicability, ['encoding', 'evidenceProjection', 'notApplicableReason', 'byRule'], 'applicability');
+  assertConstructionKeys(inputPlan, [
+    'mode',
+    'selectedBy',
+    'policyVersion',
+    'signals',
+    'reason',
+    'humanOverride',
+    'batchRuleRefs',
+    'initialBatchState',
+  ], 'executionPlan');
+  assertSafeRepoRelativePath(repository.fixture);
+  resolveConstructionCommit(root, repository.baseCommit, 'repository.baseCommit');
+  resolveConstructionCommit(root, repository.targetCommit, 'repository.targetCommit');
+  const rulesCommit = resolveConstructionCommit(root, repository.rulesCommit, 'repository.rulesCommit');
+  const candidateRuleRefs = constructionStringSet(ruleProjection.candidateRuleRefs, 'ruleProjection.candidateRuleRefs');
+  const selectedRuleRefs = constructionStringSet(ruleProjection.selectedRuleRefs, 'ruleProjection.selectedRuleRefs');
+  const requiredRuleRefs = constructionStringSet(ruleProjection.requiredRuleRefs, 'ruleProjection.requiredRuleRefs');
+  const excludedRuleRefs = constructionStringSet(ruleProjection.excludedRuleRefs, 'ruleProjection.excludedRuleRefs');
+  const globallyNotApplicableRuleRefs = constructionStringSet(ruleProjection.globallyNotApplicableRuleRefs, 'ruleProjection.globallyNotApplicableRuleRefs');
+  if (candidateRuleRefs.some((ruleRef) => !/^[A-Z][A-Z0-9]*-\d{3}$/.test(ruleRef))) {
+    throw new Error('ruleProjection.candidateRuleRefs must contain canonical rule IDs');
+  }
+  const changedUnits = constructionArray(inputTargets.changedUnits, 'targets.changedUnits');
+  const candidates = constructionArray(inputTargets.candidates, 'targets.candidates');
+  const contextExpansions = constructionArray(inputTargets.contextExpansions, 'targets.contextExpansions');
+  [...changedUnits, ...candidates].forEach((target, index) => {
+    assertConstructionKeys(
+      requireConstructionObject(target, `target ${index}`),
+      ['targetId', 'targetKind', 'inputRefs', 'loc', 'summary'],
+      `target ${index}`,
+    );
+  });
+  contextExpansions.forEach((expansion, index) => {
+    assertConstructionKeys(
+      requireConstructionObject(expansion, `targets.contextExpansions.${index}`),
+      ['expansionId', 'reason', 'addedTargetIds'],
+      `targets.contextExpansions.${index}`,
+    );
+  });
+  const targets = [...changedUnits, ...candidates];
+  const targetById = new Map(targets.map((target) => [target && target.targetId, target]));
+  if (targetById.size !== targets.length || targetById.has(undefined)) throw new Error('construction targets require unique targetId values');
+
+  const encoding = requireConstructionObject(applicability.encoding, 'applicability.encoding');
+  assertConstructionKeys(encoding, ['targetOrder', 'legend', 'rule'], 'applicability.encoding');
+  if (encoding.rule !== '每个 required rule 的字符串必须与 targetOrder 等长；每个字符显式决定对应 ruleRef × targetId，禁止缺省决定。') {
+    throw new Error('applicability.encoding.rule does not match construction-input v1');
+  }
+  const targetOrder = constructionStringSet(encoding.targetOrder, 'applicability.encoding.targetOrder');
+  if (targetOrder.length !== targets.length || targetOrder.some((targetId) => !targetById.has(targetId))) {
+    throw new Error('applicability targetOrder must cover every target exactly once');
+  }
+  const legend = requireConstructionObject(encoding.legend, 'applicability.encoding.legend');
+  assertConstructionKeys(legend, ['A', 'N'], 'applicability.encoding.legend');
+  if (legend.A !== 'applicable' || legend.N !== 'not_applicable') {
+    throw new Error('applicability legend must map A/N to applicable/not_applicable');
+  }
+  const evidenceProjection = requireConstructionObject(applicability.evidenceProjection, 'applicability.evidenceProjection');
+  assertConstructionKeys(evidenceProjection, ['loc', 'summary'], 'applicability.evidenceProjection');
+  const reviewItemProjection = requireConstructionObject(input.reviewItemProjection, 'reviewItemProjection');
+  assertConstructionKeys(reviewItemProjection, ['required', 'createFor', 'doNotCreateFor'], 'reviewItemProjection');
+  if (reviewItemProjection.required !== true
+    || reviewItemProjection.createFor !== '每个 A 决定'
+    || reviewItemProjection.doNotCreateFor !== '每个 N 决定') {
+    throw new Error('reviewItemProjection does not match construction-input v1');
+  }
+  const byRule = requireConstructionObject(applicability.byRule, 'applicability.byRule');
+  if (!setsEqual(new Set(Object.keys(byRule)), new Set(requiredRuleRefs))) {
+    throw new Error('applicability.byRule must contain exactly requiredRuleRefs');
+  }
+
+  const rulesTree = resolveTree(root, `${rulesCommit}^{tree}`);
+  const ruleSources = buildConstructionRuleSources(root, rulesTree, ruleProjection, candidateRuleRefs);
+  const applicabilityMatrix = [];
+  const reviewItems = [];
+
+  requiredRuleRefs.forEach((ruleRef) => {
+    const decisions = byRule[ruleRef];
+    if (typeof decisions !== 'string' || decisions.length !== targetOrder.length || /[^AN]/.test(decisions)) {
+      throw new Error(`applicability.byRule.${ruleRef} must contain one A/N decision per target`);
+    }
+    targetOrder.forEach((targetId, targetIndex) => {
+      const target = targetById.get(targetId);
+      const applicable = decisions[targetIndex] === 'A';
+      const values = {
+        'target.loc': target.loc,
+        ruleRef,
+        'target.targetId': targetId,
+        decisionZh: applicable ? '适用' : '不适用',
+      };
+      const entry = {
+        ruleRef,
+        targetId,
+        targetKind: target.targetKind,
+        applicability: applicable ? 'applicable' : 'not_applicable',
+        evidence: [{
+          loc: renderConstructionTemplate(applicability.evidenceProjection.loc, values, 'applicability.evidenceProjection.loc'),
+          summary: renderConstructionTemplate(applicability.evidenceProjection.summary, values, 'applicability.evidenceProjection.summary'),
+        }],
+      };
+      if (applicable) {
+        const reviewItemId = `RI${String(reviewItems.length + 1).padStart(3, '0')}`;
+        entry.reviewItemId = reviewItemId;
+        reviewItems.push({
+          reviewItemId,
+          ruleRef,
+          targetKind: target.targetKind,
+          targetId,
+          required: true,
+        });
+      } else {
+        entry.reason = renderConstructionTemplate(applicability.notApplicableReason, values, 'applicability.notApplicableReason');
+      }
+      applicabilityMatrix.push(entry);
+    });
+  });
+
+  const batchRuleRefs = requireConstructionObject(inputPlan.batchRuleRefs, 'executionPlan.batchRuleRefs');
+  const assignedRules = new Set();
+  const initialBatchState = requireConstructionObject(inputPlan.initialBatchState, 'executionPlan.initialBatchState');
+  assertConstructionKeys(initialBatchState, ['shardRef', 'returnStatus', 'aggregateStatus'], 'executionPlan.initialBatchState');
+  const signals = requireConstructionObject(inputPlan.signals, 'executionPlan.signals');
+  assertConstructionKeys(signals, ['userRequestedConcurrency'], 'executionPlan.signals');
+  const reviewBatches = Object.entries(batchRuleRefs).map(([reviewBatchId, ruleRefs]) => {
+    if (!isSafeToken(reviewBatchId)) throw new Error(`invalid reviewBatchId: ${reviewBatchId}`);
+    const batchRules = constructionStringSet(ruleRefs, `executionPlan.batchRuleRefs.${reviewBatchId}`);
+    batchRules.forEach((ruleRef) => {
+      if (!selectedRuleRefs.includes(ruleRef)) throw new Error(`batch rule must be selected: ${ruleRef}`);
+      if (assignedRules.has(ruleRef)) throw new Error(`batch rule is assigned more than once: ${ruleRef}`);
+      assignedRules.add(ruleRef);
+    });
+    return {
+      reviewBatchId,
+      ruleSetId: ruleProjection.ruleSetId,
+      reviewItemIds: reviewItems.filter((item) => batchRules.includes(item.ruleRef)).map((item) => item.reviewItemId),
+      taskRef: `tasks/${reviewBatchId}.json`,
+      shardRef: initialBatchState.shardRef,
+      returnStatus: initialBatchState.returnStatus,
+      aggregateStatus: initialBatchState.aggregateStatus,
+      unaggregatedReason: null,
+    };
+  });
+  if (!setsEqual(assignedRules, new Set(selectedRuleRefs))) {
+    throw new Error('executionPlan.batchRuleRefs must cover selectedRuleRefs exactly once');
+  }
+
+  const draft = {
+    kind: 'rules-review-dispatch',
+    schemaVersion: SCHEMA_VERSION,
+    runId: input.runId,
+    reviewRange: {
+      excludedFiles: constructionArray(repository.excludedFiles, 'repository.excludedFiles'),
+    },
+    ruleSnapshot: { files: [] },
+    inputSnapshot: { files: [] },
+    ruleSet: {
+      ruleSetId: ruleProjection.ruleSetId,
+      sourceIndexHash: `sha256:${'0'.repeat(64)}`,
+      candidateRuleRefs,
+      selectedRuleRefs,
+      requiredRuleRefs,
+      excludedRuleRefs,
+      globallyNotApplicableRuleRefs,
+      ruleSources,
+    },
+    targets: {
+      changedUnits: JSON.parse(JSON.stringify(changedUnits)),
+      candidates: JSON.parse(JSON.stringify(candidates)),
+      contextExpansions: JSON.parse(JSON.stringify(contextExpansions)),
+    },
+    applicabilityMatrix,
+    reviewItems,
+    executionPlan: {
+      mode: inputPlan.mode,
+      selectedBy: inputPlan.selectedBy,
+      policyVersion: inputPlan.policyVersion,
+      metrics: {
+        changedUnits: changedUnits.length,
+        candidates: candidates.length,
+        targets: targets.length,
+        requiredRuleRefs: requiredRuleRefs.length,
+        reviewItems: reviewItems.length,
+      },
+      signals: JSON.parse(JSON.stringify(signals)),
+      reason: inputPlan.reason,
+      humanOverride: JSON.parse(JSON.stringify(inputPlan.humanOverride)),
+    },
+    reviewBatches,
+  };
+  assertExpectedConstructionCounts(input.expectedCounts, draft);
+  return draft;
+}
+
+function buildConstructionRuleSources(root, rulesTree, ruleProjection, candidateRuleRefs) {
+  if (ruleProjection.indexFile !== '.agents/rules/index.md') {
+    throw new Error('ruleProjection.indexFile must equal .agents/rules/index.md');
+  }
+  const sourceFiles = requireConstructionObject(ruleProjection.ruleSourceFiles, 'ruleProjection.ruleSourceFiles');
+  const index = parseConstructionRuleIndex(snapshotRuleFile(root, rulesTree, ruleProjection.indexFile).content);
+  const rulesByFile = new Map();
+  const activeRuleFiles = new Map();
+  const candidateNamespaces = new Set(candidateRuleRefs.map((ruleRef) => ruleRef.split('-')[0]));
+  if (!setsEqual(new Set(Object.keys(sourceFiles)), candidateNamespaces)) {
+    throw new Error('ruleProjection.ruleSourceFiles must contain exactly the candidate rule namespaces');
+  }
+  index.forEach((registration) => {
+    if (registration.status === 'active' && !activeRuleFiles.has(registration.sourceFile)) {
+      activeRuleFiles.set(registration.sourceFile, snapshotRuleFile(root, rulesTree, registration.sourceFile).content);
+    }
+  });
+
+  return candidateRuleRefs.map((ruleRef) => {
+    const namespace = ruleRef.split('-')[0];
+    const sourceFile = sourceFiles[namespace];
+    if (!isNonEmptyString(sourceFile)) throw new Error(`missing rule source file for namespace ${namespace}`);
+    assertSafeRepoRelativePath(sourceFile);
+    const registration = index.get(namespace);
+    if (!registration || registration.status !== 'active' || registration.sourceFile !== sourceFile) {
+      throw new Error(`rule source file does not match active index registration for ${namespace}`);
+    }
+    if (!rulesByFile.has(sourceFile)) {
+      rulesByFile.set(sourceFile, parseConstructionRuleFile(activeRuleFiles.get(sourceFile), sourceFile));
+    }
+    const rule = rulesByFile.get(sourceFile).get(ruleRef);
+    if (!rule) throw new Error(`rule source is missing active rule ${ruleRef}`);
+    return {
+      namespace,
+      ruleRef,
+      ruleLevel: rule.ruleLevel,
+      sourceFile,
+      sourceHash: `sha256:${'0'.repeat(64)}`,
+      trigger: registration.trigger,
+      appliesTo: rule.appliesTo,
+      summary: rule.summary,
+      ruleText: rule.ruleText,
+      ...(rule.failureConditions.length > 0 ? { failureConditions: rule.failureConditions } : {}),
+    };
+  });
+}
+
+function parseConstructionRuleIndex(content) {
+  const lines = content.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === '## Namespaces');
+  if (start < 0) throw new Error('rules index is missing the ## Namespaces table');
+  const tableLines = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line.trim()) {
+      if (tableLines.length === 0) continue;
+      break;
+    }
+    if (!line.trim().startsWith('|')) {
+      if (tableLines.length === 0) continue;
+      break;
+    }
+    tableLines.push(line);
+  }
+  if (tableLines.length < 2) throw new Error('rules index contains an invalid Namespaces table');
+  const header = parseConstructionTableRow(tableLines[0]);
+  if (!header || header.join('|') !== 'Namespace|状态|文件|触发条件') {
+    throw new Error('rules index Namespaces header is invalid');
+  }
+  const separator = parseConstructionTableRow(tableLines[1]);
+  if (!separator || separator.length !== 4 || !separator.every((cell) => /^:?-{3,}:?$/.test(cell))) {
+    throw new Error('rules index Namespaces separator is invalid');
+  }
+
+  const registrations = new Map();
+  tableLines.slice(2).forEach((line) => {
+    const row = parseConstructionTableRow(line);
+    if (!row || row.length !== 4) throw new Error(`invalid namespace row: ${line}`);
+    const namespace = stripConstructionTicks(row[0]);
+    const status = row[1].trim();
+    const file = stripConstructionTicks(row[2]);
+    const trigger = row[3].trim();
+    if (!/^[A-Z][A-Z0-9]*$/.test(namespace)) throw new Error(`invalid namespace: ${namespace}`);
+    if (status !== 'active' && status !== 'retired') throw new Error(`invalid namespace status for ${namespace}: ${status}`);
+    const sourceFile = `.agents/rules/${file}`;
+    assertSafeRepoRelativePath(sourceFile);
+    if (status === 'active' && file !== 'always/constraints.md'
+      && !/^(concerns|domain)\/(?!README\.md$|retired\.md$|index\.md$)[^/]+\.md$/.test(file)) {
+      throw new Error(`invalid active rule file path: ${file}`);
+    }
+    if (!isNonEmptyString(trigger)) throw new Error(`namespace trigger must be non-empty: ${namespace}`);
+    if (registrations.has(namespace)) throw new Error(`duplicate namespace in rules index: ${namespace}`);
+    registrations.set(namespace, { status, sourceFile, trigger });
+  });
+  const core = registrations.get('CORE');
+  if (!core || core.status !== 'active' || core.sourceFile !== '.agents/rules/always/constraints.md') {
+    throw new Error('CORE namespace must be active and use always/constraints.md');
+  }
+  return registrations;
+}
+
+function parseConstructionTableRow(line) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) return null;
+  return trimmed.slice(1, -1).split('|').map((cell) => cell.trim());
+}
+
+function stripConstructionTicks(value) {
+  const trimmed = value.trim();
+  return trimmed.startsWith('`') && trimmed.endsWith('`') ? trimmed.slice(1, -1) : trimmed;
+}
+
+function parseConstructionRuleFile(content, sourceFile) {
+  const headings = [...content.matchAll(/^###\s+([A-Z][A-Z0-9]*-\d{3})\s+(.+?)\s*$/gm)];
+  const rules = new Map();
+  headings.forEach((heading, index) => {
+    const ruleRef = heading[1];
+    if (rules.has(ruleRef)) throw new Error(`duplicate rule ${ruleRef} in ${sourceFile}`);
+    const block = content.slice(heading.index, headings[index + 1] ? headings[index + 1].index : content.length);
+    const ruleLevel = parseConstructionRuleField(block, '级别');
+    if (!RULE_LEVELS.includes(ruleLevel)) throw new Error(`invalid rule level for ${ruleRef}`);
+    rules.set(ruleRef, {
+      summary: heading[2].trim(),
+      ruleLevel,
+      appliesTo: parseConstructionRuleField(block, '生效条件'),
+      ruleText: parseConstructionRuleField(block, '规则'),
+      failureConditions: parseConstructionRuleList(block, '失败条件').map((summary, failureIndex) => ({
+        conditionId: `${ruleRef}-FC-${String(failureIndex + 1).padStart(2, '0')}`,
+        summary,
+      })),
+    });
+  });
+  return rules;
+}
+
+function parseConstructionRuleField(block, fieldName) {
+  const escaped = fieldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = block.match(new RegExp(`^- ${escaped}：(.+)$`, 'm'));
+  if (!match || !match[1].trim()) throw new Error(`rule field is missing: ${fieldName}`);
+  return match[1].trim();
+}
+
+function parseConstructionRuleList(block, fieldName) {
+  const lines = block.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === `- ${fieldName}：`);
+  if (start < 0) throw new Error(`rule list is missing: ${fieldName}`);
+  const items = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const match = lines[index].match(/^\s{2}-\s+(.+?)\s*$/);
+    if (match) {
+      items.push(match[1]);
+      continue;
+    }
+    if (/^-\s/.test(lines[index]) || /^###\s/.test(lines[index])) break;
+  }
+  return items;
+}
+
+function renderConstructionTemplate(template, values, labelText) {
+  if (!isNonEmptyString(template)) throw new Error(`${labelText} must be a non-empty template`);
+  const rendered = template.replace(/\{([A-Za-z.]+)\}/g, (_match, key) => {
+    if (!Object.prototype.hasOwnProperty.call(values, key) || !isNonEmptyString(values[key])) {
+      throw new Error(`${labelText} references unavailable value ${key}`);
+    }
+    return values[key];
+  });
+  if (/\{[^{}]+\}/.test(rendered)) throw new Error(`${labelText} contains an unsupported placeholder`);
+  return rendered;
+}
+
+function requireConstructionObject(value, labelText) {
+  if (!isObject(value)) throw new Error(`${labelText} must be an object`);
+  return value;
+}
+
+function assertConstructionKeys(value, keys, labelText) {
+  if (!setsEqual(new Set(Object.keys(value)), new Set(keys))) {
+    throw new Error(`${labelText} fields do not match construction-input v1`);
+  }
+}
+
+function resolveConstructionCommit(root, commit, labelText) {
+  if (!GIT_OID_RE.test(commit || '')) throw new Error(`${labelText} must use its normalized commit ID`);
+  const resolved = resolveCommit(root, commit);
+  if (resolved !== commit) throw new Error(`${labelText} must use its normalized commit ID`);
+  return resolved;
+}
+
+function constructionArray(value, labelText) {
+  if (!Array.isArray(value)) throw new Error(`${labelText} must be an array`);
+  return value;
+}
+
+function constructionStringSet(value, labelText) {
+  const items = constructionArray(value, labelText);
+  if (items.some((item) => !isNonEmptyString(item))) throw new Error(`${labelText} must contain non-empty strings`);
+  if (new Set(items).size !== items.length) throw new Error(`${labelText} must contain unique values`);
+  return [...items];
+}
+
+function assertExpectedConstructionCounts(expectedCounts, dispatch) {
+  const expected = requireConstructionObject(expectedCounts, 'expectedCounts');
+  const actual = {
+    candidateRuleRefs: asArray(dispatch.ruleSet && dispatch.ruleSet.candidateRuleRefs).length,
+    selectedRuleRefs: asArray(dispatch.ruleSet && dispatch.ruleSet.selectedRuleRefs).length,
+    requiredRuleRefs: asArray(dispatch.ruleSet && dispatch.ruleSet.requiredRuleRefs).length,
+    excludedRuleRefs: asArray(dispatch.ruleSet && dispatch.ruleSet.excludedRuleRefs).length,
+    globallyNotApplicableRuleRefs: asArray(dispatch.ruleSet && dispatch.ruleSet.globallyNotApplicableRuleRefs).length,
+    changedUnits: asArray(dispatch.targets && dispatch.targets.changedUnits).length,
+    candidates: asArray(dispatch.targets && dispatch.targets.candidates).length,
+    targets: asArray(dispatch.targets && dispatch.targets.changedUnits).length + asArray(dispatch.targets && dispatch.targets.candidates).length,
+    applicabilityMatrix: asArray(dispatch.applicabilityMatrix).length,
+    reviewItems: asArray(dispatch.reviewItems).length,
+    reviewBatches: asArray(dispatch.reviewBatches).length,
+  };
+  if (!setsEqual(new Set(Object.keys(expected)), new Set(Object.keys(actual)))) {
+    throw new Error('expectedCounts must declare every supported construction count exactly once');
+  }
+  Object.entries(actual).forEach(([field, value]) => {
+    if (expected[field] !== value) throw new Error(`expectedCounts.${field} expected ${expected[field]} but constructed ${value}`);
+  });
+}
+
 function sealDispatchMode(args, result) {
   const draft = readJson(args.input, args.input, result, 'D001');
   if (!draft) return;
@@ -273,72 +802,7 @@ function sealDispatchMode(args, result) {
   let sealed;
   try {
     const { root } = loadRepository(args.input);
-    if (draft.reviewRange && Object.prototype.hasOwnProperty.call(draft.reviewRange, 'targetTree')) {
-      throw new Error('sealed dispatch cannot be resealed; create a fresh run for a new TARGET');
-    }
-    if (Object.prototype.hasOwnProperty.call(draft, 'ruleInputSource')) {
-      throw new Error('draft dispatch must not declare ruleInputSource; seal-dispatch derives it from --rules-commit');
-    }
-    if (!isNonEmptyString(args.base)) throw new Error('seal-dispatch requires --base <revision>');
-    const unsupportedSelectors = ['current', 'staged', 'target-tree']
-      .filter((name) => args[name] !== undefined);
-    if (unsupportedSelectors.length > 0) {
-      throw new Error(`rules-review only accepts committed TARGETs; unsupported selector(s): ${unsupportedSelectors.join(', ')}`);
-    }
-    if (!isNonEmptyString(args['target-commit'])) throw new Error('seal-dispatch requires --target-commit <revision>');
-
-    const baseCommit = resolveCommit(root, args.base);
-    const baseTree = resolveTree(root, `${baseCommit}^{tree}`);
-    const boundCommit = resolveCommit(root, args['target-commit']);
-    const targetTree = resolveTree(root, `${boundCommit}^{tree}`);
-    let ruleInputSource;
-    let snapshotRule;
-    if (args['rules-commit'] === undefined) {
-      ruleInputSource = { kind: 'workspace' };
-      snapshotRule = (repoPath) => snapshotWorkspaceRuleFile(root, repoPath);
-    } else {
-      if (!isNonEmptyString(args['rules-commit'])) throw new Error('--rules-commit requires a Git revision');
-      const rulesCommit = resolveCommit(root, args['rules-commit']);
-      const rulesTree = resolveTree(root, `${rulesCommit}^{tree}`);
-      ruleInputSource = { kind: 'commit', commit: rulesCommit };
-      snapshotRule = (repoPath) => snapshotRuleFile(root, rulesTree, repoPath);
-    }
-
-    sealed = JSON.parse(JSON.stringify(draft));
-    sealed.ruleInputSource = ruleInputSource;
-    const excludedFiles = validateSealingExcludedFiles(sealed.reviewRange && sealed.reviewRange.excludedFiles);
-    if (excludedFiles.length > 0) throw new Error('commit-only rules-review requires reviewRange.excludedFiles to be exactly []');
-    const changedFiles = listTreeChangedFiles(root, baseTree, targetTree);
-    assertRegularChangedEntries(root, baseTree, targetTree, changedFiles);
-    sealed.reviewRange = {
-      baseCommit,
-      baseTree,
-      targetTree,
-      boundCommit,
-      excludedFiles,
-    };
-    sealed.inputSnapshot = {
-      files: collectDeclaredInputRefs(sealed)
-        .sort(compareStrings)
-        .map((repoPath) => snapshotTreeInput(root, targetTree, repoPath)),
-    };
-
-    if (!isObject(sealed.ruleSet)) throw new Error('dispatch.ruleSet must be an object before sealing');
-    if (!Array.isArray(sealed.ruleSet.ruleSources)) throw new Error('dispatch.ruleSet.ruleSources must be an array before sealing');
-    const rulePaths = ['.agents/rules/index.md'];
-    sealed.ruleSet.ruleSources.forEach((source, index) => {
-      if (!isNonEmptyString(source && source.sourceFile)) throw new Error(`ruleSources[${index}].sourceFile must be a non-empty repository path`);
-      assertSafeRepoRelativePath(source.sourceFile);
-      rulePaths.push(source.sourceFile);
-    });
-    sealed.ruleSnapshot = {
-      files: [...new Set(rulePaths)].sort(compareStrings).map(snapshotRule),
-    };
-    const ruleSnapshotByPath = new Map(sealed.ruleSnapshot.files.map((entry) => [entry.path, entry]));
-    sealed.ruleSet.sourceIndexHash = ruleSnapshotByPath.get('.agents/rules/index.md').contentHash;
-    sealed.ruleSet.ruleSources.forEach((source) => {
-      source.sourceHash = ruleSnapshotByPath.get(source.sourceFile).contentHash;
-    });
+    sealed = sealDispatchDraft(draft, args, root);
   } catch (error) {
     addViolation(result, 'SD002', args.input, null, `seal-dispatch failed closed: ${error.message}`, 'unambiguous Git base, committed TARGET, and rule source', error.message, 2);
     return;
@@ -348,6 +812,76 @@ function sealDispatchMode(args, result) {
   if (result.violations.length > 0) return;
   atomicWriteFile(args.input, `${JSON.stringify(sealed, null, 2)}\n`);
   result.rendered = args.input;
+}
+
+function sealDispatchDraft(draft, args, root) {
+  if (draft.reviewRange && Object.prototype.hasOwnProperty.call(draft.reviewRange, 'targetTree')) {
+    throw new Error('sealed dispatch cannot be resealed; create a fresh run for a new TARGET');
+  }
+  if (Object.prototype.hasOwnProperty.call(draft, 'ruleInputSource')) {
+    throw new Error('draft dispatch must not declare ruleInputSource; seal-dispatch derives it from --rules-commit');
+  }
+  if (!isNonEmptyString(args.base)) throw new Error('seal-dispatch requires --base <revision>');
+  const unsupportedSelectors = ['current', 'staged', 'target-tree']
+    .filter((name) => args[name] !== undefined);
+  if (unsupportedSelectors.length > 0) {
+    throw new Error(`rules-review only accepts committed TARGETs; unsupported selector(s): ${unsupportedSelectors.join(', ')}`);
+  }
+  if (!isNonEmptyString(args['target-commit'])) throw new Error('seal-dispatch requires --target-commit <revision>');
+
+  const baseCommit = resolveCommit(root, args.base);
+  const baseTree = resolveTree(root, `${baseCommit}^{tree}`);
+  const boundCommit = resolveCommit(root, args['target-commit']);
+  const targetTree = resolveTree(root, `${boundCommit}^{tree}`);
+  let ruleInputSource;
+  let snapshotRule;
+  if (args['rules-commit'] === undefined) {
+    ruleInputSource = { kind: 'workspace' };
+    snapshotRule = (repoPath) => snapshotWorkspaceRuleFile(root, repoPath);
+  } else {
+    if (!isNonEmptyString(args['rules-commit'])) throw new Error('--rules-commit requires a Git revision');
+    const rulesCommit = resolveCommit(root, args['rules-commit']);
+    const rulesTree = resolveTree(root, `${rulesCommit}^{tree}`);
+    ruleInputSource = { kind: 'commit', commit: rulesCommit };
+    snapshotRule = (repoPath) => snapshotRuleFile(root, rulesTree, repoPath);
+  }
+
+  const sealed = JSON.parse(JSON.stringify(draft));
+  sealed.ruleInputSource = ruleInputSource;
+  const excludedFiles = validateSealingExcludedFiles(sealed.reviewRange && sealed.reviewRange.excludedFiles);
+  if (excludedFiles.length > 0) throw new Error('commit-only rules-review requires reviewRange.excludedFiles to be exactly []');
+  const changedFiles = listTreeChangedFiles(root, baseTree, targetTree);
+  assertRegularChangedEntries(root, baseTree, targetTree, changedFiles);
+  sealed.reviewRange = {
+    baseCommit,
+    baseTree,
+    targetTree,
+    boundCommit,
+    excludedFiles,
+  };
+  sealed.inputSnapshot = {
+    files: collectDeclaredInputRefs(sealed)
+      .sort(compareStrings)
+      .map((repoPath) => snapshotTreeInput(root, targetTree, repoPath)),
+  };
+
+  if (!isObject(sealed.ruleSet)) throw new Error('dispatch.ruleSet must be an object before sealing');
+  if (!Array.isArray(sealed.ruleSet.ruleSources)) throw new Error('dispatch.ruleSet.ruleSources must be an array before sealing');
+  const rulePaths = ['.agents/rules/index.md'];
+  sealed.ruleSet.ruleSources.forEach((source, index) => {
+    if (!isNonEmptyString(source && source.sourceFile)) throw new Error(`ruleSources[${index}].sourceFile must be a non-empty repository path`);
+    assertSafeRepoRelativePath(source.sourceFile);
+    rulePaths.push(source.sourceFile);
+  });
+  sealed.ruleSnapshot = {
+    files: [...new Set(rulePaths)].sort(compareStrings).map(snapshotRule),
+  };
+  const ruleSnapshotByPath = new Map(sealed.ruleSnapshot.files.map((entry) => [entry.path, entry]));
+  sealed.ruleSet.sourceIndexHash = ruleSnapshotByPath.get('.agents/rules/index.md').contentHash;
+  sealed.ruleSet.ruleSources.forEach((source) => {
+    source.sourceHash = ruleSnapshotByPath.get(source.sourceFile).contentHash;
+  });
+  return sealed;
 }
 
 function atomicWriteFile(filePath, content) {

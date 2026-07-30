@@ -44,6 +44,10 @@ function calculateTaskHash(task) {
   return `sha256:${crypto.createHash("sha256").update(canonicalStringify(copy)).digest("hex")}`;
 }
 
+function contentHash(content) {
+  return `sha256:${crypto.createHash("sha256").update(content).digest("hex")}`;
+}
+
 async function run(args, cwd = repoRoot) {
   return execFileAsync(process.execPath, [validator, ...args], { cwd });
 }
@@ -79,6 +83,179 @@ function createRepository() {
   git(root, ["add", "."]);
   git(root, ["commit", "-qm", "base"]);
   return root;
+}
+
+function createConstructionCase(t, {
+  runId = "construction-test",
+  indexContent = [
+    "# Rules Index",
+    "",
+    "## Namespaces",
+    "",
+    "| Namespace | 状态 | 文件 | 触发条件 |",
+    "| --- | --- | --- | --- |",
+    "| `CORE` | active | `always/constraints.md` | 每次任务必读 |",
+    "",
+  ].join("\n"),
+  mutateInput,
+} = {}) {
+  const root = createRepository();
+  const inputRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-construction-input-"));
+  const rulesContent = [
+    "# Core Rules",
+    "",
+    "### CORE-001 检查主文件",
+    "- 级别：MUST",
+    "- 生效条件：每次任务",
+    "- 规则：检查主文件。",
+    "- 证据要求：",
+    "  - 记录主文件。",
+    "- 失败条件：",
+    "  - 未检查主文件。",
+    "- 无法验证条件：",
+    "  - 主文件缺失。",
+    "",
+    "### CORE-002 检查上下文",
+    "- 级别：SHOULD",
+    "- 生效条件：存在上下文候选时",
+    "- 规则：检查上下文。",
+    "- 证据要求：",
+    "  - 记录上下文。",
+    "- 失败条件：",
+    "  - 未检查上下文。",
+    "- 无法验证条件：",
+    "  - 上下文缺失。",
+    "",
+  ].join("\n");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(inputRoot, { recursive: true, force: true }));
+
+  fs.mkdirSync(path.join(root, ".agents/rules/always"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".agents/rules/index.md"), indexContent);
+  fs.writeFileSync(path.join(root, ".agents/rules/always/constraints.md"), rulesContent);
+  git(root, ["add", ".agents/rules"]);
+  git(root, ["commit", "-qm", "construction rules"]);
+  const baseCommit = git(root, ["rev-parse", "HEAD"]);
+  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
+  git(root, ["add", "src/main.js"]);
+  git(root, ["commit", "-qm", "construction target"]);
+  const targetCommit = git(root, ["rev-parse", "HEAD"]);
+
+  const input = {
+    kind: "rules-review-dispatch-construction-eval-input",
+    schemaVersion: 1,
+    runId,
+    repository: {
+      fixture: "project.bundle",
+      baseCommit,
+      targetCommit,
+      rulesCommit: targetCommit,
+      excludedFiles: [],
+    },
+    ruleProjection: {
+      indexFile: ".agents/rules/index.md",
+      ruleSourceFiles: {
+        CORE: ".agents/rules/always/constraints.md",
+      },
+      ruleSetId: "RS-CONSTRUCTION",
+      candidateRuleRefs: ["CORE-001", "CORE-002"],
+      selectedRuleRefs: ["CORE-001", "CORE-002"],
+      requiredRuleRefs: ["CORE-001", "CORE-002"],
+      excludedRuleRefs: [],
+      globallyNotApplicableRuleRefs: [],
+    },
+    targets: {
+      changedUnits: [{
+        targetId: "T001",
+        targetKind: "changed_unit",
+        inputRefs: ["src/main.js"],
+        loc: "src/main.js:1",
+        summary: "主文件变更",
+      }],
+      candidates: [{
+        targetId: "T002",
+        targetKind: "context_candidate",
+        inputRefs: ["src/other.js"],
+        loc: "src/other.js:1",
+        summary: "上下文候选",
+      }],
+      contextExpansions: [{
+        expansionId: "X001",
+        reason: "CORE-002 需要上下文",
+        addedTargetIds: ["T002"],
+      }],
+    },
+    applicability: {
+      encoding: {
+        targetOrder: ["T001", "T002"],
+        legend: {
+          A: "applicable",
+          N: "not_applicable",
+        },
+        rule: "每个 required rule 的字符串必须与 targetOrder 等长；每个字符显式决定对应 ruleRef × targetId，禁止缺省决定。",
+      },
+      evidenceProjection: {
+        loc: "{target.loc}",
+        summary: "固定 {ruleRef} 对 {target.targetId} 为 {decisionZh}",
+      },
+      notApplicableReason: "固定 {ruleRef} 对 {target.targetId} 不适用",
+      byRule: {
+        "CORE-001": "AN",
+        "CORE-002": "AA",
+      },
+    },
+    reviewItemProjection: {
+      required: true,
+      createFor: "每个 A 决定",
+      doNotCreateFor: "每个 N 决定",
+    },
+    executionPlan: {
+      mode: "single_batch",
+      selectedBy: "ai",
+      policyVersion: "review-execution-policy/v1",
+      signals: {
+        userRequestedConcurrency: false,
+      },
+      reason: "单批次覆盖全部规则",
+      humanOverride: null,
+      batchRuleRefs: {
+        B001: ["CORE-001", "CORE-002"],
+      },
+      initialBatchState: {
+        shardRef: null,
+        returnStatus: "not_started",
+        aggregateStatus: "not_aggregated",
+      },
+    },
+    expectedCounts: {
+      candidateRuleRefs: 2,
+      selectedRuleRefs: 2,
+      requiredRuleRefs: 2,
+      excludedRuleRefs: 0,
+      globallyNotApplicableRuleRefs: 0,
+      changedUnits: 1,
+      candidates: 1,
+      targets: 2,
+      applicabilityMatrix: 4,
+      reviewItems: 3,
+      reviewBatches: 1,
+    },
+  };
+  if (mutateInput) mutateInput(input);
+  const inputPath = path.join(inputRoot, "dispatch-input.json");
+  const output = `.rules-review-tmp/${runId}/dispatch.json`;
+  writeJson(inputPath, input);
+  return {
+    root,
+    input,
+    inputPath,
+    output,
+    outputPath: path.join(root, output),
+    indexContent,
+    rulesContent,
+    baseCommit,
+    targetCommit,
+  };
 }
 
 function draft({
@@ -664,6 +841,205 @@ test("不同 batch 的相同 rootCause 不会发生隐式跨 batch 合并", asyn
   assert.deepEqual(finalReview.findings.map((finding) => finding.rootCause), [rootCause, rootCause]);
   assert.deepEqual(finalReview.findings.map((finding) => finding.evidenceGroups.length), [1, 1]);
   assert.deepEqual(finalReview.issueSummary, { findings: 2, mustFix: 2, shouldFix: 0, cannotVerify: 0, observations: 0 });
+});
+
+test("construct-dispatch 对 2×2 紧凑输入做完整确定性投影", async (t) => {
+  const fixture = createConstructionCase(t);
+  const inputBefore = fs.readFileSync(fixture.inputPath);
+  const construction = await runJson([
+    "--mode", "construct-dispatch",
+    "--input", fixture.inputPath,
+    "--output", fixture.output,
+  ], fixture.root);
+  const dispatch = readJson(fixture.outputPath);
+
+  assert.equal(construction.ok, true);
+  assert.equal(construction.rendered, fixture.output);
+  assert.deepEqual(fs.readFileSync(fixture.inputPath), inputBefore);
+  assert.deepEqual(dispatch.ruleInputSource, {
+    kind: "commit",
+    commit: fixture.targetCommit,
+  });
+  assert.deepEqual(dispatch.ruleSet, {
+    ruleSetId: "RS-CONSTRUCTION",
+    sourceIndexHash: contentHash(fixture.indexContent),
+    candidateRuleRefs: ["CORE-001", "CORE-002"],
+    selectedRuleRefs: ["CORE-001", "CORE-002"],
+    requiredRuleRefs: ["CORE-001", "CORE-002"],
+    excludedRuleRefs: [],
+    globallyNotApplicableRuleRefs: [],
+    ruleSources: [{
+      namespace: "CORE",
+      ruleRef: "CORE-001",
+      ruleLevel: "MUST",
+      sourceFile: ".agents/rules/always/constraints.md",
+      sourceHash: contentHash(fixture.rulesContent),
+      trigger: "每次任务必读",
+      appliesTo: "每次任务",
+      summary: "检查主文件",
+      ruleText: "检查主文件。",
+      failureConditions: [{
+        conditionId: "CORE-001-FC-01",
+        summary: "未检查主文件。",
+      }],
+    }, {
+      namespace: "CORE",
+      ruleRef: "CORE-002",
+      ruleLevel: "SHOULD",
+      sourceFile: ".agents/rules/always/constraints.md",
+      sourceHash: contentHash(fixture.rulesContent),
+      trigger: "每次任务必读",
+      appliesTo: "存在上下文候选时",
+      summary: "检查上下文",
+      ruleText: "检查上下文。",
+      failureConditions: [{
+        conditionId: "CORE-002-FC-01",
+        summary: "未检查上下文。",
+      }],
+    }],
+  });
+  assert.deepEqual(dispatch.targets, fixture.input.targets);
+  assert.deepEqual(dispatch.applicabilityMatrix, [{
+    ruleRef: "CORE-001",
+    targetId: "T001",
+    targetKind: "changed_unit",
+    applicability: "applicable",
+    reviewItemId: "RI001",
+    evidence: [{
+      loc: "src/main.js:1",
+      summary: "固定 CORE-001 对 T001 为 适用",
+    }],
+  }, {
+    ruleRef: "CORE-001",
+    targetId: "T002",
+    targetKind: "context_candidate",
+    applicability: "not_applicable",
+    reason: "固定 CORE-001 对 T002 不适用",
+    evidence: [{
+      loc: "src/other.js:1",
+      summary: "固定 CORE-001 对 T002 为 不适用",
+    }],
+  }, {
+    ruleRef: "CORE-002",
+    targetId: "T001",
+    targetKind: "changed_unit",
+    applicability: "applicable",
+    reviewItemId: "RI002",
+    evidence: [{
+      loc: "src/main.js:1",
+      summary: "固定 CORE-002 对 T001 为 适用",
+    }],
+  }, {
+    ruleRef: "CORE-002",
+    targetId: "T002",
+    targetKind: "context_candidate",
+    applicability: "applicable",
+    reviewItemId: "RI003",
+    evidence: [{
+      loc: "src/other.js:1",
+      summary: "固定 CORE-002 对 T002 为 适用",
+    }],
+  }]);
+  assert.deepEqual(dispatch.reviewItems, [{
+    reviewItemId: "RI001",
+    ruleRef: "CORE-001",
+    targetKind: "changed_unit",
+    targetId: "T001",
+    required: true,
+  }, {
+    reviewItemId: "RI002",
+    ruleRef: "CORE-002",
+    targetKind: "changed_unit",
+    targetId: "T001",
+    required: true,
+  }, {
+    reviewItemId: "RI003",
+    ruleRef: "CORE-002",
+    targetKind: "context_candidate",
+    targetId: "T002",
+    required: true,
+  }]);
+  assert.deepEqual(dispatch.executionPlan, {
+    mode: "single_batch",
+    selectedBy: "ai",
+    policyVersion: "review-execution-policy/v1",
+    metrics: {
+      changedUnits: 1,
+      candidates: 1,
+      targets: 2,
+      requiredRuleRefs: 2,
+      reviewItems: 3,
+    },
+    signals: {
+      userRequestedConcurrency: false,
+    },
+    reason: "单批次覆盖全部规则",
+    humanOverride: null,
+  });
+  assert.deepEqual(dispatch.reviewBatches, [{
+    reviewBatchId: "B001",
+    ruleSetId: "RS-CONSTRUCTION",
+    reviewItemIds: ["RI001", "RI002", "RI003"],
+    taskRef: "tasks/B001.json",
+    shardRef: null,
+    returnStatus: "not_started",
+    aggregateStatus: "not_aggregated",
+    unaggregatedReason: null,
+  }]);
+  const validation = await runJson(["--mode", "dispatch", "--input", fixture.outputPath], fixture.root);
+  assert.equal(validation.ok, true);
+});
+
+test("construct-dispatch 拒绝未声明的构造输入身份", async (t) => {
+  const fixture = createConstructionCase(t, {
+    mutateInput(input) {
+      input.kind = "other-construction-input";
+    },
+  });
+  await expectFailure([
+    "--mode", "construct-dispatch",
+    "--input", fixture.inputPath,
+    "--output", fixture.output,
+  ], /construction input kind/, fixture.root);
+  assert.equal(fs.existsSync(fixture.outputPath), false);
+});
+
+test("construct-dispatch 拒绝非规范提交身份", async (t) => {
+  const fixture = createConstructionCase(t, {
+    mutateInput(input) {
+      input.repository.targetCommit = "HEAD";
+    },
+  });
+  await expectFailure([
+    "--mode", "construct-dispatch",
+    "--input", fixture.inputPath,
+    "--output", fixture.output,
+  ], /normalized commit ID/, fixture.root);
+  assert.equal(fs.existsSync(fixture.outputPath), false);
+});
+
+test("construct-dispatch 拒绝不符合 rule-steward 协议的索引", async (t) => {
+  const fixture = createConstructionCase(t, {
+    indexContent: "| `CORE` | active | `always/constraints.md` | 每次任务必读 |\n",
+  });
+  await expectFailure([
+    "--mode", "construct-dispatch",
+    "--input", fixture.inputPath,
+    "--output", fixture.output,
+  ], /Namespaces/, fixture.root);
+  assert.equal(fs.existsSync(fixture.outputPath), false);
+});
+
+test("construct-dispatch 对同一 run 只允许一个并发写入成功", async (t) => {
+  const fixture = createConstructionCase(t);
+  const attempts = await Promise.allSettled(Array.from({ length: 4 }, () => run([
+    "--mode", "construct-dispatch",
+    "--input", fixture.inputPath,
+    "--output", fixture.output,
+  ], fixture.root)));
+  assert.equal(attempts.filter((attempt) => attempt.status === "fulfilled").length, 1);
+  const validation = await runJson(["--mode", "dispatch", "--input", fixture.outputPath], fixture.root);
+  assert.equal(validation.ok, true);
 });
 
 test("target-commit 固定完整提交范围，且封印过程不写 Git object 或修改工作区", async (t) => {
