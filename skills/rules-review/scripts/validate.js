@@ -2709,13 +2709,6 @@ function renderResponseMarkdown(runDir, finalReview, gate) {
   const finalReviewPath = path.resolve(runDir, 'finalReview.json');
   const dispatchPath = path.resolve(runDir, 'dispatch.json');
   const findings = asArray(finalReview.findings);
-  const finalFindingLines = new Map();
-  if (fs.existsSync(finalMdPath)) {
-    fs.readFileSync(finalMdPath, 'utf8').split('\n').forEach((line, index) => {
-      const match = line.match(/^(?:####|-)\s+(F\d{3,})：/);
-      if (match) finalFindingLines.set(match[1], index + 1);
-    });
-  }
   const issueSummary = gate && gate.issueSummary ? gate.issueSummary : issueSummaryFromFinalReview(finalReview);
   const protocolGate = gate && gate.protocolGate ? gate.protocolGate : finalReview.protocolGate;
   const recommendation = gate && gate.recommendation ? gate.recommendation : finalReview.recommendation || deriveRecommendation(protocolGate, issueSummary);
@@ -2736,7 +2729,7 @@ function renderResponseMarkdown(runDir, finalReview, gate) {
   const cannotVerifyItems = asArray(finalReview.cannotVerifyItems);
   if (findings.length > 0) {
     lines.push('', '## 问题');
-    appendResponseFindingLines(lines, findings, finalMdPath, finalFindingLines);
+    appendResponseFindingLines(lines, findings);
   }
   if (cannotVerifyItems.length > 0) {
     lines.push('', '## 无法验证');
@@ -2782,7 +2775,7 @@ function appendFindingLines(lines, findings, repositoryRoot) {
   });
 }
 
-function appendResponseFindingLines(lines, findings, finalMdPath, finalFindingLines) {
+function appendResponseFindingLines(lines, findings) {
   const groups = [
     ['must_fix', '必须修复'],
     ['should_fix', '建议修复'],
@@ -2792,9 +2785,7 @@ function appendResponseFindingLines(lines, findings, finalMdPath, finalFindingLi
     if (items.length === 0) return;
     lines.push(`### ${title}`);
     items.forEach((finding) => {
-      const finalLine = finalFindingLines.get(finding.findingId);
-      const target = finalLine ? `${finalMdPath}:${finalLine}` : finalMdPath;
-      lines.push(`- ${formatMarkdownFileLink(finding.findingId, target)}：${finding.rootCause}`);
+      lines.push(`- ${finding.findingId}：${finding.rootCause}`);
     });
   });
 }
