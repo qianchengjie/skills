@@ -1,0 +1,10 @@
+name = "skill_eval"
+description = "Use when writing-skills runs a Skill behavior test without persistent memory."
+developer_instructions = "Follow the supplied task."
+
+[features]
+hooks = false
+
+[memories]
+use_memories = false
+generate_memories = false
