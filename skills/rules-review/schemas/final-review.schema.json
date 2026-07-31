@@ -7,7 +7,7 @@
   "required": ["kind", "schemaVersion", "runId", "protocolGate", "scopeMode", "coverageClaim", "semanticVerdict", "excludedFiles", "excludedRuleRefs", "findings", "observations", "issueSummary", "recommendation", "validationResults"],
   "properties": {
     "kind": { "const": "rules-review-final-review" },
-    "schemaVersion": { "const": 7 },
+    "schemaVersion": { "const": 8 },
     "runId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "protocolGate": { "enum": ["passed", "incomplete", "blocked"] },
     "scopeMode": { "enum": ["full", "scoped"] },

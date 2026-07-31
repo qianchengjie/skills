@@ -4,10 +4,10 @@
   "title": "rules-review dispatch",
   "type": "object",
   "additionalProperties": false,
-  "required": ["kind", "schemaVersion", "runId", "reviewRange", "ruleInputSource", "ruleSnapshot", "inputSnapshot", "ruleSet", "targets", "applicabilityMatrix", "reviewItems", "executionPlan", "reviewBatches"],
+  "required": ["kind", "schemaVersion", "runId", "reviewRange", "ruleInputSource", "ruleSnapshot", "inputSnapshot", "ruleSet", "targets", "applicabilityMatrix", "reviewItems", "reviewBatches"],
   "properties": {
     "kind": { "const": "rules-review-dispatch" },
-    "schemaVersion": { "const": 7 },
+    "schemaVersion": { "const": 8 },
     "runId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "reviewRange": {
       "type": "object",
@@ -60,7 +60,6 @@
     },
     "applicabilityMatrix": { "type": "array", "items": { "$ref": "#/$defs/applicabilityEntry" } },
     "reviewItems": { "type": "array", "items": { "$ref": "#/$defs/reviewItem" } },
-    "executionPlan": { "$ref": "#/$defs/executionPlan" },
     "reviewBatches": { "type": "array", "items": { "$ref": "#/$defs/reviewBatch" } },
     "inputSnapshot": {
       "type": "object",
@@ -71,54 +70,6 @@
       }
     }
   },
-  "allOf": [
-    {
-      "if": {
-        "required": ["executionPlan"],
-        "properties": {
-          "executionPlan": {
-            "required": ["mode"],
-            "properties": { "mode": { "const": "no_batch" } }
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "reviewBatches": { "maxItems": 0 },
-          "executionPlan": {
-            "properties": {
-              "selectedBy": { "const": "ai" },
-              "humanOverride": { "type": "null" }
-            }
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "required": ["executionPlan"],
-        "properties": {
-          "executionPlan": {
-            "required": ["mode"],
-            "properties": { "mode": { "const": "single_batch" } }
-          }
-        }
-      },
-      "then": { "properties": { "reviewBatches": { "minItems": 1, "maxItems": 1 } } }
-    },
-    {
-      "if": {
-        "required": ["executionPlan"],
-        "properties": {
-          "executionPlan": {
-            "required": ["mode"],
-            "properties": { "mode": { "const": "multi_batch" } }
-          }
-        }
-      },
-      "then": { "properties": { "reviewBatches": { "minItems": 2 } } }
-    }
-  ],
   "$defs": {
     "ruleInputSource": {
       "oneOf": [
@@ -140,50 +91,6 @@
           }
         }
       ]
-    },
-    "executionPlan": {
-      "type": "object",
-      "required": ["mode", "selectedBy", "policyVersion", "metrics", "signals", "reason", "humanOverride"],
-      "properties": {
-        "mode": { "enum": ["no_batch", "single_batch", "multi_batch"] },
-        "selectedBy": { "enum": ["ai", "human_override"] },
-        "policyVersion": { "const": "review-execution-policy/v1" },
-        "metrics": { "$ref": "#/$defs/executionMetrics" },
-        "signals": { "$ref": "#/$defs/executionSignals" },
-        "reason": { "type": "string", "minLength": 1 },
-        "humanOverride": {
-          "anyOf": [
-            { "type": "null" },
-            { "$ref": "#/$defs/humanOverride" }
-          ]
-        }
-      }
-    },
-    "executionMetrics": {
-      "type": "object",
-      "required": ["changedUnits", "candidates", "targets", "requiredRuleRefs", "reviewItems"],
-      "properties": {
-        "changedUnits": { "type": "integer", "minimum": 0 },
-        "candidates": { "type": "integer", "minimum": 0 },
-        "targets": { "type": "integer", "minimum": 0 },
-        "requiredRuleRefs": { "type": "integer", "minimum": 0 },
-        "reviewItems": { "type": "integer", "minimum": 0 }
-      }
-    },
-    "executionSignals": {
-      "type": "object",
-      "required": ["userRequestedConcurrency"],
-      "properties": {
-        "userRequestedConcurrency": { "type": "boolean" }
-      }
-    },
-    "humanOverride": {
-      "type": "object",
-      "required": ["requestedMode", "risk"],
-      "properties": {
-        "requestedMode": { "enum": ["single_batch", "multi_batch"] },
-        "risk": { "type": "string", "minLength": 1 }
-      }
     },
     "ruleSource": {
       "type": "object",
@@ -263,27 +170,22 @@
     },
     "reviewItem": {
       "type": "object",
-      "required": ["reviewItemId", "ruleRef", "targetKind", "targetId", "required"],
+      "additionalProperties": false,
+      "required": ["reviewItemId", "ruleRef", "targetKind", "targetId"],
       "properties": {
         "reviewItemId": { "type": "string", "pattern": "^RI\\d{3,}$" },
         "ruleRef": { "type": "string", "minLength": 1 },
         "targetKind": { "type": "string", "minLength": 1 },
-        "targetId": { "type": "string", "pattern": "^T\\d{3,}$" },
-        "required": { "type": "boolean" }
+        "targetId": { "type": "string", "pattern": "^T\\d{3,}$" }
       }
     },
     "reviewBatch": {
       "type": "object",
-      "required": ["reviewBatchId", "ruleSetId", "reviewItemIds", "taskRef", "shardRef", "returnStatus", "aggregateStatus"],
+      "additionalProperties": false,
+      "required": ["reviewBatchId", "reviewItemIds"],
       "properties": {
         "reviewBatchId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
-        "ruleSetId": { "type": "string", "minLength": 1 },
-        "reviewItemIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-        "taskRef": { "type": "string", "pattern": "^tasks/[A-Za-z0-9][A-Za-z0-9_-]*\\.json$" },
-        "shardRef": { "type": ["string", "null"], "pattern": "^shards/[A-Za-z0-9][A-Za-z0-9_-]*\\.json$" },
-        "returnStatus": { "enum": ["not_started", "started", "returned", "not_returned", "format_invalid", "untrusted"] },
-        "aggregateStatus": { "enum": ["aggregated", "not_aggregated"] },
-        "unaggregatedReason": { "type": ["string", "null"] }
+        "reviewItemIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
       }
     },
     "inputSnapshotFile": {

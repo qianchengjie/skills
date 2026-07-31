@@ -1,12 +1,12 @@
 ---
 name: rules-review
-description: 项目规则驱动的 commit 代码审查流程。代码 TARGET 固定为 commit；规则默认读取当前工作区中的 `.agents/rules/index.md` 与适用 active 规则，也可显式固定到另一个 rules commit。把固定代码 range 与封印规则快照消费为 `ruleSet -> targets -> applicabilityMatrix -> reviewItems -> executionPlan -> reviewBatches -> results -> finalReview`，并用 validator 校验协议闭合。仅审查已提交代码；默认只读，不维护规则仓，不替代全量功能 QA。
+description: 项目规则驱动的 commit 代码审查流程。代码 TARGET 固定为 commit；规则默认读取当前工作区中的 `.agents/rules/index.md` 与适用 active 规则，也可显式固定到另一个 rules commit。把固定代码 range 与封印规则快照消费为 `ruleSet -> targets -> applicabilityMatrix -> reviewItems -> reviewBatches -> results -> finalReview`，并用 validator 校验协议闭合。仅审查已提交代码；默认只读，不维护规则仓，不替代全量功能 QA。
 disable-model-invocation: true
 ---
 
 # 规范审查
 
-`rules-review` 使用 `schemaVersion = 7`。代码 TARGET 只能是 Git commit；规则输入与代码 TARGET 独立。每个新的 TARGET 都创建全新 run，完整审查该 TARGET 的全部当前 `reviewItems`，不继承旧结果，也不把修复轮当作增量审查。
+`rules-review` 使用 `schemaVersion = 8`。代码 TARGET 只能是 Git commit；规则输入与代码 TARGET 独立。每个新的 TARGET 都创建全新 run，完整审查该 TARGET 的全部当前 `reviewItems`，不继承旧结果，也不把修复轮当作增量审查。
 
 `protocolGate = "passed"` 只表示本轮结构协议闭合，不表示代码无问题。代码结论同时看 `semanticVerdict`、`issueSummary` 和 `recommendation`。
 
@@ -41,11 +41,11 @@ kind、未知字段、非规范 commit OID 或不符合 `rule-steward` Namespace
 `requiredRuleRefs × targetOrder` 顺序展开适用性矩阵，并按 `A = 适用`、
 `N = 不适用` 连续分配 reviewItem ID。batch key 直接成为 `reviewBatchId`。
 规则投影只读取 `rule-steward` 定义的 active 规则固定字段；规则分区、targets、
-适用性决定和 batch 分组全部来自输入。入口校验 `expectedCounts`，生成快照和
-hash，验证完整 v7 dispatch 后再以“同一 run 仅允许一次成功”的方式原子写入
-最终文件。
+适用性决定和顶层 `batchRuleRefs` 全部来自输入。入口校验 `expectedCounts`，
+生成快照和 hash，验证完整 v8 dispatch 后再以“同一 run 仅允许一次成功”的
+方式原子写入最终文件。
 
-controller 不得直接写完整 v7 draft，不得新建或内联执行 JS、Shell、Python、
+controller 不得直接写完整 v8 draft，不得新建或内联执行 JS、Shell、Python、
 `jq` 等生成逻辑，也不得手工展开 applicabilityMatrix、reviewItems 或
 reviewBatches。把生成器放到 run 目录外、在最终校验前删除，或解释为“一次性
 辅助脚本”都不改变该边界。`seal-dispatch` 只保留为内部兼容接口，不是
@@ -181,11 +181,11 @@ ruleRef x targetId = reviewItem
 
 对每个 `requiredRuleRefs x targets` 组合先生成一行 `applicabilityMatrix`：
 
-- `applicable` 必须绑定匹配的 `required: true` reviewItem。
+- `applicable` 必须绑定匹配的 reviewItem。
 - `not_applicable` 必须写 reason，不得绑定 reviewItem。
 - evidence 必须可定位。
 
-`reviewItems` 只能引用 selected 规则。每个当前 reviewItem 必须恰好进入一个当前 batch，并由当前 run 的 shard 返回恰好一个 result。`no_batch` 只允许 `reviewItems` 为空。
+`reviewItems` 只能引用 `requiredRuleRefs`，不含可选或 `required` 状态。每个当前 reviewItem 必须恰好进入一个当前 batch，并由当前 run 的 shard 返回恰好一个 result。`reviewBatches` 只保存 `reviewBatchId` 与 `reviewItemIds`；任务路径、shard 路径和完成态均由当前 run 的文件派生。
 
 ## 5. 工件与职责
 
@@ -193,7 +193,6 @@ ruleRef x targetId = reviewItem
 .rules-review-tmp/<run-id>/
   dispatch.json
   tasks/<reviewBatchId>.json
-  retries/<reviewBatchId>-retry-<n>.json
   shards/<reviewBatchId>.json
   validations/<artifact>.json
   finalReview.json
@@ -203,13 +202,19 @@ ruleRef x targetId = reviewItem
 
 所有 agent 间工件必须是 strict JSON。
 
-- `dispatch.json`：controller 的规则、目标、适用性、固定 range 和分派计划；不得含审查结论。
+- `dispatch.json`：controller 的规则、目标、适用性、固定 range 和静态 batch 分组；不得含审查结论或 batch 运行状态。
 - `tasks/*.json`：由 `build-tasks` 从 dispatch 机械投影，携带相同 `reviewRange`、`ruleInputSource`、`inputSnapshot`，以及规则索引和本批规则的 `ruleSnapshot`；`taskHash` 是删除自身字段后整份 task 的 canonical JSON SHA-256。
-- `shards/*.json`：reviewer 对本 batch 的当前结果，必须回显 task 的 `targetTree` 与 `taskHash`；是产生 `passed / finding / observation / not_applicable / cannot_verify` 的唯一位置。可选的 `otherConcerns` 只承载审查过程中自然注意到的规则外事项。
+- `shards/*.json`：reviewer 对本 batch 的当前结果，必须回显 task 的 `targetTree` 与 `taskHash`；是产生 `passed / finding / observation / cannot_verify` 的唯一位置。可选的 `otherConcerns` 只承载审查过程中自然注意到的规则外事项。
 - `finalReview.json`：由 `aggregate-final` 仅从当前 run 的 shards 聚合；同一 batch 内相同显式 `rootCause` 的 finding results 合并为一个 finding，并逐项保留 `evidenceGroups`。
 - `final.md`、`response.md`：展示层，不是事实源。
 
 不允许从旧 run 复制 result，不允许扫描目录猜测前序 run，不允许在 dispatch 中引用旧 review 工件。
+
+合法 task 与 shard 到达后保持封印 dispatch 不变：`aggregate-final` 和 `run` 按
+`tasks/<reviewBatchId>.json`、`shards/<reviewBatchId>.json` 的存在性与校验结果
+派生完成态。不得手工添加或修改 `shardRef`、`returnStatus`、
+`aggregateStatus`、`unaggregatedReason` 等状态字段。协议没有 `retry-task` 或
+`retries/` 工件；shard 不合规时由原 reviewer 重新提交同一路径的完整 shard。
 
 ## 6. reviewer 执行
 
@@ -220,7 +225,6 @@ reviewer 必须按 task 中的全部 reviewItems 分别完成审查并返回结�
 - `passed`：包含 evidence 与 failureChecks。
 - `finding`：包含 origin、evidence 和非空 `rootCause`；MUST finding 为 must_fix。
 - `observation`：包含 origin，以及 reason 或 evidence。
-- `not_applicable`：只允许非 required reviewItem，包含 reason。
 - `cannot_verify`：包含 reason 或 evidence。
 
 同一 batch 内多个 reviewItem 分别违反规则但属于同一根因时，每项仍返回 `finding`，并使用字节完全相同的 `rootCause` 描述共同失效的不变量。aggregator 只按 batch 身份与这个显式值机械分组，不根据措辞相似度、代码位置或证据内容猜测：
@@ -228,7 +232,7 @@ reviewer 必须按 task 中的全部 reviewItems 分别完成审查并返回结�
 - final finding 的 priority 取组内最高级别，`must_fix` 优先于 `should_fix`。
 - 每个原始 finding result 都保留为独立 `evidenceGroups` 项，不能因合并而丢失 target、ruleRef、origin、priority 或 evidence。
 - 同一 batch 由 reviewer 完成根因对齐；不同 batch 即使 `rootCause` 字节完全相同也不合并。
-- v7 不支持跨 batch 根因身份；后续如需支持，必须引入经显式确认的独立身份，不能依赖自由文本碰撞。
+- v8 不支持跨 batch 根因身份；后续如需支持，必须引入经显式确认的独立身份，不能依赖自由文本碰撞。
 - 根因是否相同是 reviewer 的语义判断；validator 只校验 `rootCause` 已记录、精确分组和结果引用闭合。
 
 阅读规则判断所需的业务链路是允许的；顺带发现规则外问题也可能发生，但不得把它写成 finding 或 observation。若值得提醒，只能写入 shard 顶层可选的 `otherConcerns: string[]`。已违反当前 task 规则的事项必须保留为对应 reviewItem 的正式 result，即使它与其它 result 同根因，也不得降级到 `otherConcerns`：

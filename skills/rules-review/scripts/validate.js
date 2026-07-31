@@ -10,7 +10,6 @@ const MODES = new Set([
   'construct-dispatch',
   'seal-dispatch',
   'task',
-  'retry-task',
   'shard',
   'final-review',
   'build-tasks',
@@ -21,10 +20,8 @@ const MODES = new Set([
   'run',
 ]);
 
-const SCHEMA_VERSION = 7;
-const RETURN_STATUSES = ['not_started', 'started', 'returned', 'not_returned', 'format_invalid', 'untrusted'];
-const AGGREGATE_STATUSES = ['aggregated', 'not_aggregated'];
-const RESULT_STATUSES = ['passed', 'finding', 'observation', 'not_applicable', 'cannot_verify'];
+const SCHEMA_VERSION = 8;
+const RESULT_STATUSES = ['passed', 'finding', 'observation', 'cannot_verify'];
 const PROTOCOL_GATES = ['passed', 'incomplete', 'blocked'];
 const SCOPE_MODES = ['full', 'scoped'];
 const COVERAGE_CLAIMS = ['full_complete', 'scoped_complete', 'incomplete', 'blocked'];
@@ -34,10 +31,6 @@ const RULE_LEVELS = ['MUST', 'SHOULD', 'ADVISORY'];
 const FINDING_ORIGINS = ['introduced_by_change', 'worsened_by_change', 'exposed_by_change', 'pre_existing'];
 const FINDING_PRIORITIES = ['must_fix', 'should_fix'];
 const ISSUE_SUMMARY_FIELDS = ['findings', 'mustFix', 'shouldFix', 'cannotVerify', 'observations'];
-const EXECUTION_POLICY_VERSION = 'review-execution-policy/v1';
-const EXECUTION_MODES = ['no_batch', 'single_batch', 'multi_batch'];
-const HUMAN_EXECUTION_MODES = ['single_batch', 'multi_batch'];
-const EXECUTION_SELECTED_BY = ['ai', 'human_override'];
 const APPLICABILITY_STATUSES = ['applicable', 'not_applicable'];
 const FAILURE_CHECK_OUTCOMES = ['checked_no_violation', 'not_triggered'];
 const REVIEW_ITEM_RE = /^RI\d{3,}$/;
@@ -185,9 +178,6 @@ function run(args) {
     } else if (mode === 'task') {
       const task = readJson(args.input, args.input, result, 'T001');
       if (task) validateTask(task, args.input, result);
-    } else if (mode === 'retry-task') {
-      const retryTask = readJson(args.input, args.input, result, 'RT001');
-      if (retryTask) validateRetryTask(retryTask, args.input, result);
     } else if (mode === 'shard') {
       const task = readJson(args.task, args.task, result, 'T001');
       const shard = readJson(args.input, args.input, result, 'S001');
@@ -221,7 +211,6 @@ function ensureSchemaFiles(result) {
   [
     'dispatch.schema.json',
     'task.schema.json',
-    'retry-task.schema.json',
     'shard.schema.json',
     'validation.schema.json',
     'final-review.schema.json',
@@ -355,15 +344,14 @@ function buildDispatchDraft(input, root) {
     'ruleProjection',
     'targets',
     'applicability',
-    'reviewItemProjection',
-    'executionPlan',
+    'batchRuleRefs',
     'expectedCounts',
   ], 'construction input');
   const repository = requireConstructionObject(input.repository, 'repository');
   const ruleProjection = requireConstructionObject(input.ruleProjection, 'ruleProjection');
   const inputTargets = requireConstructionObject(input.targets, 'targets');
   const applicability = requireConstructionObject(input.applicability, 'applicability');
-  const inputPlan = requireConstructionObject(input.executionPlan, 'executionPlan');
+  const batchRuleRefs = requireConstructionObject(input.batchRuleRefs, 'batchRuleRefs');
   const hasRulesCommit = Object.prototype.hasOwnProperty.call(repository, 'rulesCommit');
   assertConstructionKeys(
     repository,
@@ -384,16 +372,6 @@ function buildDispatchDraft(input, root) {
   ], 'ruleProjection');
   assertConstructionKeys(inputTargets, ['changedUnits', 'candidates', 'contextExpansions'], 'targets');
   assertConstructionKeys(applicability, ['encoding', 'evidenceProjection', 'notApplicableReason', 'byRule'], 'applicability');
-  assertConstructionKeys(inputPlan, [
-    'mode',
-    'selectedBy',
-    'policyVersion',
-    'signals',
-    'reason',
-    'humanOverride',
-    'batchRuleRefs',
-    'initialBatchState',
-  ], 'executionPlan');
   if (legacyInput) assertSafeRepoRelativePath(repository.fixture);
   resolveConstructionCommit(root, repository.baseCommit, 'repository.baseCommit');
   resolveConstructionCommit(root, repository.targetCommit, 'repository.targetCommit');
@@ -451,13 +429,6 @@ function buildDispatchDraft(input, root) {
   }
   const evidenceProjection = requireConstructionObject(applicability.evidenceProjection, 'applicability.evidenceProjection');
   assertConstructionKeys(evidenceProjection, ['loc', 'summary'], 'applicability.evidenceProjection');
-  const reviewItemProjection = requireConstructionObject(input.reviewItemProjection, 'reviewItemProjection');
-  assertConstructionKeys(reviewItemProjection, ['required', 'createFor', 'doNotCreateFor'], 'reviewItemProjection');
-  if (reviewItemProjection.required !== true
-    || reviewItemProjection.createFor !== '每个 A 决定'
-    || reviewItemProjection.doNotCreateFor !== '每个 N 决定') {
-    throw new Error('reviewItemProjection does not match construction-input v1');
-  }
   const byRule = requireConstructionObject(applicability.byRule, 'applicability.byRule');
   if (!setsEqual(new Set(Object.keys(byRule)), new Set(requiredRuleRefs))) {
     throw new Error('applicability.byRule must contain exactly requiredRuleRefs');
@@ -499,7 +470,6 @@ function buildDispatchDraft(input, root) {
           ruleRef,
           targetKind: target.targetKind,
           targetId,
-          required: true,
         });
       } else {
         entry.reason = renderConstructionTemplate(applicability.notApplicableReason, values, 'applicability.notApplicableReason');
@@ -508,15 +478,10 @@ function buildDispatchDraft(input, root) {
     });
   });
 
-  const batchRuleRefs = requireConstructionObject(inputPlan.batchRuleRefs, 'executionPlan.batchRuleRefs');
   const assignedRules = new Set();
-  const initialBatchState = requireConstructionObject(inputPlan.initialBatchState, 'executionPlan.initialBatchState');
-  assertConstructionKeys(initialBatchState, ['shardRef', 'returnStatus', 'aggregateStatus'], 'executionPlan.initialBatchState');
-  const signals = requireConstructionObject(inputPlan.signals, 'executionPlan.signals');
-  assertConstructionKeys(signals, ['userRequestedConcurrency'], 'executionPlan.signals');
   const reviewBatches = Object.entries(batchRuleRefs).map(([reviewBatchId, ruleRefs]) => {
     if (!isSafeToken(reviewBatchId)) throw new Error(`invalid reviewBatchId: ${reviewBatchId}`);
-    const batchRules = constructionStringSet(ruleRefs, `executionPlan.batchRuleRefs.${reviewBatchId}`);
+    const batchRules = constructionStringSet(ruleRefs, `batchRuleRefs.${reviewBatchId}`);
     batchRules.forEach((ruleRef) => {
       if (!selectedRuleRefs.includes(ruleRef)) throw new Error(`batch rule must be selected: ${ruleRef}`);
       if (assignedRules.has(ruleRef)) throw new Error(`batch rule is assigned more than once: ${ruleRef}`);
@@ -524,17 +489,11 @@ function buildDispatchDraft(input, root) {
     });
     return {
       reviewBatchId,
-      ruleSetId: ruleProjection.ruleSetId,
       reviewItemIds: reviewItems.filter((item) => batchRules.includes(item.ruleRef)).map((item) => item.reviewItemId),
-      taskRef: `tasks/${reviewBatchId}.json`,
-      shardRef: initialBatchState.shardRef,
-      returnStatus: initialBatchState.returnStatus,
-      aggregateStatus: initialBatchState.aggregateStatus,
-      unaggregatedReason: null,
     };
-  });
+  }).filter((batch) => batch.reviewItemIds.length > 0);
   if (!setsEqual(assignedRules, new Set(selectedRuleRefs))) {
-    throw new Error('executionPlan.batchRuleRefs must cover selectedRuleRefs exactly once');
+    throw new Error('batchRuleRefs must cover selectedRuleRefs exactly once');
   }
 
   const draft = {
@@ -563,21 +522,6 @@ function buildDispatchDraft(input, root) {
     },
     applicabilityMatrix,
     reviewItems,
-    executionPlan: {
-      mode: inputPlan.mode,
-      selectedBy: inputPlan.selectedBy,
-      policyVersion: inputPlan.policyVersion,
-      metrics: {
-        changedUnits: changedUnits.length,
-        candidates: candidates.length,
-        targets: targets.length,
-        requiredRuleRefs: requiredRuleRefs.length,
-        reviewItems: reviewItems.length,
-      },
-      signals: JSON.parse(JSON.stringify(signals)),
-      reason: inputPlan.reason,
-      humanOverride: JSON.parse(JSON.stringify(inputPlan.humanOverride)),
-    },
     reviewBatches,
   };
   assertExpectedConstructionCounts(input.expectedCounts, draft);
@@ -819,7 +763,7 @@ function sealDispatchMode(args, result) {
   const draft = readJson(args.input, args.input, result, 'D001');
   if (!draft) return;
   if (draft.schemaVersion !== SCHEMA_VERSION) {
-    addViolation(result, 'SD001', args.input, '/schemaVersion', 'seal-dispatch only accepts schemaVersion 7 rules-review drafts', SCHEMA_VERSION, draft.schemaVersion, 2);
+    addViolation(result, 'SD001', args.input, '/schemaVersion', `seal-dispatch only accepts schemaVersion ${SCHEMA_VERSION} rules-review drafts`, SCHEMA_VERSION, draft.schemaVersion, 2);
     return;
   }
 
@@ -1340,7 +1284,7 @@ function compareStrings(left, right) {
 function validateDispatch(dispatch, artifact, result, currentInputPath = artifact) {
   expectKind(dispatch, artifact, result, 'D002', 'rules-review-dispatch');
   validateDispatchSchemaVersion(dispatch, artifact, result);
-  const requiredFields = ['kind', 'schemaVersion', 'runId', 'reviewRange', 'ruleInputSource', 'ruleSnapshot', 'inputSnapshot', 'ruleSet', 'targets', 'applicabilityMatrix', 'reviewItems', 'executionPlan', 'reviewBatches'];
+  const requiredFields = ['kind', 'schemaVersion', 'runId', 'reviewRange', 'ruleInputSource', 'ruleSnapshot', 'inputSnapshot', 'ruleSet', 'targets', 'applicabilityMatrix', 'reviewItems', 'reviewBatches'];
   requireFields(dispatch, artifact, result, 'D004', '', requiredFields);
   rejectUnsupportedFields(dispatch, artifact, result, 'D006', '', requiredFields, 'dispatch');
   if (!isSafeToken(dispatch && dispatch.runId)) addViolation(result, 'D005', artifact, '/runId', 'runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', dispatch && dispatch.runId);
@@ -1351,8 +1295,7 @@ function validateDispatch(dispatch, artifact, result, currentInputPath = artifac
   const reviewItems = validateReviewItems(dispatch.reviewItems, ruleSet, targets, artifact, result);
   validateApplicabilityMatrix(dispatch.applicabilityMatrix, ruleSet, targets, reviewItems, artifact, result);
   validateRequiredContextCoverage(ruleSet, dispatch.targets, artifact, result);
-  validateReviewBatches(dispatch, ruleSet, reviewItems, artifact, result);
-  validateExecutionPlan(dispatch.executionPlan, dispatch, ruleSet, reviewItems, artifact, result);
+  validateReviewBatches(dispatch, reviewItems, artifact, result);
   validateSealedInputShape(dispatch, reviewItems, artifact, result);
   verifyTreeDispatchInputs(dispatch, currentInputPath, artifact, result);
 }
@@ -1513,15 +1456,12 @@ function validateReviewItems(reviewItems, ruleSet, targets, artifact, result) {
   }
   reviewItems.forEach((item, index) => {
     const pointer = `/reviewItems/${index}`;
-    requireFields(item, artifact, result, 'D061', pointer, ['reviewItemId', 'ruleRef', 'targetKind', 'targetId', 'required']);
+    const fields = ['reviewItemId', 'ruleRef', 'targetKind', 'targetId'];
+    requireFields(item, artifact, result, 'D061', pointer, fields);
+    rejectUnsupportedFields(item, artifact, result, 'D065', pointer, fields, 'reviewItem');
     if (!REVIEW_ITEM_RE.test(item && item.reviewItemId)) addViolation(result, 'D062', artifact, `${pointer}/reviewItemId`, 'reviewItemId must match RIxxx', 'RIxxx', item && item.reviewItemId);
     if (itemMap.has(item && item.reviewItemId)) addViolation(result, 'D063', artifact, `${pointer}/reviewItemId`, 'reviewItemId must be unique', 'unique RIxxx', item && item.reviewItemId);
-    if (!ruleSet.selectedRuleRefs.has(item && item.ruleRef)) addViolation(result, 'D064', artifact, `${pointer}/ruleRef`, 'reviewItem.ruleRef must exist in selectedRuleRefs', Array.from(ruleSet.selectedRuleRefs), item && item.ruleRef);
-    if (item && item.required !== true && item.required !== false) addViolation(result, 'D065', artifact, `${pointer}/required`, 'required must be boolean', 'boolean', item && item.required);
-    if (item && item.required === true && !ruleSet.requiredRuleRefs.has(item.ruleRef)) addViolation(result, 'D066', artifact, `${pointer}/ruleRef`, 'required reviewItem ruleRef must be in requiredRuleRefs', Array.from(ruleSet.requiredRuleRefs), item.ruleRef);
-    if (item && item.required === true && ruleSet.globallyNotApplicableRuleRefs.has(item.ruleRef)) {
-      addViolation(result, 'D067', artifact, `${pointer}/ruleRef`, 'globallyNotApplicableRuleRefs must not generate required reviewItem', 'non-required or no reviewItem', item.ruleRef);
-    }
+    if (!ruleSet.requiredRuleRefs.has(item && item.ruleRef)) addViolation(result, 'D064', artifact, `${pointer}/ruleRef`, 'reviewItem.ruleRef must exist in requiredRuleRefs', Array.from(ruleSet.requiredRuleRefs), item && item.ruleRef);
     if (!targets.allTargetIds.has(item && item.targetId)) {
       addViolation(result, 'D068', artifact, `${pointer}/targetId`, 'reviewItem targetId must exist in targets.changedUnits[] or targets.candidates[]', Array.from(targets.allTargetIds), item && item.targetId);
     } else {
@@ -1543,8 +1483,8 @@ function validateReviewItems(reviewItems, ruleSet, targets, artifact, result) {
     if (item && item.reviewItemId) itemMap.set(item.reviewItemId, item);
   });
   ruleSet.requiredRuleRefs.forEach((ruleRef) => {
-    const hasRequiredItem = Array.from(itemMap.values()).some((item) => item.required === true && item.ruleRef === ruleRef);
-    if (!hasRequiredItem) addViolation(result, 'D070', artifact, '/reviewItems', 'requiredRuleRef must generate at least one required reviewItem', ruleRef, Array.from(itemMap.values()));
+    const hasReviewItem = Array.from(itemMap.values()).some((item) => item.ruleRef === ruleRef);
+    if (!hasReviewItem) addViolation(result, 'D070', artifact, '/reviewItems', 'requiredRuleRef must generate at least one reviewItem', ruleRef, Array.from(itemMap.values()));
   });
   return itemMap;
 }
@@ -1588,8 +1528,8 @@ function validateApplicabilityMatrix(rows, ruleSet, targets, reviewItems, artifa
         addViolation(result, 'D159', artifact, `${pointer}/reviewItemId`, 'applicable matrix row reviewItemId must exist in reviewItems', Array.from(reviewItems.keys()), entry.reviewItemId);
         return;
       }
-      if (item.ruleRef !== entry.ruleRef || item.targetId !== entry.targetId || item.targetKind !== entry.targetKind || item.required !== true) {
-        addViolation(result, 'D160', artifact, `${pointer}/reviewItemId`, 'applicable matrix row must point to matching required reviewItem', { ruleRef: entry.ruleRef, targetId: entry.targetId, targetKind: entry.targetKind, required: true }, item);
+      if (item.ruleRef !== entry.ruleRef || item.targetId !== entry.targetId || item.targetKind !== entry.targetKind) {
+        addViolation(result, 'D160', artifact, `${pointer}/reviewItemId`, 'applicable matrix row must point to matching reviewItem', { ruleRef: entry.ruleRef, targetId: entry.targetId, targetKind: entry.targetKind }, item);
       }
       applicableItemIds.add(entry.reviewItemId);
     }
@@ -1612,9 +1552,8 @@ function validateApplicabilityMatrix(rows, ruleSet, targets, reviewItems, artifa
   });
 
   reviewItems.forEach((item) => {
-    if (!item.required) return;
     if (!applicableItemIds.has(item.reviewItemId)) {
-      addViolation(result, 'D164', artifact, '/applicabilityMatrix', 'each required reviewItem must be backed by applicable matrix row', item.reviewItemId, Array.from(applicableItemIds));
+      addViolation(result, 'D164', artifact, '/applicabilityMatrix', 'each reviewItem must be backed by applicable matrix row', item.reviewItemId, Array.from(applicableItemIds));
     }
   });
 }
@@ -1659,7 +1598,7 @@ function escapeJsonPointer(value) {
   return String(value).replace(/~/g, '~0').replace(/\//g, '~1');
 }
 
-function validateReviewBatches(dispatch, ruleSet, reviewItems, artifact, result) {
+function validateReviewBatches(dispatch, reviewItems, artifact, result) {
   const reviewBatches = dispatch && dispatch.reviewBatches;
   if (!Array.isArray(reviewBatches)) {
     addViolation(result, 'D080', artifact, '/reviewBatches', 'reviewBatches must be array', 'array', reviewBatches);
@@ -1669,13 +1608,13 @@ function validateReviewBatches(dispatch, ruleSet, reviewItems, artifact, result)
   const assignment = new Map();
   reviewBatches.forEach((batch, index) => {
     const pointer = `/reviewBatches/${index}`;
-    requireFields(batch, artifact, result, 'D081', pointer, ['reviewBatchId', 'ruleSetId', 'reviewItemIds', 'taskRef', 'shardRef', 'returnStatus', 'aggregateStatus']);
+    const fields = ['reviewBatchId', 'reviewItemIds'];
+    requireFields(batch, artifact, result, 'D081', pointer, fields);
+    rejectUnsupportedFields(batch, artifact, result, 'D087', pointer, fields, 'reviewBatch');
     const reviewBatchId = batch && batch.reviewBatchId;
-    const safeReviewBatchId = isSafeToken(reviewBatchId);
-    if (!safeReviewBatchId) addViolation(result, 'D082', artifact, `${pointer}/reviewBatchId`, 'reviewBatchId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', reviewBatchId);
+    if (!isSafeToken(reviewBatchId)) addViolation(result, 'D082', artifact, `${pointer}/reviewBatchId`, 'reviewBatchId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', reviewBatchId);
     if (batchIds.has(batch && batch.reviewBatchId)) addViolation(result, 'D083', artifact, `${pointer}/reviewBatchId`, 'reviewBatchId must be unique', 'unique batch id', batch && batch.reviewBatchId);
     if (batch && batch.reviewBatchId) batchIds.add(batch.reviewBatchId);
-    if (batch && batch.ruleSetId !== ruleSet.ruleSetId) addViolation(result, 'D084', artifact, `${pointer}/ruleSetId`, 'reviewBatch.ruleSetId must match ruleSet.ruleSetId', ruleSet.ruleSetId, batch.ruleSetId);
     validateStringSet(batch && batch.reviewItemIds, artifact, result, 'D085', `${pointer}/reviewItemIds`);
     if (!isNonEmptyArray(batch && batch.reviewItemIds)) addViolation(result, 'D093', artifact, `${pointer}/reviewItemIds`, 'reviewBatch must include at least one reviewItemId', 'non-empty reviewItemIds', batch && batch.reviewItemIds);
     asArray(batch && batch.reviewItemIds).forEach((reviewItemId, itemIndex) => {
@@ -1683,20 +1622,6 @@ function validateReviewBatches(dispatch, ruleSet, reviewItems, artifact, result)
       if (!assignment.has(reviewItemId)) assignment.set(reviewItemId, []);
       assignment.get(reviewItemId).push(batch && batch.reviewBatchId);
     });
-    const expectedTaskRef = safeReviewBatchId ? `tasks/${reviewBatchId}.json` : null;
-    const expectedShardRef = safeReviewBatchId ? `shards/${reviewBatchId}.json` : null;
-    if (!expectedTaskRef || batch.taskRef !== expectedTaskRef) addViolation(result, 'D087', artifact, `${pointer}/taskRef`, 'taskRef must equal tasks/<reviewBatchId>.json', expectedTaskRef, batch && batch.taskRef);
-    if (batch && batch.shardRef !== null && (!expectedShardRef || batch.shardRef !== expectedShardRef)) {
-      addViolation(result, 'D095', artifact, `${pointer}/shardRef`, 'shardRef must be null or equal shards/<reviewBatchId>.json', expectedShardRef ? [null, expectedShardRef] : null, batch.shardRef);
-    }
-    if (batch && batch.returnStatus === 'returned' && batch.shardRef !== expectedShardRef) {
-      addViolation(result, 'D096', artifact, `${pointer}/shardRef`, 'returned reviewBatch shardRef must equal shards/<reviewBatchId>.json', expectedShardRef, batch.shardRef);
-    }
-    if (!RETURN_STATUSES.includes(batch && batch.returnStatus)) addViolation(result, 'D088', artifact, `${pointer}/returnStatus`, 'returnStatus must be valid', RETURN_STATUSES, batch && batch.returnStatus);
-    if (!AGGREGATE_STATUSES.includes(batch && batch.aggregateStatus)) addViolation(result, 'D089', artifact, `${pointer}/aggregateStatus`, 'aggregateStatus must be valid', AGGREGATE_STATUSES, batch && batch.aggregateStatus);
-    if (batch && batch.aggregateStatus === 'aggregated' && batch.returnStatus !== 'returned') {
-      addViolation(result, 'D090', artifact, pointer, 'aggregated reviewBatch must have returnStatus returned', 'returned', batch.returnStatus);
-    }
   });
   assignment.forEach((batchIdsForItem, reviewItemId) => {
     if (batchIdsForItem.length > 1) {
@@ -1708,154 +1633,6 @@ function validateReviewBatches(dispatch, ruleSet, reviewItems, artifact, result)
       addViolation(result, 'D092', artifact, '/reviewBatches', 'reviewItem must be assigned to one reviewBatch', reviewItemId, Array.from(assignment.keys()));
     }
   });
-}
-
-function validateExecutionPlan(executionPlan, dispatch, ruleSet, reviewItems, artifact, result) {
-  if (!isObject(executionPlan)) {
-    addViolation(result, 'D100', artifact, '/executionPlan', 'executionPlan must be object', 'object', executionPlan);
-    return;
-  }
-
-  requireFields(executionPlan, artifact, result, 'D101', '/executionPlan', [
-    'mode',
-    'selectedBy',
-    'policyVersion',
-    'metrics',
-    'signals',
-    'reason',
-    'humanOverride',
-  ]);
-
-  const allowedModes = EXECUTION_MODES;
-  if (!allowedModes.includes(executionPlan.mode)) {
-    addViolation(result, 'D102', artifact, '/executionPlan/mode', 'executionPlan.mode must be valid', allowedModes, executionPlan.mode);
-  }
-  if (!EXECUTION_SELECTED_BY.includes(executionPlan.selectedBy)) {
-    addViolation(result, 'D103', artifact, '/executionPlan/selectedBy', 'executionPlan.selectedBy must be valid', EXECUTION_SELECTED_BY, executionPlan.selectedBy);
-  }
-  if (executionPlan.policyVersion !== EXECUTION_POLICY_VERSION) {
-    addViolation(result, 'D104', artifact, '/executionPlan/policyVersion', 'executionPlan.policyVersion must match review execution policy', EXECUTION_POLICY_VERSION, executionPlan.policyVersion);
-  }
-  if (!isNonEmptyString(executionPlan.reason)) {
-    addViolation(result, 'D105', artifact, '/executionPlan/reason', 'executionPlan.reason must be non-empty string', 'non-empty reason', executionPlan.reason);
-  }
-  if (executionPlan.mode === 'no_batch') {
-    if (reviewItems.size !== 0) {
-      addViolation(result, 'D106', artifact, '/reviewItems', 'no_batch requires empty reviewItems', [], asArray(dispatch && dispatch.reviewItems));
-    }
-    if (executionPlan.selectedBy !== 'ai') {
-      addViolation(result, 'D107', artifact, '/executionPlan/selectedBy', 'no_batch must be selected by ai', 'ai', executionPlan.selectedBy);
-    }
-    if (executionPlan.humanOverride !== null) {
-      addViolation(result, 'D108', artifact, '/executionPlan/humanOverride', 'no_batch forbids human override', null, executionPlan.humanOverride);
-    }
-  }
-
-  validateExecutionMetrics(executionPlan.metrics, dispatch, ruleSet, reviewItems, artifact, result);
-  validateExecutionSignals(executionPlan.signals, artifact, result);
-  validateHumanOverride(executionPlan, artifact, result);
-  validateExecutionModeAgainstPolicy(executionPlan, dispatch, artifact, result);
-}
-
-function validateExecutionMetrics(metrics, dispatch, ruleSet, reviewItems, artifact, result) {
-  if (!isObject(metrics)) {
-    addViolation(result, 'D110', artifact, '/executionPlan/metrics', 'executionPlan.metrics must be object', 'object', metrics);
-    return;
-  }
-
-  requireFields(metrics, artifact, result, 'D111', '/executionPlan/metrics', [
-    'changedUnits',
-    'candidates',
-    'targets',
-    'requiredRuleRefs',
-    'reviewItems',
-  ]);
-
-  const expected = {
-    changedUnits: asArray(dispatch && dispatch.targets && dispatch.targets.changedUnits).length,
-    candidates: asArray(dispatch && dispatch.targets && dispatch.targets.candidates).length,
-    targets: asArray(dispatch && dispatch.targets && dispatch.targets.changedUnits).length + asArray(dispatch && dispatch.targets && dispatch.targets.candidates).length,
-    requiredRuleRefs: ruleSet.requiredRuleRefs.size,
-    reviewItems: reviewItems.size,
-  };
-
-  Object.keys(expected).forEach((key) => {
-    if (!Number.isInteger(metrics[key]) || metrics[key] < 0) {
-      addViolation(result, 'D112', artifact, `/executionPlan/metrics/${key}`, 'executionPlan metric must be non-negative integer', 'integer >= 0', metrics[key]);
-      return;
-    }
-    if (metrics[key] !== expected[key]) {
-      addViolation(result, 'D113', artifact, `/executionPlan/metrics/${key}`, 'executionPlan metric must match dispatch facts', expected[key], metrics[key]);
-    }
-  });
-}
-
-function validateExecutionSignals(signals, artifact, result) {
-  if (!isObject(signals)) {
-    addViolation(result, 'D120', artifact, '/executionPlan/signals', 'executionPlan.signals must be object', 'object', signals);
-    return;
-  }
-  requireFields(signals, artifact, result, 'D121', '/executionPlan/signals', ['userRequestedConcurrency']);
-  if (signals.userRequestedConcurrency !== true && signals.userRequestedConcurrency !== false) {
-    addViolation(result, 'D122', artifact, '/executionPlan/signals/userRequestedConcurrency', 'userRequestedConcurrency must be boolean', 'boolean', signals.userRequestedConcurrency);
-  }
-}
-
-function validateHumanOverride(executionPlan, artifact, result) {
-  if (executionPlan.selectedBy === 'human_override') {
-    if (!isObject(executionPlan.humanOverride)) {
-      addViolation(result, 'D130', artifact, '/executionPlan/humanOverride', 'humanOverride must be object when selectedBy=human_override', 'object', executionPlan.humanOverride);
-      return;
-    }
-    requireFields(executionPlan.humanOverride, artifact, result, 'D131', '/executionPlan/humanOverride', ['requestedMode', 'risk']);
-    if (!HUMAN_EXECUTION_MODES.includes(executionPlan.humanOverride.requestedMode)) {
-      addViolation(result, 'D132', artifact, '/executionPlan/humanOverride/requestedMode', 'humanOverride.requestedMode must be valid', HUMAN_EXECUTION_MODES, executionPlan.humanOverride.requestedMode);
-    }
-    if (executionPlan.humanOverride.requestedMode !== executionPlan.mode) {
-      addViolation(result, 'D135', artifact, '/executionPlan/humanOverride/requestedMode', 'humanOverride.requestedMode must match executionPlan.mode', executionPlan.mode, executionPlan.humanOverride.requestedMode);
-    }
-    if (!isNonEmptyString(executionPlan.humanOverride.risk)) {
-      addViolation(result, 'D133', artifact, '/executionPlan/humanOverride/risk', 'humanOverride.risk must be non-empty string', 'non-empty risk', executionPlan.humanOverride.risk);
-    }
-    return;
-  }
-
-  if (executionPlan.humanOverride !== null) {
-    addViolation(result, 'D134', artifact, '/executionPlan/humanOverride', 'humanOverride must be null unless selectedBy=human_override', null, executionPlan.humanOverride);
-  }
-}
-
-function validateExecutionModeAgainstPolicy(executionPlan, dispatch, artifact, result) {
-  const batchCount = asArray(dispatch && dispatch.reviewBatches).length;
-  if (executionPlan.mode === 'no_batch') {
-    if (batchCount !== 0) {
-      addViolation(result, 'D139', artifact, '/reviewBatches', 'no_batch executionPlan requires zero reviewBatches', 0, batchCount);
-    }
-    return;
-  }
-  if (executionPlan.mode === 'single_batch' && batchCount !== 1) {
-    addViolation(result, 'D140', artifact, '/reviewBatches', 'single_batch executionPlan requires exactly one reviewBatch', 1, batchCount);
-  }
-  if (executionPlan.mode === 'multi_batch' && batchCount < 2) {
-    addViolation(result, 'D141', artifact, '/reviewBatches', 'multi_batch executionPlan requires at least two reviewBatches', '>= 2', batchCount);
-  }
-
-  const reviewItems = new Map(asArray(dispatch && dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
-  const dispatchedIds = new Set(asArray(dispatch && dispatch.reviewBatches).flatMap((batch) => asArray(batch && batch.reviewItemIds)));
-  const dispatchedTargets = new Set([...dispatchedIds].map((reviewItemId) => reviewItems.get(reviewItemId) && reviewItems.get(reviewItemId).targetId).filter(Boolean));
-  if (executionPlan.selectedBy === 'human_override') {
-    if (executionPlan.humanOverride && executionPlan.humanOverride.requestedMode === 'multi_batch' && dispatchedIds.size < 2) {
-      addViolation(result, 'D143', artifact, '/executionPlan/humanOverride/requestedMode', 'human override cannot request multi_batch with fewer than two dispatched reviewItems', '>= 2 dispatched reviewItems', dispatchedIds.size);
-    }
-    return;
-  }
-  const signals = isObject(executionPlan.signals) ? executionPlan.signals : {};
-  const mustMulti = dispatchedIds.size > 30
-    || dispatchedTargets.size > 20
-    || (signals.userRequestedConcurrency === true && dispatchedIds.size >= 2);
-  if (mustMulti && executionPlan.mode !== 'multi_batch') {
-    addViolation(result, 'D142', artifact, '/executionPlan/mode', 'hard execution policy requires multi_batch', 'multi_batch', executionPlan.mode);
-  }
 }
 
 function validateTask(task, artifact, result, currentInputPath = artifact) {
@@ -1891,7 +1668,9 @@ function validateTask(task, artifact, result, currentInputPath = artifact) {
 
   asArray(task.reviewItems).forEach((item, index) => {
     const pointer = `/reviewItems/${index}`;
-    requireFields(item, artifact, result, 'T008', pointer, ['reviewItemId', 'ruleRef', 'targetKind', 'targetId', 'required']);
+    const fields = ['reviewItemId', 'ruleRef', 'targetKind', 'targetId'];
+    requireFields(item, artifact, result, 'T008', pointer, fields);
+    rejectUnsupportedFields(item, artifact, result, 'T026', pointer, fields, 'task reviewItem');
     if (!REVIEW_ITEM_RE.test(item && item.reviewItemId)) addViolation(result, 'T009', artifact, `${pointer}/reviewItemId`, 'reviewItemId must match RIxxx', 'RIxxx', item && item.reviewItemId);
     if (!TARGET_RE.test((item && item.targetId) || '')) addViolation(result, 'T023', artifact, `${pointer}/targetId`, 'task reviewItem targetId must match T followed by at least three digits', 'Txxx...', item && item.targetId);
   });
@@ -1982,51 +1761,16 @@ function validateTaskApplicabilityMatrix(task, artifact, result) {
       addViolation(result, 'T038', artifact, `${pointer}/reviewItemId`, 'task applicabilityMatrix reviewItemId must exist in task.reviewItems[]', Array.from(reviewItems.keys()), entry.reviewItemId);
       return;
     }
-    if (item.required !== true || item.ruleRef !== entry.ruleRef || item.targetId !== entry.targetId || item.targetKind !== entry.targetKind) {
-      addViolation(result, 'T039', artifact, `${pointer}/reviewItemId`, 'task applicabilityMatrix row must match required reviewItem', item, entry);
+    if (item.ruleRef !== entry.ruleRef || item.targetId !== entry.targetId || item.targetKind !== entry.targetKind) {
+      addViolation(result, 'T039', artifact, `${pointer}/reviewItemId`, 'task applicabilityMatrix row must match reviewItem', item, entry);
     }
   });
 
   reviewItems.forEach((item) => {
-    if (item && item.required === true && !rowsByItem.has(item.reviewItemId)) {
-      addViolation(result, 'T040', artifact, '/applicabilityMatrix', 'task must include an applicable matrix row for each required reviewItem', item.reviewItemId, Array.from(rowsByItem.keys()));
+    if (item && !rowsByItem.has(item.reviewItemId)) {
+      addViolation(result, 'T040', artifact, '/applicabilityMatrix', 'task must include an applicable matrix row for each reviewItem', item.reviewItemId, Array.from(rowsByItem.keys()));
     }
   });
-}
-
-function validateRetryTask(retryTask, artifact, result) {
-  expectKind(retryTask, artifact, result, 'RT002', 'rules-review-retry-task');
-  validateSchemaVersion(retryTask, artifact, result, 'RT003');
-  requireFields(retryTask, artifact, result, 'RT004', '', ['kind', 'schemaVersion', 'runId', 'retryAttempt', 'reason', 'originalTaskRef', 'violations', 'outputContract']);
-  if (!isObject(retryTask)) return;
-  const allowedFields = new Set(['kind', 'schemaVersion', 'runId', 'retryAttempt', 'reason', 'originalTaskRef', 'violations', 'outputContract']);
-  Object.keys(retryTask).forEach((field) => {
-    if (!allowedFields.has(field)) addViolation(result, 'RT007', artifact, `/${field}`, 'retryTask contains unsupported field', Array.from(allowedFields), field);
-  });
-  if (!isSafeToken(retryTask.runId)) addViolation(result, 'RT008', artifact, '/runId', 'retry runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', retryTask.runId);
-  if (!isNonEmptyString(retryTask.reason)) addViolation(result, 'RT009', artifact, '/reason', 'retry reason must be non-empty string', 'non-empty reason', retryTask.reason);
-  if (!isNonEmptyString(retryTask.originalTaskRef)) addViolation(result, 'RT010', artifact, '/originalTaskRef', 'retry originalTaskRef must be non-empty string', 'non-empty task reference', retryTask.originalTaskRef);
-  if (!Number.isInteger(retryTask.retryAttempt) || retryTask.retryAttempt < 1) addViolation(result, 'RT005', artifact, '/retryAttempt', 'retryAttempt must be positive integer', 'integer >= 1', retryTask.retryAttempt);
-  if (!Array.isArray(retryTask.violations)) {
-    addViolation(result, 'RT006', artifact, '/violations', 'violations must be array', 'array', retryTask.violations);
-  } else {
-    retryTask.violations.forEach((violation, index) => {
-      const pointer = `/violations/${index}`;
-      requireFields(violation, artifact, result, 'RT011', pointer, ['code', 'severity', 'artifact', 'jsonPointer', 'message', 'expected', 'actual']);
-      if (!isNonEmptyString(violation && violation.code)) addViolation(result, 'RT012', artifact, `${pointer}/code`, 'retry violation code must be non-empty string', 'non-empty code', violation && violation.code);
-      if (!['error', 'warning', 'skipped'].includes(violation && violation.severity)) addViolation(result, 'RT013', artifact, `${pointer}/severity`, 'retry violation severity must be valid', ['error', 'warning', 'skipped'], violation && violation.severity);
-      if (!isNonEmptyString(violation && violation.message)) addViolation(result, 'RT014', artifact, `${pointer}/message`, 'retry violation message must be non-empty string', 'non-empty message', violation && violation.message);
-    });
-  }
-  if (!isObject(retryTask.outputContract)) {
-    addViolation(result, 'RT015', artifact, '/outputContract', 'retry outputContract must be object', 'object', retryTask.outputContract);
-  } else {
-    Object.keys(retryTask.outputContract).forEach((field) => {
-      if (!['format', 'schemaRef'].includes(field)) addViolation(result, 'RT018', artifact, `/outputContract/${field}`, 'retry outputContract contains unsupported field', ['format', 'schemaRef'], field);
-    });
-    if (retryTask.outputContract.format !== 'strict_json') addViolation(result, 'RT016', artifact, '/outputContract/format', 'retry output format must be strict_json', 'strict_json', retryTask.outputContract.format);
-    if (retryTask.outputContract.schemaRef !== 'schemas/shard.schema.json') addViolation(result, 'RT017', artifact, '/outputContract/schemaRef', 'retry schemaRef must point to shard schema', 'schemas/shard.schema.json', retryTask.outputContract.schemaRef);
-  }
 }
 
 function validateShard(shard, task, artifact, result) {
@@ -2105,23 +1849,11 @@ function validateReviewResult(reviewResult, artifact, result, pointer, prefix, t
     validateShardEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}015`, `${pointer}/evidence`, 'passed result requires evidence');
     validateFailureChecks(reviewResult, taskContext, artifact, result, pointer, prefix);
   }
-  if (reviewResult && reviewResult.status === 'not_applicable') {
-    const item = taskContext && taskContext.reviewItems ? taskContext.reviewItems.get(reviewResult.reviewItemId) : null;
-    if (item && item.required === true) {
-      addViolation(result, `${prefix}037`, artifact, `${pointer}/status`, 'required reviewItem cannot return not_applicable', 'passed/finding/observation/cannot_verify', reviewResult.status);
-    }
-    if (!isNonEmptyString(reviewResult.reason)) {
-      addViolation(result, `${prefix}016`, artifact, `${pointer}/reason`, 'not_applicable result requires reason', 'non-empty reason', reviewResult.reason);
-    }
-  }
   if (reviewResult && reviewResult.status === 'cannot_verify' && !isNonEmptyString(reviewResult.reason) && !hasValidEvidenceArray(reviewResult.evidence)) {
     addViolation(result, `${prefix}017`, artifact, pointer, 'cannot_verify result requires reason or evidence', 'reason or evidence[]', reviewResult);
   }
   if (reviewResult && reviewResult.status === 'cannot_verify' && reviewResult.evidence !== undefined) {
     validateShardEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}041`, `${pointer}/evidence`, 'cannot_verify evidence must be reviewable when present');
-  }
-  if (reviewResult && reviewResult.status === 'not_applicable' && reviewResult.evidence !== undefined) {
-    validateShardEvidenceArray(reviewResult.evidence, artifact, result, `${prefix}018`, `${pointer}/evidence`, 'not_applicable evidence must be reviewable when present');
   }
 }
 
@@ -2306,7 +2038,7 @@ function validateRunDirectoryFiles(runDir, result) {
   files.forEach((filePath) => {
     const relativePath = rel(runDir, filePath);
     if (!isAllowedRunArtifact(relativePath)) {
-      addViolation(result, 'RUN003', relativePath, null, 'run directory must only contain rules-review protocol artifacts', 'dispatch/finalReview/final/response or JSON under tasks/retries/shards/validations', relativePath);
+      addViolation(result, 'RUN003', relativePath, null, 'run directory must only contain rules-review protocol artifacts', 'dispatch/finalReview/final/response or JSON under tasks/shards/validations', relativePath);
     }
   });
   return true;
@@ -2332,7 +2064,7 @@ function collectFiles(dir, realRoot = fs.realpathSync(dir)) {
 
 function isAllowedRunArtifact(relativePath) {
   if (['dispatch.json', 'finalReview.json', 'final.md', 'response.md'].includes(relativePath)) return true;
-  return /^(tasks|retries|shards|validations)\/[^/]+\.json$/.test(relativePath);
+  return /^(tasks|shards|validations)\/[^/]+\.json$/.test(relativePath);
 }
 
 function validateRunArtifacts(runDir, dispatch, result) {
@@ -2341,30 +2073,26 @@ function validateRunArtifacts(runDir, dispatch, result) {
   const resultOwners = new Map();
   const otherConcerns = [];
 
-  if (dispatch.executionPlan && dispatch.executionPlan.mode === 'no_batch') {
+  if (asArray(dispatch.reviewBatches).length === 0) {
     const reviewerArtifacts = collectFiles(runDir)
       .map((filePath) => rel(runDir, filePath))
-      .filter((relativePath) => /^(tasks|retries|shards)\/.+\.json$/.test(relativePath));
+      .filter((relativePath) => /^(tasks|shards)\/.+\.json$/.test(relativePath));
     if (reviewerArtifacts.length > 0) {
-      addViolation(result, 'RUN009', rel(runDir, 'dispatch.json'), null, 'no_batch run must not contain reviewer JSON artifacts', [], reviewerArtifacts);
+      addViolation(result, 'RUN009', rel(runDir, 'dispatch.json'), null, 'run without reviewBatches must not contain reviewer JSON artifacts', [], reviewerArtifacts);
     }
     return { results, resultOwners, otherConcerns };
   }
-
-  validateRetryArtifacts(runDir, dispatch, result);
 
   asArray(dispatch.reviewBatches).forEach((batch, batchIndex) => {
     const batchPointer = `/reviewBatches/${batchIndex}`;
     const reviewBatchId = batch && batch.reviewBatchId;
     const expectedTaskRef = isSafeToken(reviewBatchId) ? `tasks/${reviewBatchId}.json` : null;
-    if (!expectedTaskRef || batch.taskRef !== expectedTaskRef) return;
+    if (!expectedTaskRef) return;
     const taskPath = path.join(runDir, 'tasks', `${reviewBatchId}.json`);
     const taskArtifact = rel(runDir, taskPath);
-    const taskExists = batch.taskRef && fs.existsSync(taskPath);
 
-    if (!taskExists) {
-      const impact = batch.returnStatus === 'returned' ? 'blocked' : 'incomplete';
-      addViolation(result, 'RUN010', rel(runDir, 'dispatch.json'), `${batchPointer}/taskRef`, 'task.json missing for reviewBatch', 'readable taskRef', batch.taskRef, impact === 'blocked' ? 2 : 1, impact);
+    if (!fs.existsSync(taskPath)) {
+      addViolation(result, 'RUN010', rel(runDir, 'dispatch.json'), batchPointer, 'task.json missing for reviewBatch', expectedTaskRef, null, 1, 'incomplete');
       return;
     }
 
@@ -2373,27 +2101,13 @@ function validateRunArtifacts(runDir, dispatch, result) {
     validateTask(task, taskArtifact, result, taskPath);
     validateTaskAgainstDispatch(task, dispatch, batch, reviewItems, taskArtifact, result);
 
-    const completeBatch = batch.returnStatus === 'returned' && batch.aggregateStatus === 'aggregated';
-    if (!completeBatch) {
-      const statusImpact = ['format_invalid', 'untrusted'].includes(batch.returnStatus) || (batch.returnStatus === 'returned' && batch.aggregateStatus === 'not_aggregated')
-        ? 'blocked'
-        : 'incomplete';
-      addViolation(result, 'RUN011', rel(runDir, 'dispatch.json'), batchPointer, 'reviewBatch was not returned and aggregated', 'returned + aggregated', {
-        returnStatus: batch.returnStatus,
-        aggregateStatus: batch.aggregateStatus,
-      }, 1, statusImpact);
-      return;
-    }
-
-    if (!isNonEmptyString(batch.shardRef)) {
-      addViolation(result, 'RUN012', rel(runDir, 'dispatch.json'), `${batchPointer}/shardRef`, 'returned reviewBatch requires shardRef', 'shardRef', batch.shardRef);
-      return;
-    }
-
     const expectedShardRef = `shards/${reviewBatchId}.json`;
-    if (batch.shardRef !== expectedShardRef) return;
     const shardPath = path.join(runDir, 'shards', `${reviewBatchId}.json`);
     const shardArtifact = rel(runDir, shardPath);
+    if (!fs.existsSync(shardPath)) {
+      addViolation(result, 'RUN011', rel(runDir, 'dispatch.json'), batchPointer, 'shard.json missing for reviewBatch', expectedShardRef, null, 1, 'incomplete');
+      return;
+    }
     const shard = readJson(shardPath, shardArtifact, result, 'S001');
     if (!shard) return;
     validateShard(shard, task, shardArtifact, result);
@@ -2437,23 +2151,6 @@ function maxNumericId(values, pattern) {
   return max;
 }
 
-function validateRetryArtifacts(runDir, dispatch, result) {
-  const retryDir = path.join(runDir, 'retries');
-  if (!fs.existsSync(retryDir)) return;
-  const taskRefs = new Set(asArray(dispatch.reviewBatches).map((batch) => batch && batch.taskRef).filter(Boolean));
-  fs.readdirSync(retryDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
-    .forEach((entry) => {
-      const retryPath = path.join(retryDir, entry.name);
-      const artifact = rel(runDir, retryPath);
-      const retryTask = readJson(retryPath, artifact, result, 'RT001');
-      if (!retryTask) return;
-      validateRetryTask(retryTask, artifact, result);
-      if (retryTask.runId !== dispatch.runId) addViolation(result, 'RUN050', artifact, '/runId', 'retry runId must match dispatch runId', dispatch.runId, retryTask.runId);
-      if (!taskRefs.has(retryTask.originalTaskRef)) addViolation(result, 'RUN051', artifact, '/originalTaskRef', 'retry originalTaskRef must reference a dispatch task', Array.from(taskRefs), retryTask.originalTaskRef);
-    });
-}
-
 function validateTaskAgainstDispatch(task, dispatch, batch, reviewItems, artifact, result) {
   if (task.runId !== dispatch.runId) addViolation(result, 'RUN020', artifact, '/runId', 'task runId must match dispatch runId', dispatch.runId, task.runId);
   if (task.reviewBatchId !== batch.reviewBatchId) addViolation(result, 'RUN021', artifact, '/reviewBatchId', 'task reviewBatchId must match reviewBatchId', batch.reviewBatchId, task.reviewBatchId);
@@ -2480,7 +2177,7 @@ function validateTaskAgainstDispatch(task, dispatch, batch, reviewItems, artifac
   asArray(task.reviewItems).forEach((item, index) => {
     const expected = reviewItems.get(item.reviewItemId);
     if (!expected) return;
-    ['ruleRef', 'targetKind', 'targetId', 'required'].forEach((field) => {
+    ['ruleRef', 'targetKind', 'targetId'].forEach((field) => {
       if (item[field] !== expected[field]) addViolation(result, 'RUN024', artifact, `/reviewItems/${index}/${field}`, 'task reviewItem must equal dispatch reviewItem', expected[field], item[field]);
     });
   });
@@ -2800,16 +2497,16 @@ function buildTasksMode(args, result) {
 
   const outputDir = path.resolve(args.out);
   const tasks = buildTasks(dispatch);
-  if (dispatch.executionPlan && dispatch.executionPlan.mode === 'no_batch' && fs.existsSync(outputDir)) {
+  if (asArray(dispatch.reviewBatches).length === 0 && fs.existsSync(outputDir)) {
     const existingTasks = collectFiles(outputDir).filter((filePath) => filePath.endsWith('.json'));
     if (existingTasks.length > 0) {
-      addViolation(result, 'BT002', args.out, '/out', 'no_batch build-tasks requires an empty JSON output directory', [], existingTasks.map((filePath) => path.relative(outputDir, filePath)));
+      addViolation(result, 'BT002', args.out, '/out', 'build-tasks without reviewBatches requires an empty JSON output directory', [], existingTasks.map((filePath) => path.relative(outputDir, filePath)));
       return;
     }
   }
   const reviewItems = new Map(asArray(dispatch.reviewItems).map((item) => [item.reviewItemId, item]));
   const outputs = tasks.map(({ batch, task }) => {
-    const outputPath = path.join(outputDir, path.basename(batch.taskRef || `${batch.reviewBatchId}.json`));
+    const outputPath = path.join(outputDir, `${batch.reviewBatchId}.json`);
     return { batch, task, outputPath, content: `${JSON.stringify(task, null, 2)}\n` };
   });
   const conflict = outputs.find(({ outputPath, content }) => {
@@ -3175,9 +2872,8 @@ function validateFinalMarkdown(finalReview, markdownPath, result, dispatch) {
     `runId：${finalReview.runId}`,
     '验证摘要：',
   ];
-  if (dispatch && dispatch.executionPlan) {
+  if (dispatch) {
     required.push(
-      formatExecutionMode(dispatch.executionPlan.mode),
       `ruleSetId：${dispatch.ruleSet && dispatch.ruleSet.ruleSetId ? dispatch.ruleSet.ruleSetId : '未知'}`,
       `sourceIndexHash：${dispatch.ruleSet && dispatch.ruleSet.sourceIndexHash ? dispatch.ruleSet.sourceIndexHash : '未知'}`,
       `selectedRuleRefs：${asArray(dispatch.ruleSet && dispatch.ruleSet.selectedRuleRefs).length}`,
@@ -3204,7 +2900,6 @@ function renderFinalMarkdown(finalReview, dispatch, runDir) {
   const observations = asArray(finalReview.observations);
   const issueSummary = issueSummaryFromFinalReview(finalReview);
   const recommendation = finalReview.recommendation || deriveRecommendation(finalReview.protocolGate, issueSummary);
-  const executionPlan = dispatch && dispatch.executionPlan;
   const repositoryRoot = loadRepository(path.join(runDir, 'dispatch.json')).root;
   const lines = [
     `# ${reviewTitle(finalReview.protocolGate, issueSummary)}`,
@@ -3251,9 +2946,6 @@ function renderFinalMarkdown(finalReview, dispatch, runDir) {
     '',
     '## 审计',
     ...formatAuditLines(finalReview, dispatch, runDir),
-    '',
-    '## 执行计划',
-    ...formatExecutionPlanLines(executionPlan),
   );
   lines.push('', '## 验证', `- protocolGate：${protocolGateLabel(finalReview.protocolGate)}`);
   asArray(finalReview.validationResults).forEach((validation) => {
@@ -3839,30 +3531,6 @@ function reviewConclusion(protocolGate, issueSummary) {
   if (issueSummary.findings > 0) return '发现问题';
   if (issueSummary.cannotVerify > 0) return '未发现明确问题';
   return '未发现问题';
-}
-
-function formatExecutionMode(mode) {
-  if (mode === 'single_batch') return 'single_batch';
-  if (mode === 'multi_batch') return 'multi_batch';
-  return String(mode || '未知');
-}
-
-function formatExecutionPlanLines(executionPlan) {
-  if (!isObject(executionPlan)) return ['- 未记录'];
-  const metrics = isObject(executionPlan.metrics) ? executionPlan.metrics : {};
-  const signals = isObject(executionPlan.signals) ? executionPlan.signals : {};
-  const lines = [
-    `- mode：${formatExecutionMode(executionPlan.mode)}`,
-    `- selectedBy：${executionPlan.selectedBy || '未知'}`,
-    `- policyVersion：${executionPlan.policyVersion || '未知'}`,
-    `- metrics：changedUnits=${formatMetric(metrics.changedUnits)}，candidates=${formatMetric(metrics.candidates)}，targets=${formatMetric(metrics.targets)}，requiredRuleRefs=${formatMetric(metrics.requiredRuleRefs)}，reviewItems=${formatMetric(metrics.reviewItems)}`,
-    `- userRequestedConcurrency：${signals.userRequestedConcurrency === true ? 'true' : 'false'}`,
-    `- reason：${executionPlan.reason || '未记录'}`,
-  ];
-  if (isObject(executionPlan.humanOverride)) {
-    lines.push(`- humanOverride：requestedMode=${executionPlan.humanOverride.requestedMode || '未知'}，risk=${executionPlan.humanOverride.risk || '未记录'}`);
-  }
-  return lines;
 }
 
 function formatMetric(value) {

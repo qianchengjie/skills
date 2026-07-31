@@ -6,7 +6,7 @@
   "required": ["kind", "schemaVersion", "runId", "reviewBatchId", "targetTree", "taskHash", "results"],
   "properties": {
     "kind": { "const": "rules-review-shard" },
-    "schemaVersion": { "const": 7 },
+    "schemaVersion": { "const": 8 },
     "runId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "reviewBatchId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "targetTree": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
@@ -20,7 +20,7 @@
       "required": ["reviewItemId", "status"],
       "properties": {
         "reviewItemId": { "type": "string", "pattern": "^RI\\d{3,}$" },
-        "status": { "enum": ["passed", "finding", "observation", "not_applicable", "cannot_verify"] },
+        "status": { "enum": ["passed", "finding", "observation", "cannot_verify"] },
         "findingId": false,
         "rootCause": { "type": "string", "minLength": 1 },
         "origin": { "enum": ["introduced_by_change", "worsened_by_change", "exposed_by_change", "pre_existing"] },

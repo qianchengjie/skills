@@ -44,7 +44,7 @@ test('subagent 文档使用当前共享工作区契约', async () => {
   assert.match(reviewer, /同一输入 fresh 重派一次/);
   assert.match(reviewer, /仍失败则写 `AI Review：blocked/);
   assert.match(reviewer, /每个已提交 TARGET 都复制累计 `baseCommit → headCommit`/);
-  assert.match(reviewer, /为当前 TARGET 创建全新 rules-review v7 run/);
+  assert.match(reviewer, /为当前 TARGET 创建全新 rules-review v8 run/);
   assert.match(reviewer, /完整审查本 TARGET 的全部当前 reviewItems/);
   assert.match(reviewer, /不引用旧 run，不继承旧 result/);
   assert.match(reviewer, /rulesReviewReport: <非 ready_for_merge 时为/);
@@ -1158,7 +1158,7 @@ function initGitRepo() {
   execFileSync('git', ['config', 'user.name', 'Test User']);
 }
 
-async function materializeRulesReviewV7RunFixture({
+async function materializeRulesReviewV8RunFixture({
   hasCodeChange = true,
   runId = 'run-pass-full-clean',
 } = {}) {
@@ -1195,7 +1195,7 @@ async function materializeRulesReviewV7RunFixture({
   const inputRefs = hasCodeChange ? ['src/example.ts'] : [];
   const dispatch = {
     kind: 'rules-review-dispatch',
-    schemaVersion: 7,
+    schemaVersion: 8,
     runId,
     reviewRange: { excludedFiles: [] },
     ruleSnapshot: { files: [] },
@@ -1243,26 +1243,10 @@ async function materializeRulesReviewV7RunFixture({
       ruleRef,
       targetKind: hasCodeChange ? 'changed_unit' : 'candidate',
       targetId: hasCodeChange ? 'T001' : `C${String(index + 1).padStart(3, '0')}`,
-      required: true,
     })) : [],
-    executionPlan: {
-      mode: hasCodeChange ? 'single_batch' : 'no_batch',
-      selectedBy: 'ai',
-      policyVersion: 'review-execution-policy/v1',
-      metrics: { changedUnits: hasCodeChange ? 1 : 0, candidates: 0, targets: hasCodeChange ? 1 : 0, requiredRuleRefs: hasCodeChange ? 3 : 0, reviewItems: hasCodeChange ? 3 : 0 },
-      signals: { userRequestedConcurrency: false },
-      reason: 'fixture 单批次覆盖全部 reviewItems',
-      humanOverride: null,
-    },
     reviewBatches: hasCodeChange ? [{
       reviewBatchId: 'B001',
-      ruleSetId: 'RS001',
       reviewItemIds: ['RI001', 'RI002', 'RI003'],
-      taskRef: 'tasks/B001.json',
-      shardRef: 'shards/B001.json',
-      returnStatus: 'returned',
-      aggregateStatus: 'aggregated',
-      unaggregatedReason: null,
     }] : [],
   };
   const dispatchPath = path.join(runDir, 'dispatch.json');
@@ -1291,7 +1275,7 @@ async function materializeRulesReviewV7RunFixture({
     await fs.mkdir(path.dirname(shardPath), { recursive: true });
     const shard = {
     kind: 'rules-review-shard',
-    schemaVersion: 7,
+    schemaVersion: 8,
     runId,
     targetTree: sealedDispatch.reviewRange.targetTree,
     taskHash: task.taskHash,
@@ -1316,7 +1300,7 @@ async function materializeRulesReviewV7RunFixture({
     ['--mode', 'render-response', '--dir', runDir],
   ]) {
     const result = spawnSync(process.execPath, [rulesReviewValidator, ...args]);
-    assert.equal(result.status, 0, result.stderr.toString());
+    assert.equal(result.status, 0, `${args.join(' ')}\n${result.stdout}\n${result.stderr}`);
   }
   execFileSync('git', ['checkout', '--detach', baseCommit]);
   return { runId, runDir, selectedRuleRefs, baseCommit, targetCommit };
@@ -1335,7 +1319,7 @@ async function prepareRulesReviewRunFixture({
     selectedRuleRefs,
     baseCommit,
     targetCommit,
-  } = await materializeRulesReviewV7RunFixture({ hasCodeChange, runId });
+  } = await materializeRulesReviewV8RunFixture({ hasCodeChange, runId });
 
   if (shouldFix || mustFix || cannotVerify) {
     const shardPath = path.join(runDir, 'shards/B001.json');
@@ -1438,19 +1422,14 @@ async function prepareNonPassingRulesReviewRunFixture(recommendation) {
     selectedRuleRefs,
     baseCommit,
     targetCommit,
-  } = await materializeRulesReviewV7RunFixture();
-  const currentDispatch = JSON.parse(await fs.readFile(path.join(runDir, 'dispatch.json'), 'utf8'));
+  } = await materializeRulesReviewV8RunFixture();
   const blocked = recommendation === 'review_blocked';
-  currentDispatch.reviewBatches[0].returnStatus = blocked ? 'format_invalid' : 'not_returned';
-  currentDispatch.reviewBatches[0].aggregateStatus = 'not_aggregated';
-  currentDispatch.reviewBatches[0].unaggregatedReason = blocked
-    ? 'reviewer returned an invalid artifact'
-    : 'reviewer has not returned';
-  await fs.writeFile(
-    path.join(runDir, 'dispatch.json'),
-    `${JSON.stringify(currentDispatch, null, 2)}\n`,
-    'utf8',
-  );
+  const shardPath = path.join(runDir, 'shards/B001.json');
+  if (blocked) {
+    await fs.writeFile(shardPath, '{\n  "invalid": true\n}\n', 'utf8');
+  } else {
+    await fs.rm(shardPath);
+  }
 
   const aggregate = spawnSync(process.execPath, [
     rulesReviewValidator,
@@ -4784,7 +4763,7 @@ test('CLI rule-review-package writes rules-only package when project rule review
     assert.match(reviewPackage, /recommendation: <ready_for_merge/);
     assert.match(reviewPackage, /shouldFix: <integer>/);
     assert.match(reviewPackage, /cannotVerify: <integer>/);
-    assert.match(reviewPackage, /每个新的 TARGET 都创建独立 rules-review v7 run/);
+    assert.match(reviewPackage, /每个新的 TARGET 都创建独立 rules-review v8 run/);
     assert.match(reviewPackage, /不得传文件排除或 `--rules-commit`/);
     assert.match(reviewPackage, /package 不携带旧 runId/);
     assert.match(reviewPackage, /### D1：示例分叉/);
@@ -5630,11 +5609,10 @@ test('CLI close-check blocks required project rule review when boundCommit is mi
   });
 });
 
-test('rules-review v7 的空 TARGET 使用 no_batch 且不伪造 result', async () => {
+test('rules-review v8 的空 TARGET 不创建审查项和批次', async () => {
   await withTempRepo(async () => {
     const rulesReview = await prepareRulesReviewRunFixture({ hasCodeChange: false });
     const dispatch = JSON.parse(await fs.readFile(path.join(rulesReview.runDir, 'dispatch.json'), 'utf8'));
-    assert.equal(dispatch.executionPlan.mode, 'no_batch');
     assert.deepEqual(dispatch.reviewItems, []);
     assert.deepEqual(dispatch.reviewBatches, []);
     assert.equal(dispatch.reviewRange.boundCommit, rulesReview.targetCommit);

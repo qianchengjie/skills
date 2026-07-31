@@ -377,69 +377,49 @@
       "CORE-032": "NNANNANNANNANNAA"
     }
   },
-  "reviewItemProjection": {
-    "required": true,
-    "createFor": "每个 A 决定",
-    "doNotCreateFor": "每个 N 决定"
-  },
-  "executionPlan": {
-    "mode": "multi_batch",
-    "selectedBy": "ai",
-    "policyVersion": "review-execution-policy/v1",
-    "signals": {
-      "userRequestedConcurrency": false
-    },
-    "reason": "191 个合成 reviewItems 超过 30 项硬门槛，固定拆为 5 个 batch",
-    "humanOverride": null,
-    "batchRuleRefs": {
-      "batch-01": [
-        "CORE-001",
-        "CORE-002",
-        "CORE-003",
-        "CORE-004",
-        "CORE-005",
-        "CORE-006",
-        "CORE-007"
-      ],
-      "batch-02": [
-        "CORE-008",
-        "CORE-009",
-        "CORE-010",
-        "CORE-011",
-        "CORE-012",
-        "CORE-013",
-        "CORE-014"
-      ],
-      "batch-03": [
-        "CORE-015",
-        "CORE-016",
-        "CORE-017",
-        "CORE-018",
-        "CORE-019",
-        "CORE-020",
-        "CORE-021"
-      ],
-      "batch-04": [
-        "CORE-022",
-        "CORE-023",
-        "CORE-024",
-        "CORE-025",
-        "CORE-026"
-      ],
-      "batch-05": [
-        "CORE-027",
-        "CORE-028",
-        "CORE-029",
-        "CORE-030",
-        "CORE-031",
-        "CORE-032"
-      ]
-    },
-    "initialBatchState": {
-      "shardRef": null,
-      "returnStatus": "not_started",
-      "aggregateStatus": "not_aggregated"
-    }
+  "batchRuleRefs": {
+    "batch-01": [
+      "CORE-001",
+      "CORE-002",
+      "CORE-003",
+      "CORE-004",
+      "CORE-005",
+      "CORE-006",
+      "CORE-007"
+    ],
+    "batch-02": [
+      "CORE-008",
+      "CORE-009",
+      "CORE-010",
+      "CORE-011",
+      "CORE-012",
+      "CORE-013",
+      "CORE-014"
+    ],
+    "batch-03": [
+      "CORE-015",
+      "CORE-016",
+      "CORE-017",
+      "CORE-018",
+      "CORE-019",
+      "CORE-020",
+      "CORE-021"
+    ],
+    "batch-04": [
+      "CORE-022",
+      "CORE-023",
+      "CORE-024",
+      "CORE-025",
+      "CORE-026"
+    ],
+    "batch-05": [
+      "CORE-027",
+      "CORE-028",
+      "CORE-029",
+      "CORE-030",
+      "CORE-031",
+      "CORE-032"
+    ]
   },
   "expectedCounts": {
     "candidateRuleRefs": 44,

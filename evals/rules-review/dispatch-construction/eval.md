@@ -39,7 +39,7 @@ validator 或 schema。
 - Subject-visible semantic input: `fixture/dispatch-input.json`
 - Mounted path: `/input/dispatch-input.json`
 - Semantic input SHA-256:
-  `443eb88a541b849a757416c6b26263caa3c69649d7de5a516a334bf58aeaccba`
+  `7a9b61fcaa4ad82952a67421a5b8a9a83152825057146a853cd785b1b9b14a76`
 - Synthetic Git input: `fixture/project.bundle`
 - Git input SHA-256:
   `1f30b5b9a1fc946eb6c20070fd98cc1a09e46881a796d2f523e144098898aeaa`
@@ -76,9 +76,10 @@ package 的 rules-review 来源。
   SHA-256。
 - BASE、TARGET、rules source、规则分区、16 个 targets、512 个适用性决定、
   191 个 reviewItems 和 5 个 reviewBatches 与 fixture 精确一致。
-- 每个 `A` 决定生成一个 `required: true` 的 reviewItem；每个 `N` 决定不生成
+- 每个 `A` 决定生成一个 reviewItem；每个 `N` 决定不生成
   reviewItem，并使用 fixture 指定的 reason 和 evidence 投影。
-- batch 的规则分组、execution plan 和初始 batch 状态与 fixture 一致。
+- batch 的规则分组与 fixture 一致；每个 reviewBatch 只包含
+  `reviewBatchId` 与 `reviewItemIds`。
 - 封印字段、代码快照和规则快照由官方入口从固定 Git 对象与规则来源生成，不由
   fixture 冒充。
 - 本次 subject package 的 validator 对最终 dispatch 返回成功；Harness 保存

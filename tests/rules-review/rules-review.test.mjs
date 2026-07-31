@@ -30,6 +30,12 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
+function currentProtocolVersion() {
+  return readJson(
+    path.join(repoRoot, "skills/rules-review/schemas/dispatch.schema.json"),
+  ).properties.schemaVersion.const;
+}
+
 function canonicalStringify(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalStringify).join(",")}]`;
   if (value && typeof value === "object") {
@@ -69,7 +75,7 @@ async function expectFailure(args, pattern, cwd = repoRoot) {
 }
 
 function createRepository() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-v7-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-v8-"));
   fs.mkdirSync(path.join(root, ".agents/rules"), { recursive: true });
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
   fs.writeFileSync(path.join(root, ".gitignore"), ".rules-review-tmp/\n");
@@ -215,28 +221,8 @@ function createConstructionCase(t, {
         "CORE-002": "AA",
       },
     },
-    reviewItemProjection: {
-      required: true,
-      createFor: "每个 A 决定",
-      doNotCreateFor: "每个 N 决定",
-    },
-    executionPlan: {
-      mode: "single_batch",
-      selectedBy: "ai",
-      policyVersion: "review-execution-policy/v1",
-      signals: {
-        userRequestedConcurrency: false,
-      },
-      reason: "单批次覆盖全部规则",
-      humanOverride: null,
-      batchRuleRefs: {
-        B001: ["CORE-001", "CORE-002"],
-      },
-      initialBatchState: {
-        shardRef: null,
-        returnStatus: "not_started",
-        aggregateStatus: "not_aggregated",
-      },
+    batchRuleRefs: {
+      B001: ["CORE-001", "CORE-002"],
     },
     expectedCounts: {
       candidateRuleRefs: 2,
@@ -270,7 +256,7 @@ function createConstructionCase(t, {
 }
 
 function draft({
-  runId = "run-v7",
+  runId = "run-v8",
   inputRefs = ["src/main.js"],
   excludedFiles = [],
   candidateRuleRefs = ["CORE-001"],
@@ -282,7 +268,7 @@ function draft({
 } = {}) {
   return {
     kind: "rules-review-dispatch",
-    schemaVersion: 7,
+    schemaVersion: 8,
     runId,
     reviewRange: { excludedFiles },
     ruleSnapshot: { files: [] },
@@ -330,38 +316,16 @@ function draft({
       ruleRef,
       targetKind: "changed_unit",
       targetId: "T001",
-      required: true,
     })),
-    executionPlan: {
-      mode: requiredRuleRefs.length === 0 ? "no_batch" : "single_batch",
-      selectedBy: "ai",
-      policyVersion: "review-execution-policy/v1",
-      metrics: {
-        changedUnits: 1,
-        candidates: 0,
-        targets: 1,
-        requiredRuleRefs: requiredRuleRefs.length,
-        reviewItems: requiredRuleRefs.length,
-      },
-      signals: { userRequestedConcurrency: false },
-      reason: requiredRuleRefs.length === 0 ? "没有 reviewItems" : "单批次覆盖全部 reviewItems",
-      humanOverride: null,
-    },
     reviewBatches: requiredRuleRefs.length === 0 ? [] : [{
       reviewBatchId: "B001",
-      ruleSetId: "RS001",
       reviewItemIds: requiredRuleRefs.map((_, index) => `RI${String(index + 1).padStart(3, "0")}`),
-      taskRef: "tasks/B001.json",
-      shardRef: "shards/B001.json",
-      returnStatus: "returned",
-      aggregateStatus: "aggregated",
-      unaggregatedReason: null,
     }],
   };
 }
 
 function createDraft(root, options = {}) {
-  const file = path.join(root, ".rules-review-tmp", options.runId || "run-v7", "dispatch.json");
+  const file = path.join(root, ".rules-review-tmp", options.runId || "run-v8", "dispatch.json");
   writeJson(file, draft(options));
   return file;
 }
@@ -416,7 +380,7 @@ function assertWorkspaceEqual(before, after) {
 function passedShard(dispatch, task) {
   return {
     kind: "rules-review-shard",
-    schemaVersion: 7,
+    schemaVersion: 8,
     runId: dispatch.runId,
     reviewBatchId: "B001",
     targetTree: dispatch.reviewRange.targetTree,
@@ -587,15 +551,7 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
     ruleRef,
     targetKind: "changed_unit",
     targetId,
-    required: true,
   }));
-  draftDispatch.executionPlan.metrics = {
-    changedUnits: 3,
-    candidates: 0,
-    targets: 3,
-    requiredRuleRefs: 2,
-    reviewItems: 3,
-  };
   draftDispatch.reviewBatches[0].reviewItemIds = ["RI001", "RI002", "RI003"];
   writeJson(dispatchFile, draftDispatch);
 
@@ -607,7 +563,7 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
   const rootCause = "制品可用性没有成为构建、路由和入口的共同门禁。";
   const shard = {
     kind: "rules-review-shard",
-    schemaVersion: 7,
+    schemaVersion: 8,
     runId: dispatch.runId,
     reviewBatchId: "B001",
     targetTree: dispatch.reviewRange.targetTree,
@@ -796,26 +752,10 @@ test("不同 batch 的相同 rootCause 不会发生隐式跨 batch 合并", asyn
     ruleRef: "CORE-001",
     targetKind: "changed_unit",
     targetId: target.targetId,
-    required: true,
   }));
-  draftDispatch.executionPlan.mode = "multi_batch";
-  draftDispatch.executionPlan.metrics = {
-    changedUnits: 2,
-    candidates: 0,
-    targets: 2,
-    requiredRuleRefs: 1,
-    reviewItems: 2,
-  };
-  draftDispatch.executionPlan.reason = "两个独立 reviewer 分别审查一条链路";
   draftDispatch.reviewBatches = ["B001", "B002"].map((reviewBatchId, index) => ({
     reviewBatchId,
-    ruleSetId: "RS001",
     reviewItemIds: [`RI${String(index + 1).padStart(3, "0")}`],
-    taskRef: `tasks/${reviewBatchId}.json`,
-    shardRef: `shards/${reviewBatchId}.json`,
-    returnStatus: "returned",
-    aggregateStatus: "aggregated",
-    unaggregatedReason: null,
   }));
   writeJson(dispatchFile, draftDispatch);
 
@@ -828,7 +768,7 @@ test("不同 batch 的相同 rootCause 不会发生隐式跨 batch 合并", asyn
     const task = readJson(path.join(taskDir, `${reviewBatchId}.json`));
     writeJson(path.join(runDir, `shards/${reviewBatchId}.json`), {
       kind: "rules-review-shard",
-      schemaVersion: 7,
+      schemaVersion: 8,
       runId: dispatch.runId,
       reviewBatchId,
       targetTree: dispatch.reviewRange.targetTree,
@@ -956,46 +896,21 @@ test("construct-dispatch 对 2×2 紧凑输入做完整确定性投影", async (
     ruleRef: "CORE-001",
     targetKind: "changed_unit",
     targetId: "T001",
-    required: true,
   }, {
     reviewItemId: "RI002",
     ruleRef: "CORE-002",
     targetKind: "changed_unit",
     targetId: "T001",
-    required: true,
   }, {
     reviewItemId: "RI003",
     ruleRef: "CORE-002",
     targetKind: "context_candidate",
     targetId: "T002",
-    required: true,
   }]);
-  assert.deepEqual(dispatch.executionPlan, {
-    mode: "single_batch",
-    selectedBy: "ai",
-    policyVersion: "review-execution-policy/v1",
-    metrics: {
-      changedUnits: 1,
-      candidates: 1,
-      targets: 2,
-      requiredRuleRefs: 2,
-      reviewItems: 3,
-    },
-    signals: {
-      userRequestedConcurrency: false,
-    },
-    reason: "单批次覆盖全部规则",
-    humanOverride: null,
-  });
+  assert.equal("executionPlan" in dispatch, false);
   assert.deepEqual(dispatch.reviewBatches, [{
     reviewBatchId: "B001",
-    ruleSetId: "RS-CONSTRUCTION",
     reviewItemIds: ["RI001", "RI002", "RI003"],
-    taskRef: "tasks/B001.json",
-    shardRef: null,
-    returnStatus: "not_started",
-    aggregateStatus: "not_aggregated",
-    unaggregatedReason: null,
   }]);
   const validation = await runJson(["--mode", "dispatch", "--input", fixture.outputPath], fixture.root);
   assert.equal(validation.ok, true);
@@ -1447,7 +1362,7 @@ test("commit 文件范围必须完整，scopeMode 只由规则排除事实派生
   );
 });
 
-test("v7 finalReview 独立校验和 schema 均拒绝文件排除", async (t) => {
+test("v8 finalReview 独立校验和 schema 均拒绝文件排除", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
@@ -1487,7 +1402,7 @@ test("候选规则必须由 selected、excluded、globallyNotApplicable 完整�
   await expectFailure(["--mode", "dispatch", "--input", file], /candidateRuleRef must be classified/);
 });
 
-test("每个 reviewItem 必须由当前 run 分派，no_batch 仅允许空 reviewItems", async (t) => {
+test("每个 reviewItem 必须由当前 run 分派，非空 reviewItems 禁止空 batch", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
@@ -1499,9 +1414,8 @@ test("每个 reviewItem 必须由当前 run 分派，no_batch 仅允许空 revie
   await expectFailure(["--mode", "dispatch", "--input", file], /reviewItem must be assigned to one reviewBatch/);
 
   dispatch.reviewBatches = [];
-  dispatch.executionPlan.mode = "no_batch";
   writeJson(file, dispatch);
-  await expectFailure(["--mode", "dispatch", "--input", file], /no_batch requires empty reviewItems/);
+  await expectFailure(["--mode", "dispatch", "--input", file], /reviewItem must be assigned to one reviewBatch/);
 });
 
 test("task 复制规则来源与快照，taskHash 和 dispatch 投影拒绝篡改", async (t) => {
@@ -1630,7 +1544,7 @@ test("boundCommit 是必填的规范 commit，且其 tree 必须等于 targetTre
   await expectFailure(["--mode", "dispatch", "--input", file], /boundCommit tree does not match targetTree/);
 });
 
-test("v6 工件与旧 incremental 字段明确拒绝，v7 工件通过", async (t) => {
+test("v7 工件与旧 incremental 字段明确拒绝，v8 工件通过", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
@@ -1640,11 +1554,11 @@ test("v6 工件与旧 incremental 字段明确拒绝，v7 工件通过", async (
   const current = await runJson(["--mode", "dispatch", "--input", file]);
   assert.equal(current.ok, true);
 
-  dispatch.schemaVersion = 6;
+  dispatch.schemaVersion = 7;
   writeJson(file, dispatch);
   await expectFailure(["--mode", "dispatch", "--input", file], /schemaVersion must match rules-review protocol/);
 
-  dispatch.schemaVersion = 7;
+  dispatch.schemaVersion = 8;
   dispatch.continuation = { baseRunId: "old-run" };
   dispatch.fullReason = "legacy";
   dispatch.inputSource = { mode: "worktree" };
@@ -1654,24 +1568,57 @@ test("v6 工件与旧 incremental 字段明确拒绝，v7 工件通过", async (
   for (const schemaFile of [
     "dispatch.schema.json",
     "task.schema.json",
-    "retry-task.schema.json",
     "shard.schema.json",
     "validation.schema.json",
     "final-review.schema.json",
   ]) {
     const schema = readJson(path.join(repoRoot, "skills/rules-review/schemas", schemaFile));
-    assert.equal(schema.properties.schemaVersion.const, 7, schemaFile);
+    assert.equal(schema.properties.schemaVersion.const, 8, schemaFile);
   }
+  assert.equal(
+    fs.existsSync(path.join(repoRoot, "skills/rules-review/schemas/retry-task.schema.json")),
+    false,
+  );
 });
 
-test("retry-task 只升级 schemaVersion，不增加规则来源或快照字段", async (t) => {
+test("静态 reviewBatch 直接从 task 和 shard 文件派生完成态", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const file = path.join(root, ".rules-review-tmp", "retry-v7.json");
-  const retryTask = {
+  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
+  const dispatchFile = createDraft(root, { runId: "static-batch-state" });
+  const dispatch = await seal(dispatchFile);
+
+  const runDir = path.dirname(dispatchFile);
+  const taskDir = path.join(runDir, "tasks");
+  await run(["--mode", "build-tasks", "--dispatch", dispatchFile, "--out", taskDir]);
+  const task = readJson(path.join(taskDir, "B001.json"));
+  const shard = passedShard(dispatch, task);
+  writeJson(path.join(runDir, "shards/B001.json"), shard);
+
+  const aggregation = await runJson([
+    "--mode", "aggregate-final",
+    "--dir", runDir,
+    "--output", path.join(runDir, "finalReview.json"),
+  ]);
+  assert.equal(aggregation.ok, true);
+  assert.equal(aggregation.gate.protocolGate, "passed");
+
+  dispatch.reviewBatches[0].returnStatus = "returned";
+  writeJson(dispatchFile, dispatch);
+  await expectFailure(
+    ["--mode", "dispatch", "--input", dispatchFile],
+    /reviewBatch contains unsupported field/,
+  );
+});
+
+test("retry-task 不再是 rules-review 协议入口", async (t) => {
+  const root = createRepository();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, "retry-task.json");
+  writeJson(file, {
     kind: "rules-review-retry-task",
-    schemaVersion: 7,
-    runId: "retry-v7",
+    schemaVersion: currentProtocolVersion(),
+    runId: "removed-retry",
     retryAttempt: 1,
     reason: "修正格式错误",
     originalTaskRef: "tasks/B001.json",
@@ -1680,27 +1627,64 @@ test("retry-task 只升级 schemaVersion，不增加规则来源或快照字段"
       format: "strict_json",
       schemaRef: "schemas/shard.schema.json",
     },
-  };
-  writeJson(file, retryTask);
-  const validation = await runJson(["--mode", "retry-task", "--input", file]);
-  assert.equal(validation.ok, true);
-  assert.deepEqual(Object.keys(retryTask).sort(), [
-    "kind",
-    "originalTaskRef",
-    "outputContract",
-    "reason",
-    "retryAttempt",
-    "runId",
-    "schemaVersion",
-    "violations",
-  ]);
-  const schema = readJson(path.join(repoRoot, "skills/rules-review/schemas/retry-task.schema.json"));
-  assert.equal("ruleInputSource" in schema.properties, false);
-  assert.equal("ruleSnapshot" in schema.properties, false);
+  });
 
-  retryTask.schemaVersion = 6;
-  writeJson(file, retryTask);
-  await expectFailure(["--mode", "retry-task", "--input", file], /schemaVersion must match rules-review protocol/);
+  await expectFailure(
+    ["--mode", "retry-task", "--input", file],
+    /unknown or missing mode/,
+  );
+  fs.rmSync(file);
+
+  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
+  const dispatchFile = createDraft(root, { runId: "removed-retry-run" });
+  await seal(dispatchFile);
+  const runDir = await materializePassingRun(dispatchFile);
+  writeJson(path.join(runDir, "retries/B001.json"), {});
+  await expectFailure(
+    ["--mode", "run", "--dir", runDir],
+    /RUN003|only contain rules-review protocol artifacts/,
+  );
+});
+
+test("非 required reviewItem 与 shard not_applicable 不再是协议路径", async (t) => {
+  const root = createRepository();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
+  const dispatchFile = createDraft(root, { runId: "removed-optional-item" });
+  const dispatch = await seal(dispatchFile);
+  const taskDir = path.join(path.dirname(dispatchFile), "tasks");
+  await run(["--mode", "build-tasks", "--dispatch", dispatchFile, "--out", taskDir]);
+  const taskFile = path.join(taskDir, "B001.json");
+  const task = readJson(taskFile);
+  const optionalTaskFile = path.join(root, "optional-task.json");
+  const optionalTask = structuredClone(task);
+  optionalTask.reviewItems[0].required = false;
+  optionalTask.taskHash = calculateTaskHash(optionalTask);
+  writeJson(optionalTaskFile, optionalTask);
+  await expectFailure(
+    ["--mode", "task", "--input", optionalTaskFile],
+    /task reviewItem contains unsupported field|required/,
+  );
+
+  const shardFile = path.join(path.dirname(dispatchFile), "shards/B001.json");
+  writeJson(shardFile, {
+    kind: "rules-review-shard",
+    schemaVersion: currentProtocolVersion(),
+    runId: dispatch.runId,
+    reviewBatchId: "B001",
+    targetTree: dispatch.reviewRange.targetTree,
+    taskHash: task.taskHash,
+    results: [{
+      reviewItemId: "RI001",
+      status: "not_applicable",
+      reason: "reviewer 运行时改判不适用",
+    }],
+  });
+
+  await expectFailure(
+    ["--mode", "shard", "--task", taskFile, "--input", shardFile],
+    /not_applicable|status.*valid/,
+  );
 });
 
 test("seal-dispatch 对缺少 base、缺少 target commit 和旧入口 fail closed", async (t) => {
