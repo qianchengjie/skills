@@ -38,7 +38,7 @@ kind、未知字段、非规范 commit OID 或不符合 `rule-steward` Namespace
 的规则索引一律 fail closed。
 
 入口从当前 Git worktree 读取固定的 BASE、TARGET 和所选规则来源，按
-`requiredRuleRefs × targetOrder` 顺序展开适用性矩阵，并按 `A = 适用`、
+`selectedRuleRefs × targetOrder` 顺序展开适用性矩阵，并按 `A = 适用`、
 `N = 不适用` 连续分配 reviewItem ID。batch key 直接成为 `reviewBatchId`。
 规则投影只读取 `rule-steward` 定义的 active 规则固定字段；规则分区、targets、
 适用性决定和顶层 `batchRuleRefs` 全部来自输入。入口校验 `expectedCounts`，
@@ -162,14 +162,11 @@ candidateRuleRefs
 = selectedRuleRefs
 ∪ excludedRuleRefs
 ∪ globallyNotApplicableRuleRefs
-
-requiredRuleRefs ⊆ selectedRuleRefs
 ```
 
-- `selectedRuleRefs`：实际进入本轮适用性判断和审查的规则。
+- `selectedRuleRefs`：实际进入本轮逐目标适用性判断和审查的规则。
 - `excludedRuleRefs`：已判定适用，但被有意跳过的规则。
 - `globallyNotApplicableRuleRefs`：不适用于当前 TARGET 的规则。
-- `requiredRuleRefs`：selected 中必须逐目标完成适用性判断的规则。
 
 validator 校验来源身份、snapshot 字节与 hash、声明集合的完整互斥和引用闭合；候选发现、元数据提取与适用性结论由 controller/reviewer 负责。
 
@@ -179,13 +176,13 @@ validator 校验来源身份、snapshot 字节与 hash、声明集合的完整�
 ruleRef x targetId = reviewItem
 ```
 
-对每个 `requiredRuleRefs x targets` 组合先生成一行 `applicabilityMatrix`：
+对每个 `selectedRuleRefs x targets` 组合先生成一行 `applicabilityMatrix`：
 
 - `applicable` 必须绑定匹配的 reviewItem。
 - `not_applicable` 必须写 reason，不得绑定 reviewItem。
 - evidence 必须可定位。
 
-`reviewItems` 只能引用 `requiredRuleRefs`，不含可选或 `required` 状态。每个当前 reviewItem 必须恰好进入一个当前 batch，并由当前 run 的 shard 返回恰好一个 result。`reviewBatches` 只保存 `reviewBatchId` 与 `reviewItemIds`；任务路径、shard 路径和完成态均由当前 run 的文件派生。
+`reviewItems` 只能引用 `selectedRuleRefs`，不含可选或 `required` 状态。非空 TARGET 中，每条 selected 规则必须至少生成一个 reviewItem；空 TARGET 可保留 selected 规则但不生成矩阵、reviewItem 或 batch。每个当前 reviewItem 必须恰好进入一个当前 batch，并由当前 run 的 shard 返回恰好一个 result。`reviewBatches` 只保存 `reviewBatchId` 与 `reviewItemIds`；任务路径、shard 路径和完成态均由当前 run 的文件派生。
 
 ## 5. 工件与职责
 
@@ -226,6 +223,8 @@ reviewer 必须按 task 中的全部 reviewItems 分别完成审查并返回结�
 - `finding`：包含 origin、evidence 和非空 `rootCause`；MUST finding 为 must_fix。
 - `observation`：包含 origin，以及 reason 或 evidence。
 - `cannot_verify`：包含 reason 或 evidence。
+
+reviewer 若能确认某个 reviewItem 实际不适用，即判定上游适用性输入错误：不得用 `passed / finding / observation / cannot_verify` 中的任何状态代替 `not_applicable`，也不得写合法 shard。reviewer 必须停止当前 batch 并通知 controller；controller 作废当前 run，不聚合、不用于门禁，再针对同一 TARGET 以修正后的适用性输入创建 fresh run。
 
 同一 batch 内多个 reviewItem 分别违反规则但属于同一根因时，每项仍返回 `finding`，并使用字节完全相同的 `rootCause` 描述共同失效的不变量。aggregator 只按 batch 身份与这个显式值机械分组，不根据措辞相似度、代码位置或证据内容猜测：
 

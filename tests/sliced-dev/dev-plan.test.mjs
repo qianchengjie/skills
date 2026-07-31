@@ -1205,7 +1205,6 @@ async function materializeRulesReviewV8RunFixture({
       sourceIndexHash: `sha256:${'0'.repeat(64)}`,
       candidateRuleRefs: selectedRuleRefs,
       selectedRuleRefs,
-      requiredRuleRefs: hasCodeChange ? selectedRuleRefs : [],
       excludedRuleRefs: [],
       globallyNotApplicableRuleRefs: [],
       ruleSources: selectedRuleRefs.map((ruleRef) => ({

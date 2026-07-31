@@ -177,7 +177,6 @@ function createConstructionCase(t, {
       ruleSetId: "RS-CONSTRUCTION",
       candidateRuleRefs: ["CORE-001", "CORE-002"],
       selectedRuleRefs: ["CORE-001", "CORE-002"],
-      requiredRuleRefs: ["CORE-001", "CORE-002"],
       excludedRuleRefs: [],
       globallyNotApplicableRuleRefs: [],
     },
@@ -209,7 +208,7 @@ function createConstructionCase(t, {
           A: "applicable",
           N: "not_applicable",
         },
-        rule: "每个 required rule 的字符串必须与 targetOrder 等长；每个字符显式决定对应 ruleRef × targetId，禁止缺省决定。",
+        rule: "每个 selected rule 的字符串必须与 targetOrder 等长；每个字符显式决定对应 ruleRef × targetId，禁止缺省决定。",
       },
       evidenceProjection: {
         loc: "{target.loc}",
@@ -227,7 +226,6 @@ function createConstructionCase(t, {
     expectedCounts: {
       candidateRuleRefs: 2,
       selectedRuleRefs: 2,
-      requiredRuleRefs: 2,
       excludedRuleRefs: 0,
       globallyNotApplicableRuleRefs: 0,
       changedUnits: 1,
@@ -261,7 +259,6 @@ function draft({
   excludedFiles = [],
   candidateRuleRefs = ["CORE-001"],
   selectedRuleRefs = ["CORE-001"],
-  requiredRuleRefs = ["CORE-001"],
   excludedRuleRefs = [],
   globallyNotApplicableRuleRefs = [],
   ruleSources,
@@ -278,7 +275,6 @@ function draft({
       sourceIndexHash: `sha256:${"0".repeat(64)}`,
       candidateRuleRefs,
       selectedRuleRefs,
-      requiredRuleRefs,
       excludedRuleRefs,
       globallyNotApplicableRuleRefs,
       ruleSources: ruleSources || candidateRuleRefs.map((ruleRef) => ({
@@ -303,7 +299,7 @@ function draft({
       candidates: [],
       contextExpansions: [],
     },
-    applicabilityMatrix: requiredRuleRefs.map((ruleRef, index) => ({
+    applicabilityMatrix: selectedRuleRefs.map((ruleRef, index) => ({
       ruleRef,
       targetId: "T001",
       targetKind: "changed_unit",
@@ -311,15 +307,15 @@ function draft({
       reviewItemId: `RI${String(index + 1).padStart(3, "0")}`,
       evidence: [{ loc: `${inputRefs[0]}:1`, summary: "适用性已判断" }],
     })),
-    reviewItems: requiredRuleRefs.map((ruleRef, index) => ({
+    reviewItems: selectedRuleRefs.map((ruleRef, index) => ({
       reviewItemId: `RI${String(index + 1).padStart(3, "0")}`,
       ruleRef,
       targetKind: "changed_unit",
       targetId: "T001",
     })),
-    reviewBatches: requiredRuleRefs.length === 0 ? [] : [{
+    reviewBatches: selectedRuleRefs.length === 0 ? [] : [{
       reviewBatchId: "B001",
-      reviewItemIds: requiredRuleRefs.map((_, index) => `RI${String(index + 1).padStart(3, "0")}`),
+      reviewItemIds: selectedRuleRefs.map((_, index) => `RI${String(index + 1).padStart(3, "0")}`),
     }],
   };
 }
@@ -507,7 +503,6 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
   draftDispatch.ruleSet.ruleSources[0].ruleLevel = "SHOULD";
   draftDispatch.ruleSet.candidateRuleRefs.push("AUX-001");
   draftDispatch.ruleSet.selectedRuleRefs.push("AUX-001");
-  draftDispatch.ruleSet.requiredRuleRefs.push("AUX-001");
   draftDispatch.ruleSet.ruleSources.push({
     ...draftDispatch.ruleSet.ruleSources[0],
     namespace: "AUX",
@@ -525,7 +520,7 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
     loc: `${inputRef}:1`,
     summary,
   }));
-  draftDispatch.applicabilityMatrix = draftDispatch.ruleSet.requiredRuleRefs.flatMap((ruleRef) => (
+  draftDispatch.applicabilityMatrix = draftDispatch.ruleSet.selectedRuleRefs.flatMap((ruleRef) => (
     targetSpecs.map(([targetId, inputRef, , applicableRuleRef], index) => (
       ruleRef === applicableRuleRef
         ? {
@@ -816,7 +811,6 @@ test("construct-dispatch 对 2×2 紧凑输入做完整确定性投影", async (
     sourceIndexHash: contentHash(fixture.indexContent),
     candidateRuleRefs: ["CORE-001", "CORE-002"],
     selectedRuleRefs: ["CORE-001", "CORE-002"],
-    requiredRuleRefs: ["CORE-001", "CORE-002"],
     excludedRuleRefs: [],
     globallyNotApplicableRuleRefs: [],
     ruleSources: [{
@@ -914,6 +908,37 @@ test("construct-dispatch 对 2×2 紧凑输入做完整确定性投影", async (
   }]);
   const validation = await runJson(["--mode", "dispatch", "--input", fixture.outputPath], fixture.root);
   assert.equal(validation.ok, true);
+});
+
+test("空 TARGET 保留 selectedRuleRefs，但不生成矩阵、审查项或批次", async (t) => {
+  const root = createRepository();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = createDraft(root, { runId: "empty-target" });
+  const dispatch = readJson(file);
+  dispatch.targets = {
+    changedUnits: [],
+    candidates: [],
+    contextExpansions: [],
+  };
+  dispatch.applicabilityMatrix = [];
+  dispatch.reviewItems = [];
+  dispatch.reviewBatches = [];
+  writeJson(file, dispatch);
+
+  const sealed = await seal(file);
+  assert.deepEqual(sealed.ruleSet.selectedRuleRefs, ["CORE-001"]);
+  assert.equal("requiredRuleRefs" in sealed.ruleSet, false);
+  assert.deepEqual(sealed.applicabilityMatrix, []);
+  assert.deepEqual(sealed.reviewItems, []);
+  assert.deepEqual(sealed.reviewBatches, []);
+
+  const runDir = path.dirname(file);
+  await run([
+    "--mode", "aggregate-final",
+    "--dir", runDir,
+    "--output", path.join(runDir, "finalReview.json"),
+  ]);
+  assert.equal(readJson(path.join(runDir, "finalReview.json")).recommendation, "ready_for_merge");
 });
 
 test("construct-dispatch 用普通紧凑输入封印 workspace 规则", async (t) => {
@@ -1076,7 +1101,6 @@ test("默认规则来源使用当前工作区，封印后不再回读工作区�
     runId: "workspace-rules",
     candidateRuleRefs: ["WORK-001"],
     selectedRuleRefs: ["WORK-001"],
-    requiredRuleRefs: ["WORK-001"],
     ruleSources: [{
       namespace: "WORK",
       ruleRef: "WORK-001",
@@ -1143,7 +1167,6 @@ test("--rules-commit 只使用指定 commit，并拒绝错误 revision、缺失�
     runId: "commit-rules",
     candidateRuleRefs: ["RULE-001"],
     selectedRuleRefs: ["RULE-001"],
-    requiredRuleRefs: ["RULE-001"],
     ruleSources,
   });
 
@@ -1167,7 +1190,6 @@ test("--rules-commit 只使用指定 commit，并拒绝错误 revision、缺失�
     runId: "bad-rules-revision",
     candidateRuleRefs: ["RULE-001"],
     selectedRuleRefs: ["RULE-001"],
-    requiredRuleRefs: ["RULE-001"],
     ruleSources,
   });
   await expectFailure([
@@ -1194,7 +1216,6 @@ test("--rules-commit 只使用指定 commit，并拒绝错误 revision、缺失�
     runId: "missing-rules-file",
     candidateRuleRefs: ["RULE-001"],
     selectedRuleRefs: ["RULE-001"],
-    requiredRuleRefs: ["RULE-001"],
     ruleSources,
   });
   await expectFailure([
@@ -1307,7 +1328,6 @@ test("target-commit 拒绝文件排除，但仍允许 excludedRuleRefs", async (
     inputRefs: ["src/main.js", "src/other.js"],
     candidateRuleRefs: ["CORE-001", "AUX-001"],
     selectedRuleRefs: ["CORE-001"],
-    requiredRuleRefs: ["CORE-001"],
     excludedRuleRefs: ["AUX-001"],
   });
   const dispatch = await seal(excludedRule, target, base);
@@ -1343,7 +1363,6 @@ test("commit 文件范围必须完整，scopeMode 只由规则排除事实派生
     inputRefs: ["src/main.js", "src/other.js"],
     candidateRuleRefs: ["CORE-001", "AUX-001"],
     selectedRuleRefs: ["CORE-001"],
-    requiredRuleRefs: ["CORE-001"],
     excludedRuleRefs: ["AUX-001"],
   });
   const dispatch = await seal(file);
@@ -1416,6 +1435,58 @@ test("每个 reviewItem 必须由当前 run 分派，非空 reviewItems 禁止�
   dispatch.reviewBatches = [];
   writeJson(file, dispatch);
   await expectFailure(["--mode", "dispatch", "--input", file], /reviewItem must be assigned to one reviewBatch/);
+});
+
+test("v8 程序化覆盖缺失结果、重复结果、证据缺失和坏 context expansion", async (t) => {
+  const root = createRepository();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
+  const file = createDraft(root, { runId: "core-negative-coverage" });
+  const dispatch = await seal(file);
+  const runDir = path.dirname(file);
+  const taskDir = path.join(runDir, "tasks");
+  await run(["--mode", "build-tasks", "--dispatch", file, "--out", taskDir]);
+  const taskFile = path.join(taskDir, "B001.json");
+  const task = readJson(taskFile);
+  const validShard = passedShard(dispatch, task);
+  const cases = [
+    {
+      name: "missing-result",
+      results: [],
+      expected: /shard results must cover every task reviewItem/,
+    },
+    {
+      name: "duplicate-result",
+      results: [validShard.results[0], validShard.results[0]],
+      expected: /reviewItem has duplicate results in shard/,
+    },
+    {
+      name: "missing-evidence",
+      results: [{ ...validShard.results[0], evidence: [] }],
+      expected: /passed result requires evidence/,
+    },
+  ];
+
+  for (const { name, results, expected } of cases) {
+    const shardFile = path.join(root, `${name}.json`);
+    writeJson(shardFile, { ...validShard, results });
+    await expectFailure(
+      ["--mode", "shard", "--task", taskFile, "--input", shardFile],
+      expected,
+    );
+  }
+
+  const invalidDispatch = readJson(file);
+  invalidDispatch.targets.contextExpansions = [{
+    expansionId: "X001",
+    reason: "错误引用不存在的候选 target",
+    addedTargetIds: ["T999"],
+  }];
+  writeJson(file, invalidDispatch);
+  await expectFailure(
+    ["--mode", "dispatch", "--input", file],
+    /contextExpansions\[\]\.addedTargetIds\[\] must exist/,
+  );
 });
 
 test("task 复制规则来源与快照，taskHash 和 dispatch 投影拒绝篡改", async (t) => {
@@ -1554,6 +1625,14 @@ test("v7 工件与旧 incremental 字段明确拒绝，v8 工件通过", async (
   const current = await runJson(["--mode", "dispatch", "--input", file]);
   assert.equal(current.ok, true);
 
+  dispatch.ruleSet.requiredRuleRefs = [...dispatch.ruleSet.selectedRuleRefs];
+  writeJson(file, dispatch);
+  await expectFailure(
+    ["--mode", "dispatch", "--input", file],
+    /ruleSet contains unsupported field/,
+  );
+  delete dispatch.ruleSet.requiredRuleRefs;
+
   dispatch.schemaVersion = 7;
   writeJson(file, dispatch);
   await expectFailure(["--mode", "dispatch", "--input", file], /schemaVersion must match rules-review protocol/);
@@ -1646,7 +1725,7 @@ test("retry-task 不再是 rules-review 协议入口", async (t) => {
   );
 });
 
-test("非 required reviewItem 与 shard not_applicable 不再是协议路径", async (t) => {
+test("reviewItem.required 与 shard not_applicable 不再是协议路径", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");

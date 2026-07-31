@@ -95,40 +95,6 @@
       "CORE-031",
       "CORE-032"
     ],
-    "requiredRuleRefs": [
-      "CORE-001",
-      "CORE-002",
-      "CORE-003",
-      "CORE-004",
-      "CORE-005",
-      "CORE-006",
-      "CORE-007",
-      "CORE-008",
-      "CORE-009",
-      "CORE-010",
-      "CORE-011",
-      "CORE-012",
-      "CORE-013",
-      "CORE-014",
-      "CORE-015",
-      "CORE-016",
-      "CORE-017",
-      "CORE-018",
-      "CORE-019",
-      "CORE-020",
-      "CORE-021",
-      "CORE-022",
-      "CORE-023",
-      "CORE-024",
-      "CORE-025",
-      "CORE-026",
-      "CORE-027",
-      "CORE-028",
-      "CORE-029",
-      "CORE-030",
-      "CORE-031",
-      "CORE-032"
-    ],
     "excludedRuleRefs": [],
     "globallyNotApplicableRuleRefs": [
       "CORE-033",
@@ -335,7 +301,7 @@
         "A": "applicable",
         "N": "not_applicable"
       },
-      "rule": "每个 required rule 的字符串必须与 targetOrder 等长；每个字符显式决定对应 ruleRef × targetId，禁止缺省决定。"
+      "rule": "每个 selected rule 的字符串必须与 targetOrder 等长；每个字符显式决定对应 ruleRef × targetId，禁止缺省决定。"
     },
     "evidenceProjection": {
       "loc": "{target.loc}",
@@ -424,7 +390,6 @@
   "expectedCounts": {
     "candidateRuleRefs": 44,
     "selectedRuleRefs": 32,
-    "requiredRuleRefs": 32,
     "excludedRuleRefs": 0,
     "globallyNotApplicableRuleRefs": 12,
     "changedUnits": 14,

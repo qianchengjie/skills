@@ -366,7 +366,6 @@ function buildDispatchDraft(input, root) {
     'ruleSetId',
     'candidateRuleRefs',
     'selectedRuleRefs',
-    'requiredRuleRefs',
     'excludedRuleRefs',
     'globallyNotApplicableRuleRefs',
   ], 'ruleProjection');
@@ -386,7 +385,6 @@ function buildDispatchDraft(input, root) {
   );
   const candidateRuleRefs = constructionStringSet(ruleProjection.candidateRuleRefs, 'ruleProjection.candidateRuleRefs');
   const selectedRuleRefs = constructionStringSet(ruleProjection.selectedRuleRefs, 'ruleProjection.selectedRuleRefs');
-  const requiredRuleRefs = constructionStringSet(ruleProjection.requiredRuleRefs, 'ruleProjection.requiredRuleRefs');
   const excludedRuleRefs = constructionStringSet(ruleProjection.excludedRuleRefs, 'ruleProjection.excludedRuleRefs');
   const globallyNotApplicableRuleRefs = constructionStringSet(ruleProjection.globallyNotApplicableRuleRefs, 'ruleProjection.globallyNotApplicableRuleRefs');
   if (candidateRuleRefs.some((ruleRef) => !/^[A-Z][A-Z0-9]*-\d{3}$/.test(ruleRef))) {
@@ -415,7 +413,7 @@ function buildDispatchDraft(input, root) {
 
   const encoding = requireConstructionObject(applicability.encoding, 'applicability.encoding');
   assertConstructionKeys(encoding, ['targetOrder', 'legend', 'rule'], 'applicability.encoding');
-  if (encoding.rule !== '每个 required rule 的字符串必须与 targetOrder 等长；每个字符显式决定对应 ruleRef × targetId，禁止缺省决定。') {
+  if (encoding.rule !== '每个 selected rule 的字符串必须与 targetOrder 等长；每个字符显式决定对应 ruleRef × targetId，禁止缺省决定。') {
     throw new Error('applicability.encoding.rule does not match construction-input v1');
   }
   const targetOrder = constructionStringSet(encoding.targetOrder, 'applicability.encoding.targetOrder');
@@ -430,15 +428,15 @@ function buildDispatchDraft(input, root) {
   const evidenceProjection = requireConstructionObject(applicability.evidenceProjection, 'applicability.evidenceProjection');
   assertConstructionKeys(evidenceProjection, ['loc', 'summary'], 'applicability.evidenceProjection');
   const byRule = requireConstructionObject(applicability.byRule, 'applicability.byRule');
-  if (!setsEqual(new Set(Object.keys(byRule)), new Set(requiredRuleRefs))) {
-    throw new Error('applicability.byRule must contain exactly requiredRuleRefs');
+  if (!setsEqual(new Set(Object.keys(byRule)), new Set(selectedRuleRefs))) {
+    throw new Error('applicability.byRule must contain exactly selectedRuleRefs');
   }
 
   const ruleSources = buildConstructionRuleSources(snapshotRule, ruleProjection, candidateRuleRefs);
   const applicabilityMatrix = [];
   const reviewItems = [];
 
-  requiredRuleRefs.forEach((ruleRef) => {
+  selectedRuleRefs.forEach((ruleRef) => {
     const decisions = byRule[ruleRef];
     if (typeof decisions !== 'string' || decisions.length !== targetOrder.length || /[^AN]/.test(decisions)) {
       throw new Error(`applicability.byRule.${ruleRef} must contain one A/N decision per target`);
@@ -510,7 +508,6 @@ function buildDispatchDraft(input, root) {
       sourceIndexHash: `sha256:${'0'.repeat(64)}`,
       candidateRuleRefs,
       selectedRuleRefs,
-      requiredRuleRefs,
       excludedRuleRefs,
       globallyNotApplicableRuleRefs,
       ruleSources,
@@ -741,7 +738,6 @@ function assertExpectedConstructionCounts(expectedCounts, dispatch) {
   const actual = {
     candidateRuleRefs: asArray(dispatch.ruleSet && dispatch.ruleSet.candidateRuleRefs).length,
     selectedRuleRefs: asArray(dispatch.ruleSet && dispatch.ruleSet.selectedRuleRefs).length,
-    requiredRuleRefs: asArray(dispatch.ruleSet && dispatch.ruleSet.requiredRuleRefs).length,
     excludedRuleRefs: asArray(dispatch.ruleSet && dispatch.ruleSet.excludedRuleRefs).length,
     globallyNotApplicableRuleRefs: asArray(dispatch.ruleSet && dispatch.ruleSet.globallyNotApplicableRuleRefs).length,
     changedUnits: asArray(dispatch.targets && dispatch.targets.changedUnits).length,
@@ -1305,7 +1301,6 @@ function validateRuleSet(ruleSet, artifact, result) {
     ruleSetId: null,
     candidateRuleRefs: new Set(),
     selectedRuleRefs: new Set(),
-    requiredRuleRefs: new Set(),
     excludedRuleRefs: new Set(),
     globallyNotApplicableRuleRefs: new Set(),
     ruleSourcesByRuleRef: new Map(),
@@ -1315,27 +1310,26 @@ function validateRuleSet(ruleSet, artifact, result) {
     return empty;
   }
 
-  requireFields(ruleSet, artifact, result, 'D011', '/ruleSet', [
+  const fields = [
     'ruleSetId',
     'sourceIndexHash',
     'candidateRuleRefs',
     'selectedRuleRefs',
-    'requiredRuleRefs',
     'excludedRuleRefs',
     'globallyNotApplicableRuleRefs',
     'ruleSources',
-  ]);
+  ];
+  requireFields(ruleSet, artifact, result, 'D011', '/ruleSet', fields);
+  rejectUnsupportedFields(ruleSet, artifact, result, 'D039', '/ruleSet', fields, 'ruleSet');
   if (!isNonEmptyString(ruleSet.ruleSetId)) addViolation(result, 'D012', artifact, '/ruleSet/ruleSetId', 'ruleSetId must be non-empty string', 'string', ruleSet.ruleSetId);
   if (!isNonEmptyString(ruleSet.sourceIndexHash)) addViolation(result, 'D013', artifact, '/ruleSet/sourceIndexHash', 'sourceIndexHash is required', 'non-empty hash', ruleSet.sourceIndexHash);
 
   const candidateRuleRefs = validateStringSet(ruleSet.candidateRuleRefs, artifact, result, 'D014', '/ruleSet/candidateRuleRefs');
   const selectedRuleRefs = validateStringSet(ruleSet.selectedRuleRefs, artifact, result, 'D037', '/ruleSet/selectedRuleRefs');
-  const requiredRuleRefs = validateStringSet(ruleSet.requiredRuleRefs, artifact, result, 'D015', '/ruleSet/requiredRuleRefs');
   const excludedRuleRefs = validateStringSet(ruleSet.excludedRuleRefs, artifact, result, 'D016', '/ruleSet/excludedRuleRefs');
   const globallyNotApplicableRuleRefs = validateStringSet(ruleSet.globallyNotApplicableRuleRefs, artifact, result, 'D017', '/ruleSet/globallyNotApplicableRuleRefs');
 
   requireSubset(selectedRuleRefs, candidateRuleRefs, artifact, result, 'D038', '/ruleSet/selectedRuleRefs', 'selectedRuleRefs must be subset of candidateRuleRefs');
-  requireSubset(requiredRuleRefs, selectedRuleRefs, artifact, result, 'D018', '/ruleSet/requiredRuleRefs', 'requiredRuleRefs must be subset of selectedRuleRefs');
   requireSubset(excludedRuleRefs, candidateRuleRefs, artifact, result, 'D019', '/ruleSet/excludedRuleRefs', 'excludedRuleRefs must be subset of candidateRuleRefs');
   requireSubset(globallyNotApplicableRuleRefs, candidateRuleRefs, artifact, result, 'D020', '/ruleSet/globallyNotApplicableRuleRefs', 'globallyNotApplicableRuleRefs must be subset of candidateRuleRefs');
   requireDisjoint(selectedRuleRefs, excludedRuleRefs, artifact, result, 'D021', '/ruleSet', 'selectedRuleRefs and excludedRuleRefs must not overlap');
@@ -1379,7 +1373,6 @@ function validateRuleSet(ruleSet, artifact, result) {
     ruleSetId: ruleSet.ruleSetId,
     candidateRuleRefs,
     selectedRuleRefs,
-    requiredRuleRefs,
     excludedRuleRefs,
     globallyNotApplicableRuleRefs,
     ruleSourcesByRuleRef,
@@ -1461,7 +1454,7 @@ function validateReviewItems(reviewItems, ruleSet, targets, artifact, result) {
     rejectUnsupportedFields(item, artifact, result, 'D065', pointer, fields, 'reviewItem');
     if (!REVIEW_ITEM_RE.test(item && item.reviewItemId)) addViolation(result, 'D062', artifact, `${pointer}/reviewItemId`, 'reviewItemId must match RIxxx', 'RIxxx', item && item.reviewItemId);
     if (itemMap.has(item && item.reviewItemId)) addViolation(result, 'D063', artifact, `${pointer}/reviewItemId`, 'reviewItemId must be unique', 'unique RIxxx', item && item.reviewItemId);
-    if (!ruleSet.requiredRuleRefs.has(item && item.ruleRef)) addViolation(result, 'D064', artifact, `${pointer}/ruleRef`, 'reviewItem.ruleRef must exist in requiredRuleRefs', Array.from(ruleSet.requiredRuleRefs), item && item.ruleRef);
+    if (!ruleSet.selectedRuleRefs.has(item && item.ruleRef)) addViolation(result, 'D064', artifact, `${pointer}/ruleRef`, 'reviewItem.ruleRef must exist in selectedRuleRefs', Array.from(ruleSet.selectedRuleRefs), item && item.ruleRef);
     if (!targets.allTargetIds.has(item && item.targetId)) {
       addViolation(result, 'D068', artifact, `${pointer}/targetId`, 'reviewItem targetId must exist in targets.changedUnits[] or targets.candidates[]', Array.from(targets.allTargetIds), item && item.targetId);
     } else {
@@ -1482,9 +1475,9 @@ function validateReviewItems(reviewItems, ruleSet, targets, artifact, result) {
     }
     if (item && item.reviewItemId) itemMap.set(item.reviewItemId, item);
   });
-  ruleSet.requiredRuleRefs.forEach((ruleRef) => {
+  if (targets.allTargetIds.size > 0) ruleSet.selectedRuleRefs.forEach((ruleRef) => {
     const hasReviewItem = Array.from(itemMap.values()).some((item) => item.ruleRef === ruleRef);
-    if (!hasReviewItem) addViolation(result, 'D070', artifact, '/reviewItems', 'requiredRuleRef must generate at least one reviewItem', ruleRef, Array.from(itemMap.values()));
+    if (!hasReviewItem) addViolation(result, 'D070', artifact, '/reviewItems', 'selectedRuleRef must generate at least one reviewItem when targets exist', ruleRef, Array.from(itemMap.values()));
   });
   return itemMap;
 }
@@ -1500,8 +1493,8 @@ function validateApplicabilityMatrix(rows, ruleSet, targets, reviewItems, artifa
   rows.forEach((entry, index) => {
     const pointer = `/applicabilityMatrix/${index}`;
     requireFields(entry, artifact, result, 'D151', pointer, ['ruleRef', 'targetId', 'targetKind', 'applicability', 'evidence']);
-    if (!ruleSet.requiredRuleRefs.has(entry && entry.ruleRef)) {
-      addViolation(result, 'D152', artifact, `${pointer}/ruleRef`, 'applicabilityMatrix ruleRef must be requiredRuleRefs item', Array.from(ruleSet.requiredRuleRefs), entry && entry.ruleRef);
+    if (!ruleSet.selectedRuleRefs.has(entry && entry.ruleRef)) {
+      addViolation(result, 'D152', artifact, `${pointer}/ruleRef`, 'applicabilityMatrix ruleRef must be selectedRuleRefs item', Array.from(ruleSet.selectedRuleRefs), entry && entry.ruleRef);
     }
     const target = targets.targetById.get(entry && entry.targetId);
     if (!target) {
@@ -1515,7 +1508,7 @@ function validateApplicabilityMatrix(rows, ruleSet, targets, reviewItems, artifa
     validateEvidenceArray(entry && entry.evidence, artifact, result, 'D156', `${pointer}/evidence`, 'applicabilityMatrix entry requires evidence');
 
     const key = applicabilityKey(entry && entry.ruleRef, entry && entry.targetId);
-    if (rowsByPair.has(key)) addViolation(result, 'D157', artifact, pointer, 'applicabilityMatrix must contain one row per required rule and target pair', 'unique ruleRef + targetId', entry);
+    if (rowsByPair.has(key)) addViolation(result, 'D157', artifact, pointer, 'applicabilityMatrix must contain one row per selected rule and target pair', 'unique ruleRef + targetId', entry);
     if (entry && entry.ruleRef && entry.targetId) rowsByPair.set(key, entry);
 
     if (entry && entry.applicability === 'applicable') {
@@ -1542,11 +1535,11 @@ function validateApplicabilityMatrix(rows, ruleSet, targets, reviewItems, artifa
     }
   });
 
-  ruleSet.requiredRuleRefs.forEach((ruleRef) => {
+  ruleSet.selectedRuleRefs.forEach((ruleRef) => {
     targets.targetById.forEach((_target, targetId) => {
       const key = applicabilityKey(ruleRef, targetId);
       if (!rowsByPair.has(key)) {
-        addViolation(result, 'D163', artifact, '/applicabilityMatrix', 'applicabilityMatrix must cover every requiredRuleRef x target pair', key, Array.from(rowsByPair.keys()));
+        addViolation(result, 'D163', artifact, '/applicabilityMatrix', 'applicabilityMatrix must cover every selectedRuleRef x target pair', key, Array.from(rowsByPair.keys()));
       }
     });
   });
@@ -1564,7 +1557,7 @@ function applicabilityKey(ruleRef, targetId) {
 
 function validateRequiredContextCoverage(ruleSet, targets, artifact, result) {
   const requiredContextById = new Map();
-  ruleSet.requiredRuleRefs.forEach((ruleRef) => {
+  ruleSet.selectedRuleRefs.forEach((ruleRef) => {
     const source = ruleSet.ruleSourcesByRuleRef.get(ruleRef);
     asArray(source && source.requiredContext).forEach((entry) => {
       if (entry && entry.contextId) requiredContextById.set(entry.contextId, { ruleRef, entry });
@@ -1580,7 +1573,7 @@ function validateRequiredContextCoverage(ruleSet, targets, artifact, result) {
     }
     asArray(expansion && expansion.requiredContextRefs).forEach((contextId, refIndex) => {
       if (!requiredContextById.has(contextId)) {
-        addViolation(result, 'D170', artifact, `/targets/contextExpansions/${index}/requiredContextRefs/${refIndex}`, 'requiredContextRefs must reference required rule context', Array.from(requiredContextById.keys()), contextId);
+        addViolation(result, 'D170', artifact, `/targets/contextExpansions/${index}/requiredContextRefs/${refIndex}`, 'requiredContextRefs must reference selected rule context', Array.from(requiredContextById.keys()), contextId);
       } else {
         covered.add(contextId);
       }
@@ -1589,7 +1582,7 @@ function validateRequiredContextCoverage(ruleSet, targets, artifact, result) {
 
   requiredContextById.forEach((_value, contextId) => {
     if (!covered.has(contextId)) {
-      addViolation(result, 'D171', artifact, '/targets/contextExpansions', 'required rule context must be covered by contextExpansions.requiredContextRefs', contextId, Array.from(covered));
+      addViolation(result, 'D171', artifact, '/targets/contextExpansions', 'selected rule context must be covered by contextExpansions.requiredContextRefs', contextId, Array.from(covered));
     }
   });
 }
@@ -3465,7 +3458,6 @@ function formatAuditLines(finalReview, dispatch, runDir) {
     `- 规则来源类型：${ruleInputSource.kind || '未知'}`,
     `- candidateRuleRefs：${asArray(ruleSet.candidateRuleRefs).length}`,
     `- selectedRuleRefs：${asArray(ruleSet.selectedRuleRefs).length}`,
-    `- requiredRuleRefs：${asArray(ruleSet.requiredRuleRefs).length}`,
     `- excludedRuleRefs：${asArray(ruleSet.excludedRuleRefs).length}`,
     `- globallyNotApplicableRuleRefs：${asArray(ruleSet.globallyNotApplicableRuleRefs).length}`,
     `- changedUnits：${asArray(targets.changedUnits).length}`,

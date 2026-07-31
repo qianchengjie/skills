@@ -39,7 +39,7 @@ validator 或 schema。
 - Subject-visible semantic input: `fixture/dispatch-input.json`
 - Mounted path: `/input/dispatch-input.json`
 - Semantic input SHA-256:
-  `7a9b61fcaa4ad82952a67421a5b8a9a83152825057146a853cd785b1b9b14a76`
+  `40f9be492ca14baa8423b2de948845422c90427bd127baa79c91408b2fb6a5fb`
 - Synthetic Git input: `fixture/project.bundle`
 - Git input SHA-256:
   `1f30b5b9a1fc946eb6c20070fd98cc1a09e46881a796d2f523e144098898aeaa`
@@ -58,7 +58,6 @@ package 的 rules-review 来源。
 | --- | ---: |
 | candidate rules | 44 |
 | selected rules | 32 |
-| required rules | 32 |
 | globally not applicable rules | 12 |
 | changed units | 14 |
 | context candidates | 2 |

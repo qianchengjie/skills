@@ -30,6 +30,7 @@ git show <targetTree>:<path>
 - `finding` 包含 origin、evidence 与非空 `rootCause`，不含 findingId。
 - `observation` 包含 origin，以及 reason 或 evidence。
 - 无法判断时返回 `cannot_verify`；shard result 不支持 `not_applicable`。
+- 能确认 reviewItem 实际不适用时，不得用任何现有 result status 代替 `not_applicable`。停止当前 batch、不写合法 shard，并通知 controller 作废当前 run；controller 针对同一 TARGET 以修正后的适用性输入创建 fresh run，旧 run 不聚合、不用于门禁。
 - 本 batch 内多个 finding results 属于同一根因时，分别保留 result，并填写字节完全相同的 `rootCause`；aggregator 会合并展示并保留各自 evidence。不同根因不得复用同一文本；不同 batch 不做根因合并。
 - 规则外事项不得放进 result。仅当审查中自然注意到且值得提醒时，可在 shard 顶层写 `otherConcerns: string[]`；不要求 evidence，不为此额外阅读、测试或重试，没有则省略。明确违反 task 规则的事项不得放入 `otherConcerns`。字段中的非字符串、空字符串和重复项由 aggregator 忽略。
 
