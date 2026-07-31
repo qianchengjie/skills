@@ -1556,6 +1556,8 @@ function applicabilityKey(ruleRef, targetId) {
 }
 
 function validateRequiredContextCoverage(ruleSet, targets, artifact, result) {
+  if (asArray(targets && targets.changedUnits).length + asArray(targets && targets.candidates).length === 0) return;
+
   const requiredContextById = new Map();
   ruleSet.selectedRuleRefs.forEach((ruleRef) => {
     const source = ruleSet.ruleSourcesByRuleRef.get(ruleRef);

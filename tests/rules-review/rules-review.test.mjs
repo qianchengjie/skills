@@ -910,11 +910,15 @@ test("construct-dispatch 对 2×2 紧凑输入做完整确定性投影", async (
   assert.equal(validation.ok, true);
 });
 
-test("空 TARGET 保留 selectedRuleRefs，但不生成矩阵、审查项或批次", async (t) => {
+test("空 TARGET 即使 selected 规则声明 requiredContext 也不生成审查工件", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = createDraft(root, { runId: "empty-target" });
   const dispatch = readJson(file);
+  dispatch.ruleSet.ruleSources[0].requiredContext = [{
+    contextId: "CTX-001",
+    summary: "需要额外上下文",
+  }];
   dispatch.targets = {
     changedUnits: [],
     candidates: [],
@@ -1419,6 +1423,45 @@ test("候选规则必须由 selected、excluded、globallyNotApplicable 完整�
   dispatch.ruleSet.excludedRuleRefs = [];
   writeJson(file, dispatch);
   await expectFailure(["--mode", "dispatch", "--input", file], /candidateRuleRef must be classified/);
+});
+
+test("非空 TARGET 拒绝 selected 规则全部判为不适用", async (t) => {
+  const root = createRepository();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
+  const file = createDraft(root, { runId: "selected-without-review-item" });
+  const dispatch = await seal(file);
+  dispatch.applicabilityMatrix = [{
+    ruleRef: "CORE-001",
+    targetId: "T001",
+    targetKind: "changed_unit",
+    applicability: "not_applicable",
+    reason: "错误地全部判为不适用",
+    evidence: [{ loc: "src/main.js:1", summary: "适用性已判断" }],
+  }];
+  dispatch.reviewItems = [];
+  dispatch.reviewBatches = [];
+  writeJson(file, dispatch);
+
+  await expectFailure(
+    ["--mode", "dispatch", "--input", file],
+    /selectedRuleRef must generate at least one reviewItem when targets exist/,
+  );
+});
+
+test("非空 TARGET 拒绝缺少 selectedRuleRef × targetId 矩阵行", async (t) => {
+  const root = createRepository();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
+  const file = createDraft(root, { runId: "missing-selected-matrix-row" });
+  const dispatch = await seal(file);
+  dispatch.applicabilityMatrix = [];
+  writeJson(file, dispatch);
+
+  await expectFailure(
+    ["--mode", "dispatch", "--input", file],
+    /applicabilityMatrix must cover every selectedRuleRef x target pair/,
+  );
 });
 
 test("每个 reviewItem 必须由当前 run 分派，非空 reviewItems 禁止空 batch", async (t) => {
