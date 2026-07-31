@@ -87,6 +87,8 @@ function createRepository() {
 
 function createConstructionCase(t, {
   runId = "construction-test",
+  productionInput = false,
+  workspaceRules = false,
   indexContent = [
     "# Rules Index",
     "",
@@ -142,16 +144,25 @@ function createConstructionCase(t, {
   const targetCommit = git(root, ["rev-parse", "HEAD"]);
 
   const input = {
-    kind: "rules-review-dispatch-construction-eval-input",
+    kind: productionInput
+      ? "rules-review-dispatch-construction-input"
+      : "rules-review-dispatch-construction-eval-input",
     schemaVersion: 1,
     runId,
-    repository: {
-      fixture: "project.bundle",
-      baseCommit,
-      targetCommit,
-      rulesCommit: targetCommit,
-      excludedFiles: [],
-    },
+    repository: productionInput
+      ? {
+        baseCommit,
+        targetCommit,
+        ...(workspaceRules ? {} : { rulesCommit: targetCommit }),
+        excludedFiles: [],
+      }
+      : {
+        fixture: "project.bundle",
+        baseCommit,
+        targetCommit,
+        rulesCommit: targetCommit,
+        excludedFiles: [],
+      },
     ruleProjection: {
       indexFile: ".agents/rules/index.md",
       ruleSourceFiles: {
@@ -844,7 +855,7 @@ test("不同 batch 的相同 rootCause 不会发生隐式跨 batch 合并", asyn
 });
 
 test("construct-dispatch 对 2×2 紧凑输入做完整确定性投影", async (t) => {
-  const fixture = createConstructionCase(t);
+  const fixture = createConstructionCase(t, { productionInput: true });
   const inputBefore = fs.readFileSync(fixture.inputPath);
   const construction = await runJson([
     "--mode", "construct-dispatch",
@@ -990,8 +1001,47 @@ test("construct-dispatch 对 2×2 紧凑输入做完整确定性投影", async (
   assert.equal(validation.ok, true);
 });
 
+test("construct-dispatch 用普通紧凑输入封印 workspace 规则", async (t) => {
+  const fixture = createConstructionCase(t, {
+    runId: "workspace-construction",
+    productionInput: true,
+    workspaceRules: true,
+  });
+  const workspaceRules = fixture.rulesContent.replace(
+    "检查主文件。",
+    "检查 workspace 中的主文件。",
+  );
+  fs.writeFileSync(
+    path.join(fixture.root, ".agents/rules/always/constraints.md"),
+    workspaceRules,
+  );
+
+  const construction = await runJson([
+    "--mode", "construct-dispatch",
+    "--input", fixture.inputPath,
+    "--output", fixture.output,
+  ], fixture.root);
+  const dispatch = readJson(fixture.outputPath);
+
+  assert.equal(construction.ok, true);
+  assert.deepEqual(dispatch.ruleInputSource, { kind: "workspace" });
+  assert.equal(
+    dispatch.ruleSnapshot.files.find(({ path: file }) =>
+      file === ".agents/rules/always/constraints.md"
+    ).content,
+    workspaceRules,
+  );
+  assert.equal(dispatch.ruleSet.ruleSources[0].ruleText, "检查 workspace 中的主文件。");
+  const validation = await runJson(
+    ["--mode", "dispatch", "--input", fixture.outputPath],
+    fixture.root,
+  );
+  assert.equal(validation.ok, true);
+});
+
 test("construct-dispatch 拒绝未声明的构造输入身份", async (t) => {
   const fixture = createConstructionCase(t, {
+    productionInput: true,
     mutateInput(input) {
       input.kind = "other-construction-input";
     },
@@ -1006,6 +1056,7 @@ test("construct-dispatch 拒绝未声明的构造输入身份", async (t) => {
 
 test("construct-dispatch 拒绝非规范提交身份", async (t) => {
   const fixture = createConstructionCase(t, {
+    productionInput: true,
     mutateInput(input) {
       input.repository.targetCommit = "HEAD";
     },
@@ -1020,6 +1071,7 @@ test("construct-dispatch 拒绝非规范提交身份", async (t) => {
 
 test("construct-dispatch 拒绝不符合 rule-steward 协议的索引", async (t) => {
   const fixture = createConstructionCase(t, {
+    productionInput: true,
     indexContent: "| `CORE` | active | `always/constraints.md` | 每次任务必读 |\n",
   });
   await expectFailure([
@@ -1672,8 +1724,8 @@ test("文档声明 commit-only、每 TARGET fresh run 与临时生命周期", ()
   const skill = fs.readFileSync(path.join(repoRoot, "skills/rules-review/SKILL.md"), "utf8");
   const reviewer = fs.readFileSync(path.join(repoRoot, "skills/rules-review/references/subagent-all-aspects.md"), "utf8");
   assert.match(skill, /TARGET 只能是 Git commit/);
-  assert.match(skill, /`--target-commit` 是唯一 TARGET selector/);
-  assert.match(skill, /--rules-commit/);
+  assert.match(skill, /`targetCommit`/);
+  assert.match(skill, /rulesCommit/);
   assert.match(skill, /ruleInputSource/);
   assert.match(skill, /每个新的 TARGET.*全新 run/s);
   assert.match(skill, /不继承旧结果/);

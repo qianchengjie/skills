@@ -21,22 +21,23 @@ controller 只把用户语法解析为固定的 BASE commit 与 TARGET commit，
 
 BASE、TARGET 或目标解释不唯一时立即 blocked，不任选一种解释。用户要求审查 current、staged、worktree、branch 或裸 tree 时，停止并要求先形成目标 commit；不要把这些入口静默降级为 commit 审查。
 
-调用方已经提供
-`kind = "rules-review-dispatch-construction-eval-input"`、`schemaVersion = 1`
-的紧凑 dispatch 语义输入时，直接使用官方构造入口：
+controller 完成规则分区、targets、适用性决定和 batch 分组后，只写
+`kind = "rules-review-dispatch-construction-input"`、`schemaVersion = 1`
+的紧凑 dispatch 语义输入，再使用官方构造入口：
 
 ```text
 node scripts/validate.js --mode construct-dispatch \
-  --input <construction-input.json> \
+  --input .rules-review-tmp/<run-id>-construction.json \
   --output .rules-review-tmp/<run-id>/dispatch.json
 ```
 
-该 v1 输入使用固定字段集合和固定投影描述；其它 kind、未知字段、非规范 commit
-OID 或不符合 `rule-steward` Namespaces 表协议的规则索引一律 fail closed。
-`repository.fixture` 只作为安全的 fixture 来源标识，不参与 Git 定位；当前
-worktree 及三个完整 commit OID 才是输入身份。
+该 v1 输入使用固定字段集合和固定投影描述。`repository` 必须包含完整
+`baseCommit`、`targetCommit` 和 `excludedFiles = []`；默认省略 `rulesCommit`
+以读取当前 workspace 规则，显式固定规则来源时才填写完整 `rulesCommit`。其它
+kind、未知字段、非规范 commit OID 或不符合 `rule-steward` Namespaces 表协议
+的规则索引一律 fail closed。
 
-入口从当前 Git worktree 读取输入中固定的 BASE、TARGET 和 rules commit，按
+入口从当前 Git worktree 读取固定的 BASE、TARGET 和所选规则来源，按
 `requiredRuleRefs × targetOrder` 顺序展开适用性矩阵，并按 `A = 适用`、
 `N = 不适用` 连续分配 reviewItem ID。batch key 直接成为 `reviewBatchId`。
 规则投影只读取 `rule-steward` 定义的 active 规则固定字段；规则分区、targets、
@@ -44,20 +45,18 @@ worktree 及三个完整 commit OID 才是输入身份。
 hash，验证完整 v7 dispatch 后再以“同一 run 仅允许一次成功”的方式原子写入
 最终文件。
 
-没有紧凑语义输入时，controller 先完成语义判断并形成 v7 draft，再使用内部封印
-接口：
+controller 不得直接写完整 v7 draft，不得新建或内联执行 JS、Shell、Python、
+`jq` 等生成逻辑，也不得手工展开 applicabilityMatrix、reviewItems 或
+reviewBatches。把生成器放到 run 目录外、在最终校验前删除，或解释为“一次性
+辅助脚本”都不改变该边界。`seal-dispatch` 只保留为内部兼容接口，不是
+controller 入口；官方 `construct-dispatch` 无法闭合时，本轮必须 blocked。
 
-```text
-node scripts/validate.js --mode seal-dispatch \
-  --input <dispatch.json> \
-  --base <revision> \
-  --target-commit <revision> \
-  [--rules-commit <revision>]
-```
-
-`--target-commit` 是唯一 TARGET selector，成功时固定 `targetTree = targetCommit^{tree}`、`boundCommit = targetCommit`、`excludedFiles = []`。未传 `--rules-commit` 时规则来源为当前工作区；传入时先解析为完整 commit OID，再从该 commit tree 读取规则。`excludedRuleRefs` 仍可形成规则范围分区。
-
-draft 不得声明 `ruleInputSource`；该字段只能由 `seal-dispatch` 根据命令参数生成。发现 draft 已携带该字段时 fail closed，不覆盖。`seal-dispatch` 不创建 Git object，不修改真实 index、工作文件、staged/unstaged 状态或 worktree 列表。作为命令控制输入的 `dispatch.json` 不属于 TARGET；TARGET 只由指定 commit 决定。已经带有 `targetTree` 的 dispatch 不得原地重封；新 TARGET 必须创建新 run。
+`construct-dispatch` 内部固定 `targetTree = targetCommit^{tree}`、
+`boundCommit = targetCommit`、`excludedFiles = []`。省略 `rulesCommit` 时规则
+来源为当前工作区；填写时只从该 commit tree 读取规则。构造与封印复用同一次
+规则快照，避免 workspace 内容在两阶段之间漂移。该过程不创建 Git object，不
+修改真实 index、工作文件、staged/unstaged 状态或 worktree 列表。新 TARGET
+必须创建新 run。
 
 ## 2. 不可变输入
 
@@ -81,7 +80,7 @@ reviewRange:
 ruleInputSource:
   kind: workspace
 
-# 显式 --rules-commit
+# 显式 rulesCommit
 ruleInputSource:
   kind: commit
   commit: <完整 commit OID>
@@ -154,7 +153,7 @@ excludedRuleRefs 为空 => full
 - `workspace`：读取当前文件系统，包含未提交规则内容。
 - `commit`：只读取 `ruleInputSource.commit` 对应 tree；内容不足时 blocked，不从工作区或代码 TARGET 补充。
 
-controller 据此形成稳定 `ruleRef`、来源文件和 `ruleSet` 投影；`seal-dispatch` 从同一来源生成 `ruleSnapshot`，并用 `sourceFile / sourceHash` 绑定 `ruleSet.ruleSources`。`summary / ruleText` 等 reviewer 投影不得反向覆盖 snapshot。
+controller 据此形成稳定 `ruleRef`、来源文件和规则分区；`construct-dispatch` 从同一次规则快照生成 `ruleSet` 与 `ruleSnapshot`，并用 `sourceFile / sourceHash` 绑定 `ruleSet.ruleSources`。`summary / ruleText` 等 reviewer 投影不得反向覆盖 snapshot。
 
 规则集合必须是完整互斥分区：
 
@@ -246,7 +245,7 @@ reviewer 必须按 task 中的全部 reviewItems 分别完成审查并返回结�
 ## 7. 命令顺序
 
 ```text
-construct-dispatch（已有紧凑语义输入时）或 seal-dispatch
+construct-dispatch
 dispatch
 build-tasks
 task
@@ -260,7 +259,7 @@ render-response
 主要命令：
 
 ```text
-node scripts/validate.js --mode construct-dispatch --input construction-input.json --output .rules-review-tmp/<run-id>/dispatch.json
+node scripts/validate.js --mode construct-dispatch --input .rules-review-tmp/<run-id>-construction.json --output .rules-review-tmp/<run-id>/dispatch.json
 node scripts/validate.js --mode dispatch --input dispatch.json
 node scripts/validate.js --mode build-tasks --dispatch dispatch.json --out tasks/
 node scripts/validate.js --mode task --input tasks/<reviewBatchId>.json

@@ -276,12 +276,13 @@ function constructDispatchMode(args, result) {
     const output = resolveConstructionOutput(root, args.output, input.runId);
     if (fs.existsSync(output)) throw new Error('construct-dispatch output already exists; create a fresh run');
 
-    const draft = buildDispatchDraft(input, root);
-    const sealed = sealDispatchDraft(draft, {
+    const construction = buildDispatchDraft(input, root);
+    const sealArgs = {
       base: input.repository.baseCommit,
       'target-commit': input.repository.targetCommit,
-      'rules-commit': input.repository.rulesCommit,
-    }, root);
+    };
+    if (construction.rulesCommit) sealArgs['rules-commit'] = construction.rulesCommit;
+    const sealed = sealDispatchDraft(construction.draft, sealArgs, root, construction.snapshotRule);
 
     ensureSafeOutputParent(root, output);
     temporary = path.join(path.dirname(output), `.${path.basename(output)}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`);
@@ -342,8 +343,9 @@ function ensureSafeOutputParent(root, output) {
 
 function buildDispatchDraft(input, root) {
   if (!isObject(input) || input.schemaVersion !== 1) throw new Error('construction input schemaVersion must equal 1');
-  if (input.kind !== 'rules-review-dispatch-construction-eval-input') {
-    throw new Error('construction input kind must equal rules-review-dispatch-construction-eval-input');
+  const legacyInput = input.kind === 'rules-review-dispatch-construction-eval-input';
+  if (!legacyInput && input.kind !== 'rules-review-dispatch-construction-input') {
+    throw new Error('construction input kind must equal rules-review-dispatch-construction-input');
   }
   assertConstructionKeys(input, [
     'kind',
@@ -362,7 +364,14 @@ function buildDispatchDraft(input, root) {
   const inputTargets = requireConstructionObject(input.targets, 'targets');
   const applicability = requireConstructionObject(input.applicability, 'applicability');
   const inputPlan = requireConstructionObject(input.executionPlan, 'executionPlan');
-  assertConstructionKeys(repository, ['fixture', 'baseCommit', 'targetCommit', 'rulesCommit', 'excludedFiles'], 'repository');
+  const hasRulesCommit = Object.prototype.hasOwnProperty.call(repository, 'rulesCommit');
+  assertConstructionKeys(
+    repository,
+    legacyInput
+      ? ['fixture', 'baseCommit', 'targetCommit', 'rulesCommit', 'excludedFiles']
+      : ['baseCommit', 'targetCommit', ...(hasRulesCommit ? ['rulesCommit'] : []), 'excludedFiles'],
+    'repository',
+  );
   assertConstructionKeys(ruleProjection, [
     'indexFile',
     'ruleSourceFiles',
@@ -385,10 +394,18 @@ function buildDispatchDraft(input, root) {
     'batchRuleRefs',
     'initialBatchState',
   ], 'executionPlan');
-  assertSafeRepoRelativePath(repository.fixture);
+  if (legacyInput) assertSafeRepoRelativePath(repository.fixture);
   resolveConstructionCommit(root, repository.baseCommit, 'repository.baseCommit');
   resolveConstructionCommit(root, repository.targetCommit, 'repository.targetCommit');
-  const rulesCommit = resolveConstructionCommit(root, repository.rulesCommit, 'repository.rulesCommit');
+  const rulesCommit = hasRulesCommit
+    ? resolveConstructionCommit(root, repository.rulesCommit, 'repository.rulesCommit')
+    : null;
+  const rulesTree = rulesCommit ? resolveTree(root, `${rulesCommit}^{tree}`) : null;
+  const snapshotRule = memoizeConstructionRuleSnapshot(
+    rulesCommit
+      ? (repoPath) => snapshotRuleFile(root, rulesTree, repoPath)
+      : (repoPath) => snapshotWorkspaceRuleFile(root, repoPath),
+  );
   const candidateRuleRefs = constructionStringSet(ruleProjection.candidateRuleRefs, 'ruleProjection.candidateRuleRefs');
   const selectedRuleRefs = constructionStringSet(ruleProjection.selectedRuleRefs, 'ruleProjection.selectedRuleRefs');
   const requiredRuleRefs = constructionStringSet(ruleProjection.requiredRuleRefs, 'ruleProjection.requiredRuleRefs');
@@ -446,8 +463,7 @@ function buildDispatchDraft(input, root) {
     throw new Error('applicability.byRule must contain exactly requiredRuleRefs');
   }
 
-  const rulesTree = resolveTree(root, `${rulesCommit}^{tree}`);
-  const ruleSources = buildConstructionRuleSources(root, rulesTree, ruleProjection, candidateRuleRefs);
+  const ruleSources = buildConstructionRuleSources(snapshotRule, ruleProjection, candidateRuleRefs);
   const applicabilityMatrix = [];
   const reviewItems = [];
 
@@ -565,15 +581,23 @@ function buildDispatchDraft(input, root) {
     reviewBatches,
   };
   assertExpectedConstructionCounts(input.expectedCounts, draft);
-  return draft;
+  return { draft, rulesCommit, snapshotRule };
 }
 
-function buildConstructionRuleSources(root, rulesTree, ruleProjection, candidateRuleRefs) {
+function memoizeConstructionRuleSnapshot(snapshotRule) {
+  const snapshots = new Map();
+  return (repoPath) => {
+    if (!snapshots.has(repoPath)) snapshots.set(repoPath, snapshotRule(repoPath));
+    return snapshots.get(repoPath);
+  };
+}
+
+function buildConstructionRuleSources(snapshotRule, ruleProjection, candidateRuleRefs) {
   if (ruleProjection.indexFile !== '.agents/rules/index.md') {
     throw new Error('ruleProjection.indexFile must equal .agents/rules/index.md');
   }
   const sourceFiles = requireConstructionObject(ruleProjection.ruleSourceFiles, 'ruleProjection.ruleSourceFiles');
-  const index = parseConstructionRuleIndex(snapshotRuleFile(root, rulesTree, ruleProjection.indexFile).content);
+  const index = parseConstructionRuleIndex(snapshotRule(ruleProjection.indexFile).content);
   const rulesByFile = new Map();
   const activeRuleFiles = new Map();
   const candidateNamespaces = new Set(candidateRuleRefs.map((ruleRef) => ruleRef.split('-')[0]));
@@ -582,7 +606,7 @@ function buildConstructionRuleSources(root, rulesTree, ruleProjection, candidate
   }
   index.forEach((registration) => {
     if (registration.status === 'active' && !activeRuleFiles.has(registration.sourceFile)) {
-      activeRuleFiles.set(registration.sourceFile, snapshotRuleFile(root, rulesTree, registration.sourceFile).content);
+      activeRuleFiles.set(registration.sourceFile, snapshotRule(registration.sourceFile).content);
     }
   });
 
@@ -814,7 +838,7 @@ function sealDispatchMode(args, result) {
   result.rendered = args.input;
 }
 
-function sealDispatchDraft(draft, args, root) {
+function sealDispatchDraft(draft, args, root, constructionSnapshotRule) {
   if (draft.reviewRange && Object.prototype.hasOwnProperty.call(draft.reviewRange, 'targetTree')) {
     throw new Error('sealed dispatch cannot be resealed; create a fresh run for a new TARGET');
   }
@@ -837,13 +861,13 @@ function sealDispatchDraft(draft, args, root) {
   let snapshotRule;
   if (args['rules-commit'] === undefined) {
     ruleInputSource = { kind: 'workspace' };
-    snapshotRule = (repoPath) => snapshotWorkspaceRuleFile(root, repoPath);
+    snapshotRule = constructionSnapshotRule || ((repoPath) => snapshotWorkspaceRuleFile(root, repoPath));
   } else {
     if (!isNonEmptyString(args['rules-commit'])) throw new Error('--rules-commit requires a Git revision');
     const rulesCommit = resolveCommit(root, args['rules-commit']);
     const rulesTree = resolveTree(root, `${rulesCommit}^{tree}`);
     ruleInputSource = { kind: 'commit', commit: rulesCommit };
-    snapshotRule = (repoPath) => snapshotRuleFile(root, rulesTree, repoPath);
+    snapshotRule = constructionSnapshotRule || ((repoPath) => snapshotRuleFile(root, rulesTree, repoPath));
   }
 
   const sealed = JSON.parse(JSON.stringify(draft));
