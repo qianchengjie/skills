@@ -158,18 +158,64 @@ active 规则不得声明必须加载、展开或继承另一个规则 ID。规�
 
 执行写入前，必须对拟落地文本重新核对全部入库标准；每次实质改写都产生一个新候选，必须重新决策。当前候选未全部满足时必须选择 `NO_RULE`，不得将其写入 active rule。
 
+候选要求本身必须有可靠依据支撑其正确性，并用历史事故、finding 或重复失败说明入库必要性。正确性或必要性不成立时直接选择 `NO_RULE`；历史事故和 finding 只能证明必要性，不能替代候选规则的行为验证。
+
+维护判断按以下顺序进行：
+
+```text
+正确性依据
+→ 必要性证据
+→ 内容入库审查
+→ 适用时进行候选行为验证
+→ 写入
+→ 结构验证
+```
+
+内容入库标准不满足时继续使用 `NO_RULE` 硬门禁。以下维护需要候选行为验证：
+
+- `ADD_RULE`；
+- 新 namespace 的首条 active rule；
+- 实质语义 `UPDATE_RULE`；
+- 声称 replacement rules 覆盖旧规则的 `RETIRE_RULE`。
+
+查询、初始化、编号、路由和纯格式编辑不适用候选行为验证。
+
+候选行为验证必须：
+
+- 使用拟写入的完整候选规则块和精确文本；
+- 构造互斥对照：除本次变更涉及的规则块外，两侧的可见输入、其他规则、环境和判断标准保持一致；`ADD_RULE` 和新 namespace 的首条 active rule 使用“不含候选 / 加载候选”，实质语义 `UPDATE_RULE` 使用 `old-only / candidate-only`，带替代规则的 `RETIRE_RULE` 使用 `old-only / replacements-only`；
+- `old-only`、`candidate-only` 和 `replacements-only` 只限定本次变更涉及的规则块；候选侧不得同时加载旧规则与候选或最终替代集合；
+- 至少包含一个适用场景和一个近邻非适用场景；
+- 在候选发生实质语义改写后重新验证。
+
+行为结论只能是：
+
+- `passed`：
+  - 对 `ADD_RULE`、新 namespace 的首条 active rule 和实质语义 `UPDATE_RULE`，候选在适用场景中相对 baseline 产生事先定义的可观察改善；
+  - 对带替代规则的 `RETIRE_RULE`，`replacements-only` 完整保持 `old-only` 中仍然有效的事先定义行为；
+  - 近邻非适用场景未过度触发；
+- `failed`：候选无效或越界，不得写入；
+- `cannot-verify`：当前无法得到有效、可比的行为证据；不得表述为已验证或 `passed`，并须说明剩余风险。
+
+对 `ADD_RULE`、新 namespace 的首条 active rule 和实质语义 `UPDATE_RULE`，若 baseline 与候选侧在事先定义的观察点没有差异，行为结论只能是 `cannot-verify`；若进一步证据证明现有规则或稳定行为已经覆盖该要求，重新执行内容入库审查并选择 `NO_RULE`。
+
+`cannot-verify` 本身不表示允许或禁止写入；是否继续维护由下述维护风险分层和用户授权边界决定。未满足现有确认要求时不得写入，本 skill 不为此新增独立 waiver 协议。
+
+需要候选行为验证的维护，只在当前维护报告或最终回复中记录候选精确文本或最终替代集合、必要性证据、对照配置、事先定义的观察点、适用场景中 baseline 与候选侧的结果及差异或覆盖关系、近邻非适用场景结果、行为结论和剩余风险；不定义固定模板，也不要求填写不适用字段。
+
 维护风险分层：
 
 - 低风险：获取规则、解释级别语义、初始化空规则仓；可直接执行并说明结果。
 - 中风险：在已有 namespace 下新增规则；需记录决策枚举、命中入库标准的依据、修改文件和验证结果。
 - 高风险：新增 namespace、修改 active rule 语义、退役 rule；即使用户已明确点名维护动作和对象，也必须记录决策枚举、影响范围、判断依据、修改文件、验证结果和剩余风险。若用户没有明确点名该维护动作和对象，先给出建议和影响，等待确认后再修改。
 
-维护后的验证必须区分：
+维护验证必须区分三层：
 
-- 结构验证：确认 `index.md` 登记、受影响 rule ID 的路由和预期状态正确，且没有 active / retired 冲突。
 - 内容审查：由 agent 或 reviewer 核对规则格式、入库标准、语义影响和证据要求，并记录判断依据。
+- 行为验证：适用时判断候选精确文本是否在互斥对照中相对 baseline 产生预期改善，或最终替代集合是否保持旧规则仍然有效的行为，且未在近邻非适用场景中过度触发。
+- 结构验证：写入后确认 `index.md` 登记、受影响 rule ID 的路由和预期状态正确，且没有 active / retired 冲突。
 
-`get-rules.mjs` 成功只证明本次请求 ID 的路由、获取和相关冲突检查通过，不证明规则内容正确或适合入库。
+`get-rules.mjs` 和现有脚本成功只证明结构闭合，不证明规则内容正确、适合入库或行为有效。
 
 新增 namespace 必须比新增规则更严格：现有 namespace 无法自然容纳；不是技术栈大词或垃圾桶分类；有清晰、稳定、可判断的触发条件；预计会被多个任务反复命中；能绑定唯一 active 文件和独立 rule ID prefix；并登记到 `index.md`。
 
@@ -205,6 +251,8 @@ retired 记录格式：
 - 从 active 规则文件移除对应规则块；同一 ID 不得同时出现在 active 文件和 `retired.md`。
 - 在 `retired.md` 追加退役记录，写明替代规则和原因；无替代时使用 `替代：无`。
 - `替代` 不是 `无` 时，退役前必须确认每个替代 rule ID 当前可获取且为 active；未知或已 retired 的替代 ID 阻塞完成。
+- `替代` 不是 `无` 时，使用最终替代集合验证仍然有效的旧规则语义已被覆盖；行为结论为 `failed` 时不得退役。`替代：无` 时，必须用权威依据证明原约束已取消或不再适用。
+- 退役审查旧规则的去留和替代覆盖，不要求已经不存在的 active 候选重新满足七项入库标准。
 - 只有该 namespace 的全部 active rule ID 都已迁入 `retired.md`，并逐个验证返回 `DEPRECATED` 后，才能把 `index.md` 中的 namespace 状态改为 `retired`；仅退役部分规则时，namespace 保持 `active`，整个 namespace 退役后文件路径保留历史来源。
 - 完成后运行 `node skills/rule-steward/scripts/get-rules.mjs <RULE-ID>`；必须返回 `DEPRECATED`。如果仍返回 active 或 `Rule ID is both active and retired`，不得声明退役完成。
 
