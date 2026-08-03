@@ -1,17 +1,17 @@
 ---
-name: discuss
-description: 当用户显式调用 $discuss，需要把讨论状态保存到当前仓库，并跨会话、工具或智能体继续讨论时使用。
+name: checkpoint
+description: 当用户显式调用 $checkpoint，需要把讨论状态保存到当前仓库，并跨会话、工具或智能体继续讨论时使用。
 disable-model-invocation: true
 ---
 
-# Discuss
+# Checkpoint
 
 维护仓库内可跨会话恢复的单主题讨论活文档。
 
 ## 解析请求
 
 - 使用用户提供的当前 Git 仓库相对 Markdown 路径；路径越出仓库时停止。
-- 初次保存未提供路径时，根据主题在 `docs/discussions/` 下选择一个尚不存在的 Markdown 路径；其他请求缺少路径时询问用户。
+- 初次保存未提供路径时，根据主题在 `docs/checkpoints/` 下选择一个尚不存在的 Markdown 路径；其他请求缺少路径时询问用户。
 - 从自然语言判断用户要保存还是恢复。两种语义都成立时先询问。
 
 ## 保存讨论
