@@ -195,6 +195,7 @@ ruleRef x targetId = reviewItem
   finalReview.json
   final.md
   response.md
+  handoff.md
 ```
 
 所有 agent 间工件必须是 strict JSON。
@@ -203,7 +204,7 @@ ruleRef x targetId = reviewItem
 - `tasks/*.json`：由 `build-tasks` 从 dispatch 机械投影，携带相同 `reviewRange`、`ruleInputSource`、`inputSnapshot`，以及规则索引和本批规则的 `ruleSnapshot`；`taskHash` 是删除自身字段后整份 task 的 canonical JSON SHA-256。
 - `shards/*.json`：reviewer 对本 batch 的当前结果，必须回显 task 的 `targetTree` 与 `taskHash`；是产生 `passed / finding / observation / cannot_verify` 的唯一位置。可选的 `otherConcerns` 只承载审查过程中自然注意到的规则外事项。
 - `finalReview.json`：由 `aggregate-final` 仅从当前 run 的 shards 聚合；同一 batch 内相同显式 `rootCause` 的 finding results 合并为一个 finding，并逐项保留 `evidenceGroups`。
-- `final.md`、`response.md`：展示层，不是事实源。
+- `final.md`、`response.md`、`handoff.md`：展示层，不是事实源。`handoff.md` 由 `finalReview.json` 与 `dispatch.json` 机械渲染，用于把目标 commit、审查结论、全部 finding 和 `cannot_verify` 转交给其他同事；代码位置只保留仓库相对路径，不生成本机绝对路径链接。
 
 不允许从旧 run 复制 result，不允许扫描目录猜测前序 run，不允许在 dispatch 中引用旧 review 工件。
 
@@ -257,6 +258,7 @@ aggregate-final
 render-final
 run
 render-response
+render-handoff
 ```
 
 主要命令：
@@ -271,6 +273,7 @@ node scripts/validate.js --mode aggregate-final --dir .rules-review-tmp/<run-id>
 node scripts/validate.js --mode render-final --input finalReview.json --dispatch dispatch.json --output final.md
 node scripts/validate.js --mode run --dir .rules-review-tmp/<run-id>
 node scripts/validate.js --mode render-response --dir .rules-review-tmp/<run-id>
+node scripts/validate.js --mode render-handoff --dir .rules-review-tmp/<run-id>
 ```
 
 任何阶段的 Git identity、hash、mode、范围、引用或状态不闭合都 fail closed。不得静默生成替代 tree、降级成当前文件或把不完整结果写成通过。
@@ -301,3 +304,5 @@ validator 明确不检查：
 ## 9. 输出
 
 `final.md` 必须展示规则来源类型；commit 来源同时展示完整 OID。最终回复仍直接复用 `render-response` 生成的 `response.md`，不增加规则来源字段。第一眼同时展示审查结论、问题数、无法验证数量与修复建议；不得把 `protocolGate = "passed"` 简写成“代码通过”。只有存在 `otherConcerns` 时才追加 `## 其他关注项`，且该小节不改变前述结论。
+
+用户明确要求把审查结果转交给其他同事修复时，额外运行 `render-handoff` 生成 `handoff.md`。该文件展示完整 TARGET commit、runId、审查结论、finding 证据组和无法验证项；证据中的合法 `loc` 以仓库相对路径纯文本展示，非仓库相对位置不输出。不要用 `handoff.md` 替代 `finalReview.json` 或 `dispatch.json` 的事实源职责。

@@ -16,6 +16,7 @@ const MODES = new Set([
   'aggregate-final',
   'render-final',
   'render-response',
+  'render-handoff',
   'final-md',
   'run',
 ]);
@@ -194,6 +195,8 @@ function run(args) {
       renderFinalMode(args, result);
     } else if (mode === 'render-response') {
       renderResponseMode(args, result);
+    } else if (mode === 'render-handoff') {
+      renderHandoffMode(args, result);
     } else if (mode === 'final-md') {
       validateFinalMarkdownMode(args, result);
     } else if (mode === 'run') {
@@ -2033,7 +2036,7 @@ function validateRunDirectoryFiles(runDir, result) {
   files.forEach((filePath) => {
     const relativePath = rel(runDir, filePath);
     if (!isAllowedRunArtifact(relativePath)) {
-      addViolation(result, 'RUN003', relativePath, null, 'run directory must only contain rules-review protocol artifacts', 'dispatch/finalReview/final/response or JSON under tasks/shards/validations', relativePath);
+      addViolation(result, 'RUN003', relativePath, null, 'run directory must only contain rules-review protocol artifacts', 'dispatch/finalReview/final/response/handoff or JSON under tasks/shards/validations', relativePath);
     }
   });
   return true;
@@ -2058,7 +2061,7 @@ function collectFiles(dir, realRoot = fs.realpathSync(dir)) {
 }
 
 function isAllowedRunArtifact(relativePath) {
-  if (['dispatch.json', 'finalReview.json', 'final.md', 'response.md'].includes(relativePath)) return true;
+  if (['dispatch.json', 'finalReview.json', 'final.md', 'response.md', 'handoff.md'].includes(relativePath)) return true;
   return /^(tasks|shards|validations)\/[^/]+\.json$/.test(relativePath);
 }
 
@@ -2832,6 +2835,29 @@ function renderResponseMode(args, result) {
   result.response = markdown;
 }
 
+function renderHandoffMode(args, result) {
+  const runDir = args.dir;
+  if (!runDir || runDir === true) {
+    addViolation(result, 'RH001', null, '/dir', 'render-handoff mode requires --dir', 'run directory', runDir || null, 2);
+    return;
+  }
+
+  validateRun(runDir, result);
+  if (result.violations.length > 0) return;
+
+  const finalReviewPath = path.join(runDir, 'finalReview.json');
+  const dispatchPath = path.join(runDir, 'dispatch.json');
+  const finalReview = readJson(finalReviewPath, rel(runDir, finalReviewPath), result, 'FR001');
+  const dispatch = readJson(dispatchPath, rel(runDir, dispatchPath), result, 'D001');
+  if (!finalReview || !dispatch || result.violations.length > 0) return;
+
+  const outputPath = !args.output || args.output === true ? path.join(runDir, 'handoff.md') : args.output;
+  const markdown = renderHandoffMarkdown(finalReview, dispatch);
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  fs.writeFileSync(outputPath, markdown);
+  result.rendered = outputPath;
+}
+
 function validateFinalMarkdownMode(args, result) {
   const finalReview = readJson(args['final-review'], args['final-review'], result, 'FR001');
   if (!finalReview) return;
@@ -2912,7 +2938,7 @@ function renderFinalMarkdown(finalReview, dispatch, runDir) {
     '## 问题',
     findings.length === 0 ? '- 无' : null,
   ].filter((line) => line !== null);
-  appendFindingLines(lines, findings, repositoryRoot);
+  appendFindingLines(lines, findings, (evidence) => formatEvidenceLocation(evidence, repositoryRoot));
   if (observations.length > 0) {
     lines.push('', '## 观察项');
     observations.forEach((observation) => {
@@ -2998,7 +3024,35 @@ function renderResponseMarkdown(runDir, finalReview, gate) {
   return lines.join('\n');
 }
 
-function appendFindingLines(lines, findings, repositoryRoot) {
+function renderHandoffMarkdown(finalReview, dispatch) {
+  const findings = asArray(finalReview.findings);
+  const issueSummary = issueSummaryFromFinalReview(finalReview);
+  const recommendation = finalReview.recommendation || deriveRecommendation(finalReview.protocolGate, issueSummary);
+  const lines = [
+    '# rules-review 修复交接',
+    '',
+    '## 审查信息',
+    `- runId：${finalReview.runId}`,
+    `- 目标 commit：${dispatch.reviewRange.boundCommit}`,
+    `- 协议门禁：${protocolGateLabel(finalReview.protocolGate)}`,
+    `- 审查结论：${reviewConclusion(finalReview.protocolGate, issueSummary)}`,
+    `- 修复建议：${label(recommendation)}`,
+    '',
+    '## 问题',
+    findings.length === 0 ? '- 无' : null,
+  ].filter((line) => line !== null);
+  appendFindingLines(lines, findings, formatPortableEvidenceLocation);
+  const cannotVerifyItems = asArray(finalReview.cannotVerifyItems);
+  if (cannotVerifyItems.length > 0) {
+    lines.push('', '## 无法验证');
+    cannotVerifyItems.forEach((item) => {
+      lines.push(`- ${item.reviewItemId}｜${item.ruleRef}｜${item.targetId}：${item.reason}`);
+    });
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+function appendFindingLines(lines, findings, formatLocation) {
   const groups = [
     ['must_fix', '必须修复'],
     ['should_fix', '建议修复'],
@@ -3013,7 +3067,8 @@ function appendFindingLines(lines, findings, repositoryRoot) {
         lines.push(`- ${evidenceGroup.reviewItemId}｜${evidenceGroup.ruleRef}（${evidenceGroup.ruleLevel}）｜${evidenceGroup.targetId}｜${label(evidenceGroup.origin)}`);
         if (evidenceGroup.priorityReason) lines.push(`  - 优先级原因：${evidenceGroup.priorityReason}`);
         asArray(evidenceGroup.evidence).forEach((evidence) => {
-          lines.push(`  - ${evidence.summary || '未记录证据'}｜${formatEvidenceLocation(evidence, repositoryRoot)}`);
+          const location = formatLocation(evidence);
+          lines.push(`  - ${evidence.summary || '未记录证据'}${location ? `｜${location}` : ''}`);
         });
       });
     });
@@ -3557,6 +3612,18 @@ function formatEvidenceLocation(evidence, repositoryRoot) {
   const filePath = path.join(repositoryRoot, repoPath);
   if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return location;
   return formatMarkdownFileLink(location, match ? `${filePath}:${match[2]}` : filePath);
+}
+
+function formatPortableEvidenceLocation(evidence) {
+  if (!isNonEmptyString(evidence && evidence.loc)) return null;
+  const match = evidence.loc.match(/^(.+?):(\d+)(?:-\d+)?$/);
+  const repoPath = match ? match[1] : evidence.loc;
+  try {
+    assertSafeRepoRelativePath(repoPath);
+  } catch {
+    return null;
+  }
+  return `\`${evidence.loc}\``;
 }
 
 function escapeTableCell(value) {

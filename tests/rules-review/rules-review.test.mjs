@@ -710,6 +710,74 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
   assert.deepEqual(splitFinalReview.issueSummary, { findings: 2, mustFix: 1, shouldFix: 1, cannotVerify: 0, observations: 0 });
 });
 
+test("render-handoff 生成不含本机路径的可转发修复说明", async (t) => {
+  const root = createRepository();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
+
+  const dispatchFile = createDraft(root, { runId: "portable-handoff" });
+  const dispatch = await seal(dispatchFile);
+  const runDir = path.dirname(dispatchFile);
+  const taskDir = path.join(runDir, "tasks");
+  await run(["--mode", "build-tasks", "--dispatch", dispatchFile, "--out", taskDir]);
+  const task = readJson(path.join(taskDir, "B001.json"));
+  const shardFile = path.join(runDir, "shards/B001.json");
+  const shard = {
+    kind: "rules-review-shard",
+    schemaVersion: 8,
+    runId: dispatch.runId,
+    reviewBatchId: "B001",
+    targetTree: dispatch.reviewRange.targetTree,
+    taskHash: task.taskHash,
+    results: [{
+      reviewItemId: "RI001",
+      status: "finding",
+      rootCause: "主文件缺少必要保护。",
+      origin: "introduced_by_change",
+      evidence: [{ loc: "src/main.js:1", summary: "变更直接暴露未保护入口" }],
+    }],
+  };
+  writeJson(shardFile, shard);
+
+  for (const args of [
+    ["--mode", "aggregate-final", "--dir", runDir, "--output", path.join(runDir, "finalReview.json")],
+    ["--mode", "render-final", "--input", path.join(runDir, "finalReview.json"), "--dispatch", dispatchFile, "--output", path.join(runDir, "final.md")],
+    ["--mode", "render-handoff", "--dir", runDir],
+  ]) {
+    await run(args);
+  }
+
+  const handoffFile = path.join(runDir, "handoff.md");
+  let handoff = fs.readFileSync(handoffFile, "utf8");
+  assert.match(handoff, /# rules-review 修复交接/);
+  assert.match(handoff, new RegExp(`runId：${dispatch.runId}`));
+  assert.match(handoff, new RegExp(`目标 commit：${dispatch.reviewRange.boundCommit}`));
+  assert.match(handoff, /审查结论：发现问题/);
+  assert.match(handoff, /F001：主文件缺少必要保护。/);
+  assert.match(handoff, /RI001｜CORE-001（MUST）｜T001｜本次引入/);
+  assert.match(handoff, /变更直接暴露未保护入口｜`src\/main\.js:1`/);
+  assert.doesNotMatch(handoff, new RegExp(fs.realpathSync(root).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+
+  shard.results[0] = {
+    reviewItemId: "RI001",
+    status: "cannot_verify",
+    reason: "缺少目标宿主环境。",
+  };
+  writeJson(shardFile, shard);
+  for (const args of [
+    ["--mode", "aggregate-final", "--dir", runDir, "--output", path.join(runDir, "finalReview.json")],
+    ["--mode", "render-final", "--input", path.join(runDir, "finalReview.json"), "--dispatch", dispatchFile, "--output", path.join(runDir, "final.md")],
+    ["--mode", "render-handoff", "--dir", runDir],
+    ["--mode", "run", "--dir", runDir],
+  ]) {
+    await run(args);
+  }
+  handoff = fs.readFileSync(handoffFile, "utf8");
+  assert.match(handoff, /## 无法验证/);
+  assert.match(handoff, /RI001｜CORE-001｜T001：缺少目标宿主环境。/);
+  assert.doesNotMatch(handoff, /主文件缺少必要保护。/);
+});
+
 test("不同 batch 的相同 rootCause 不会发生隐式跨 batch 合并", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
