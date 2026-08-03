@@ -197,7 +197,11 @@ active 规则不得声明必须加载、展开或继承另一个规则 ID。规�
 - `failed`：候选无效或越界，不得写入；
 - `cannot-verify`：当前无法得到有效、可比的行为证据；不得表述为已验证或 `passed`，并须说明剩余风险。
 
-对 `ADD_RULE`、新 namespace 的首条 active rule 和实质语义 `UPDATE_RULE`，若 baseline 与候选侧在事先定义的观察点没有差异，行为结论只能是 `cannot-verify`；若进一步证据证明现有规则或稳定行为已经覆盖该要求，重新执行内容入库审查并选择 `NO_RULE`。
+对 `ADD_RULE`、新 namespace 的首条 active rule 和实质语义 `UPDATE_RULE`，若 baseline 与候选侧在事先定义的观察点没有差异，按以下证据分流：
+
+- 有效、可比的试验中，baseline 未满足目标行为且候选侧仍未满足时，行为结论为 `failed`；
+- baseline 已满足目标行为时，重新检查必要性和重复覆盖；进一步证据确认已有规则或稳定行为已经覆盖该要求时，维护决策选择 `NO_RULE`，无法确认稳定覆盖时行为结论为 `cannot-verify`；
+- 当前观察点、对照或材料不足以可靠判断两侧行为时，行为结论为 `cannot-verify`。
 
 `cannot-verify` 本身不表示允许或禁止写入；是否继续维护由下述维护风险分层和用户授权边界决定。未满足现有确认要求时不得写入，本 skill 不为此新增独立 waiver 协议。
 
