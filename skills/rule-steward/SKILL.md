@@ -1,6 +1,6 @@
 ---
 name: rule-steward
-description: "管理 `.agents/rules/` 下的项目规则协议：初始化规则仓、定义 namespace 与规则 ID 约定、按 ID 获取规则，并引导受控的规则维护。用户要求创建、初始化、检查、获取、废弃或维护项目规则、规则 ID、namespace 或 `.agents/rules/index.md` 时使用。不要用于普通代码 review，也不要推断项目特定规则，除非用户明确要求初始化或维护规则仓。"
+description: "管理 `.agents/rules/` 下的项目规则协议：初始化规则仓、定义 namespace 与规则 ID 约定、生成 active 规则目录、按 ID 获取规则，并引导受控的规则维护。用户要求创建、初始化、检查、获取、废弃或维护项目规则、规则 ID、namespace 或 `.agents/rules/index.md` 时使用。不要用于普通代码 review，也不要推断项目特定规则，除非用户明确要求初始化或维护规则仓。"
 ---
 
 # rule-steward
@@ -289,6 +289,20 @@ node skills/rule-steward/scripts/init-rules.mjs --root /path/to/repo
 ```bash
 node skills/rule-steward/scripts/get-rules.mjs REQ-001 CORE-001
 node skills/rule-steward/scripts/get-rules.mjs --root /path/to/repo REQ-001
+node skills/rule-steward/scripts/get-rules.mjs --commit <FULL-OID> REQ-001
+
+node skills/rule-steward/scripts/get-rules.mjs --catalog
+node skills/rule-steward/scripts/get-rules.mjs --root /path/to/repo --catalog
+node skills/rule-steward/scripts/get-rules.mjs --catalog --commit <FULL-OID>
 ```
 
-`get-rules.mjs` 先校验所有请求 ID 和冲突，再打印结果。如果任意 ID 失败，它不会打印部分规则正文。retired ID 是可识别历史，退出码为 0；未知 ID 会失败。
+`--catalog` 与规则 ID 互斥。catalog 只投影 active 规则的标题、级别、namespace
+触发条件、生效条件和来源文件，并携带规则来源身份；它用于完整发现，不替代完整
+规则正文。`source.files` 包含全部 active 文件，包括空文件，不包含
+`retired.md`。所有路径均为 `.agents/rules/...` 仓库相对路径。
+
+`--commit` 只接受 Git 返回的相同 40/64 位完整规范 commit OID；短 OID、tree、
+blob 均失败，且不回退 workspace。`get-rules.mjs` 在所有校验成功后才写 stdout，
+诊断只写 stderr。按 ID 模式仍先校验所有请求 ID 和冲突，再打印 Markdown；如果
+任意 ID 失败，它不会打印部分规则正文。retired ID 是可识别历史，退出码为 0；
+未知 ID 会失败。

@@ -1,6 +1,6 @@
 {
   "kind": "rules-review-dispatch-construction-eval-input",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "runId": "eval-dispatch-construction",
   "repository": {
     "fixture": "project.bundle",
@@ -9,11 +9,18 @@
     "rulesCommit": "b528a2e91b85127b09e74252f918059695ab725f",
     "excludedFiles": []
   },
+  "catalogSource": {
+    "kind": "commit",
+    "commit": "b528a2e91b85127b09e74252f918059695ab725f",
+    "indexHash": "sha256:d2de1e88507be396ae0de134b788e9ca0cc7dca0c41187d378b924d42aea6ad9",
+    "files": [
+      {
+        "path": ".agents/rules/always/constraints.md",
+        "contentHash": "sha256:6231aeaca53321ce1ec176b00f1f41a59497abd9a679418297ea3feb4aafe283"
+      }
+    ]
+  },
   "ruleProjection": {
-    "indexFile": ".agents/rules/index.md",
-    "ruleSourceFiles": {
-      "CORE": ".agents/rules/always/constraints.md"
-    },
     "ruleSetId": "rules-eval-dispatch-construction",
     "candidateRuleRefs": [
       "CORE-001",

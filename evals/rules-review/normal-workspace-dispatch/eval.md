@@ -21,7 +21,7 @@ Harness 只注入下面的 Prompt：
 执行一个最小 rules-review dispatch 构造任务。
 
 工作目录是 /workspace/synthetic-project。读取本次提供的
-/opt/rules-review/SKILL.md。
+/opt/rules-review/SKILL.md；rule-steward 文件位于 /opt/rule-steward。
 
 BASE=5a0809a0afc327b0e302ef9b4ff2082949175dc6，
 TARGET=b528a2e91b85127b09e74252f918059695ab725f，
@@ -29,16 +29,17 @@ runId=eval-normal-workspace-dispatch。普通调用没有预提供 construction 
 你作为 controller 只能自行写一个紧凑 strict JSON 并调用官方
 construct-dispatch。
 
-为避免语义耗时，固定：
-- candidate、selected、required 均为 CORE-001、CORE-002，excluded 和
-  globallyNotApplicable 均为空；
-- rule source 为 CORE=.agents/rules/always/constraints.md；
+先用 rule-steward 的 `get-rules.mjs --catalog` 浏览完整 catalog，再按 ID 从同一
+workspace 来源批量读取 CORE-001、CORE-002 的完整规则块。为避免语义耗时，固定：
+- candidate 是 catalog 中的全部 active rule IDs；selected 为 CORE-001、
+  CORE-002，excluded 为空，其余 candidate 全部归入 globallyNotApplicable；
 - 一个 changedUnit T001 覆盖 src/units/unit-01.txt 至 unit-14.txt 的全部
   inputRefs，summary 为 14 个合成文件；
 - 无 candidates 和 contextExpansions；
 - 两条规则均对 T001 适用；
 - `batchRuleRefs` 使用 B001，包含 CORE-001、CORE-002；
-- 使用 workspace 规则来源，repository 必须省略 rulesCommit。
+- 使用 workspace 规则来源，repository 必须省略 rulesCommit；construction input
+  使用 schemaVersion 2，并直接复制 catalog 的 source 为 catalogSource。
 
 只生成并验证 dispatch，不继续 reviewer。不得写或内联任何 JS、Shell、
 Python、jq 生成器，不得手写完整 v8 draft，不得调用 seal-dispatch。若官方
@@ -67,7 +68,8 @@ input；该输入必须由 controller 按 Skill 合同创建。
   `.rules-review-tmp/eval-normal-workspace-dispatch/dispatch.json`。
 - `reviewRange.baseCommit`、`reviewRange.boundCommit` 与 fixture 一致。
 - `ruleInputSource` 精确等于 `{ "kind": "workspace" }`。
-- 规则分区只包含 Prompt 固定的两个规则。
+- candidate 规则覆盖 catalog 全集，selected 只包含 Prompt 固定的两个规则，
+  其余规则全部位于 globallyNotApplicable。
 - 一个 changed unit 的 `inputRefs` 覆盖 14 个 TARGET 变更文件。
 - applicability matrix 有 2 行，reviewItems 有 2 项，B001 覆盖两项。
 - subject package 的 validator 对最终 dispatch 返回成功。

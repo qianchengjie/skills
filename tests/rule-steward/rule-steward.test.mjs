@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -16,6 +17,14 @@ async function runNode(args, options = {}) {
     cwd: repoRoot,
     ...options,
   });
+}
+
+async function runGit(root, args) {
+  return execFileAsync("git", args, { cwd: root });
+}
+
+function hash(content) {
+  return `sha256:${crypto.createHash("sha256").update(content).digest("hex")}`;
 }
 
 async function assertFails(args, pattern) {
@@ -212,5 +221,220 @@ await writeFile(
 `,
 );
 await assertFails([getScript, "--root", root, "CORE-001"], /both active and retired/);
+
+const catalogRoot = await mkdtemp(path.join(os.tmpdir(), "rule-steward-catalog-"));
+const catalogIndex = `# Rules Index
+
+## Namespaces
+
+| Namespace | 状态 | 文件 | 触发条件 |
+| --- | --- | --- | --- |
+| \`CORE\` | active | \`always/constraints.md\` | 每次任务必读 |
+| \`TEST\` | active | \`concerns/testing.md\` | 修改测试时 |
+| \`EMPTY\` | active | \`domain/empty.md\` | 修改空领域时 |
+`;
+const catalogCore = `# Constraints
+
+### CORE-002 保持原子修改
+
+- 级别：SHOULD
+- 生效条件：修改多个文件时
+- 规则：只修改任务范围内的文件。
+- 证据要求：
+  - 列出修改文件。
+- 失败条件：
+  - 修改无关文件。
+- 无法验证条件：
+  - 缺少 diff。
+
+### CORE-001 先读约束
+
+- 级别：MUST
+- 生效条件：每次任务
+- 规则：先读取项目约束。
+- 证据要求：
+  - 引用约束。
+- 失败条件：
+  - 未读取约束。
+- 无法验证条件：
+  - 约束不可读。
+`;
+const catalogTesting = `# Testing
+
+### TEST-001 修改测试时运行定向测试
+
+- 级别：ADVISORY
+- 生效条件：修改测试代码时
+- 规则：运行相关定向测试。
+- 证据要求：
+  - 记录测试命令。
+- 失败条件：
+  - 未运行相关测试。
+- 无法验证条件：
+  - 测试环境不可用。
+`;
+await mkdir(path.join(catalogRoot, ".agents/rules/always"), { recursive: true });
+await mkdir(path.join(catalogRoot, ".agents/rules/concerns"), { recursive: true });
+await mkdir(path.join(catalogRoot, ".agents/rules/domain"), { recursive: true });
+await writeFile(path.join(catalogRoot, ".agents/rules/index.md"), catalogIndex);
+await writeFile(path.join(catalogRoot, ".agents/rules/always/constraints.md"), catalogCore);
+await writeFile(path.join(catalogRoot, ".agents/rules/concerns/testing.md"), catalogTesting);
+await writeFile(path.join(catalogRoot, ".agents/rules/domain/empty.md"), "");
+
+const workspaceCatalogResult = await runNode([getScript, "--root", catalogRoot, "--catalog"]);
+const workspaceCatalog = JSON.parse(workspaceCatalogResult.stdout);
+assert.deepEqual(workspaceCatalog, {
+  source: {
+    kind: "workspace",
+    indexHash: hash(catalogIndex),
+    files: [
+      {
+        path: ".agents/rules/always/constraints.md",
+        contentHash: hash(catalogCore),
+      },
+      {
+        path: ".agents/rules/concerns/testing.md",
+        contentHash: hash(catalogTesting),
+      },
+      {
+        path: ".agents/rules/domain/empty.md",
+        contentHash: hash(""),
+      },
+    ],
+  },
+  rules: [
+    {
+      ruleRef: "CORE-001",
+      title: "先读约束",
+      ruleLevel: "MUST",
+      trigger: "每次任务必读",
+      appliesTo: "每次任务",
+      sourceFile: ".agents/rules/always/constraints.md",
+    },
+    {
+      ruleRef: "CORE-002",
+      title: "保持原子修改",
+      ruleLevel: "SHOULD",
+      trigger: "每次任务必读",
+      appliesTo: "修改多个文件时",
+      sourceFile: ".agents/rules/always/constraints.md",
+    },
+    {
+      ruleRef: "TEST-001",
+      title: "修改测试时运行定向测试",
+      ruleLevel: "ADVISORY",
+      trigger: "修改测试时",
+      appliesTo: "修改测试代码时",
+      sourceFile: ".agents/rules/concerns/testing.md",
+    },
+  ],
+});
+await assertFails(
+  [getScript, "--root", catalogRoot, "--catalog", "CORE-001"],
+  /--catalog cannot be combined with rule IDs/,
+);
+
+await runGit(catalogRoot, ["init", "-q"]);
+await runGit(catalogRoot, ["config", "user.email", "test@example.com"]);
+await runGit(catalogRoot, ["config", "user.name", "Test User"]);
+await runGit(catalogRoot, ["add", ".agents/rules"]);
+await runGit(catalogRoot, ["commit", "-qm", "rules"]);
+const { stdout: commitStdout } = await runGit(catalogRoot, ["rev-parse", "HEAD"]);
+const commit = commitStdout.trim();
+const { stdout: treeStdout } = await runGit(catalogRoot, ["rev-parse", "HEAD^{tree}"]);
+const tree = treeStdout.trim();
+const { stdout: blobStdout } = await runGit(catalogRoot, ["rev-parse", "HEAD:.agents/rules/index.md"]);
+const blob = blobStdout.trim();
+
+await writeFile(
+  path.join(catalogRoot, ".agents/rules/always/constraints.md"),
+  catalogCore.replace("先读约束", "脏工作区规则"),
+);
+const commitCatalog = JSON.parse((await runNode([
+  getScript,
+  "--root",
+  catalogRoot,
+  "--catalog",
+  "--commit",
+  commit,
+])).stdout);
+assert.equal(commitCatalog.source.kind, "commit");
+assert.equal(commitCatalog.source.commit, commit);
+assert.equal(commitCatalog.rules[0].title, "先读约束");
+assert.match((await runNode([
+  getScript,
+  "--root",
+  catalogRoot,
+  "--commit",
+  commit,
+  "CORE-001",
+])).stdout, /### CORE-001 先读约束/);
+
+for (const invalidCommit of [commit.slice(0, 12), tree, blob]) {
+  const failure = await assertFails(
+    [getScript, "--root", catalogRoot, "--catalog", "--commit", invalidCommit],
+    /full normalized commit OID|must resolve to the same commit OID/,
+  );
+  assert.equal(failure.stdout, "");
+}
+
+const invalidCatalogCases = [
+  {
+    name: "missing-field",
+    index: catalogIndex,
+    core: catalogCore.replace("- 生效条件：每次任务\n", ""),
+    pattern: /Missing 生效条件 field/,
+  },
+  {
+    name: "invalid-level",
+    index: catalogIndex,
+    core: catalogCore.replace("- 级别：MUST", "- 级别：REQUIRED"),
+    pattern: /Invalid rule level/,
+  },
+  {
+    name: "namespace-mismatch",
+    index: catalogIndex,
+    core: catalogCore.replace("CORE-001", "TEST-002"),
+    pattern: /does not match namespace CORE/,
+  },
+];
+
+for (const invalid of invalidCatalogCases) {
+  const invalidRoot = await mkdtemp(path.join(os.tmpdir(), `rule-steward-${invalid.name}-`));
+  await mkdir(path.join(invalidRoot, ".agents/rules/always"), { recursive: true });
+  await mkdir(path.join(invalidRoot, ".agents/rules/concerns"), { recursive: true });
+  await mkdir(path.join(invalidRoot, ".agents/rules/domain"), { recursive: true });
+  await writeFile(path.join(invalidRoot, ".agents/rules/index.md"), invalid.index);
+  await writeFile(path.join(invalidRoot, ".agents/rules/always/constraints.md"), invalid.core);
+  await writeFile(path.join(invalidRoot, ".agents/rules/concerns/testing.md"), catalogTesting);
+  await writeFile(path.join(invalidRoot, ".agents/rules/domain/empty.md"), "");
+  const failure = await assertFails(
+    [getScript, "--root", invalidRoot, "--catalog"],
+    invalid.pattern,
+  );
+  assert.equal(failure.stdout, "");
+}
+
+const conflictRoot = await mkdtemp(path.join(os.tmpdir(), "rule-steward-catalog-conflict-"));
+await mkdir(path.join(conflictRoot, ".agents/rules/always"), { recursive: true });
+await mkdir(path.join(conflictRoot, ".agents/rules/concerns"), { recursive: true });
+await mkdir(path.join(conflictRoot, ".agents/rules/domain"), { recursive: true });
+await writeFile(path.join(conflictRoot, ".agents/rules/index.md"), catalogIndex);
+await writeFile(path.join(conflictRoot, ".agents/rules/always/constraints.md"), catalogCore);
+await writeFile(path.join(conflictRoot, ".agents/rules/concerns/testing.md"), catalogTesting);
+await writeFile(path.join(conflictRoot, ".agents/rules/domain/empty.md"), "");
+await writeFile(
+  path.join(conflictRoot, ".agents/rules/retired.md"),
+  `### CORE-001 先读约束
+
+- 替代：无
+- 原因：测试冲突
+`,
+);
+const conflictFailure = await assertFails(
+  [getScript, "--root", conflictRoot, "--catalog"],
+  /both active and retired/,
+);
+assert.equal(conflictFailure.stdout, "");
 
 console.log("rule-steward tests passed");

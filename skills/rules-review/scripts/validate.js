@@ -274,7 +274,13 @@ function constructDispatchMode(args, result) {
       'target-commit': input.repository.targetCommit,
     };
     if (construction.rulesCommit) sealArgs['rules-commit'] = construction.rulesCommit;
-    const sealed = sealDispatchDraft(construction.draft, sealArgs, root, construction.snapshotRule);
+    const sealed = sealDispatchDraft(
+      construction.draft,
+      sealArgs,
+      root,
+      construction.snapshotRule,
+      construction.rulePaths,
+    );
 
     ensureSafeOutputParent(root, output);
     temporary = path.join(path.dirname(output), `.${path.basename(output)}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`);
@@ -334,7 +340,7 @@ function ensureSafeOutputParent(root, output) {
 }
 
 function buildDispatchDraft(input, root) {
-  if (!isObject(input) || input.schemaVersion !== 1) throw new Error('construction input schemaVersion must equal 1');
+  if (!isObject(input) || input.schemaVersion !== 2) throw new Error('construction input schemaVersion must equal 2');
   const legacyInput = input.kind === 'rules-review-dispatch-construction-eval-input';
   if (!legacyInput && input.kind !== 'rules-review-dispatch-construction-input') {
     throw new Error('construction input kind must equal rules-review-dispatch-construction-input');
@@ -344,6 +350,7 @@ function buildDispatchDraft(input, root) {
     'schemaVersion',
     'runId',
     'repository',
+    'catalogSource',
     'ruleProjection',
     'targets',
     'applicability',
@@ -364,8 +371,6 @@ function buildDispatchDraft(input, root) {
     'repository',
   );
   assertConstructionKeys(ruleProjection, [
-    'indexFile',
-    'ruleSourceFiles',
     'ruleSetId',
     'candidateRuleRefs',
     'selectedRuleRefs',
@@ -386,12 +391,20 @@ function buildDispatchDraft(input, root) {
       ? (repoPath) => snapshotRuleFile(root, rulesTree, repoPath)
       : (repoPath) => snapshotWorkspaceRuleFile(root, repoPath),
   );
+  const ruleFileExists = rulesCommit
+    ? (repoPath) => readTreeEntry(root, rulesTree, repoPath).state === 'present'
+    : (repoPath) => fs.existsSync(path.resolve(root, ...repoPath.split('/')));
+  const catalog = buildConstructionRuleCatalog(snapshotRule, ruleFileExists);
+  validateConstructionCatalogSource(input.catalogSource, rulesCommit, catalog);
   const candidateRuleRefs = constructionStringSet(ruleProjection.candidateRuleRefs, 'ruleProjection.candidateRuleRefs');
   const selectedRuleRefs = constructionStringSet(ruleProjection.selectedRuleRefs, 'ruleProjection.selectedRuleRefs');
   const excludedRuleRefs = constructionStringSet(ruleProjection.excludedRuleRefs, 'ruleProjection.excludedRuleRefs');
   const globallyNotApplicableRuleRefs = constructionStringSet(ruleProjection.globallyNotApplicableRuleRefs, 'ruleProjection.globallyNotApplicableRuleRefs');
   if (candidateRuleRefs.some((ruleRef) => !/^[A-Z][A-Z0-9]*-\d{3}$/.test(ruleRef))) {
     throw new Error('ruleProjection.candidateRuleRefs must contain canonical rule IDs');
+  }
+  if (!setsEqual(new Set(candidateRuleRefs), new Set(catalog.rules.keys()))) {
+    throw new Error('ruleProjection.candidateRuleRefs must equal all active rule IDs');
   }
   const changedUnits = constructionArray(inputTargets.changedUnits, 'targets.changedUnits');
   const candidates = constructionArray(inputTargets.candidates, 'targets.candidates');
@@ -417,7 +430,7 @@ function buildDispatchDraft(input, root) {
   const encoding = requireConstructionObject(applicability.encoding, 'applicability.encoding');
   assertConstructionKeys(encoding, ['targetOrder', 'legend', 'rule'], 'applicability.encoding');
   if (encoding.rule !== '每个 selected rule 的字符串必须与 targetOrder 等长；每个字符显式决定对应 ruleRef × targetId，禁止缺省决定。') {
-    throw new Error('applicability.encoding.rule does not match construction-input v1');
+    throw new Error('applicability.encoding.rule does not match construction-input v2');
   }
   const targetOrder = constructionStringSet(encoding.targetOrder, 'applicability.encoding.targetOrder');
   if (targetOrder.length !== targets.length || targetOrder.some((targetId) => !targetById.has(targetId))) {
@@ -435,7 +448,7 @@ function buildDispatchDraft(input, root) {
     throw new Error('applicability.byRule must contain exactly selectedRuleRefs');
   }
 
-  const ruleSources = buildConstructionRuleSources(snapshotRule, ruleProjection, candidateRuleRefs);
+  const ruleSources = buildConstructionRuleSources(catalog, candidateRuleRefs);
   const applicabilityMatrix = [];
   const reviewItems = [];
 
@@ -525,7 +538,12 @@ function buildDispatchDraft(input, root) {
     reviewBatches,
   };
   assertExpectedConstructionCounts(input.expectedCounts, draft);
-  return { draft, rulesCommit, snapshotRule };
+  return {
+    draft,
+    rulesCommit,
+    snapshotRule,
+    rulePaths: ['.agents/rules/index.md', ...catalog.files.map((file) => file.path)],
+  };
 }
 
 function memoizeConstructionRuleSnapshot(snapshotRule) {
@@ -536,50 +554,111 @@ function memoizeConstructionRuleSnapshot(snapshotRule) {
   };
 }
 
-function buildConstructionRuleSources(snapshotRule, ruleProjection, candidateRuleRefs) {
-  if (ruleProjection.indexFile !== '.agents/rules/index.md') {
-    throw new Error('ruleProjection.indexFile must equal .agents/rules/index.md');
-  }
-  const sourceFiles = requireConstructionObject(ruleProjection.ruleSourceFiles, 'ruleProjection.ruleSourceFiles');
-  const index = parseConstructionRuleIndex(snapshotRule(ruleProjection.indexFile).content);
-  const rulesByFile = new Map();
-  const activeRuleFiles = new Map();
-  const candidateNamespaces = new Set(candidateRuleRefs.map((ruleRef) => ruleRef.split('-')[0]));
-  if (!setsEqual(new Set(Object.keys(sourceFiles)), candidateNamespaces)) {
-    throw new Error('ruleProjection.ruleSourceFiles must contain exactly the candidate rule namespaces');
-  }
-  index.forEach((registration) => {
-    if (registration.status === 'active' && !activeRuleFiles.has(registration.sourceFile)) {
-      activeRuleFiles.set(registration.sourceFile, snapshotRule(registration.sourceFile).content);
-    }
-  });
-
+function buildConstructionRuleSources(catalog, candidateRuleRefs) {
   return candidateRuleRefs.map((ruleRef) => {
-    const namespace = ruleRef.split('-')[0];
-    const sourceFile = sourceFiles[namespace];
-    if (!isNonEmptyString(sourceFile)) throw new Error(`missing rule source file for namespace ${namespace}`);
-    assertSafeRepoRelativePath(sourceFile);
-    const registration = index.get(namespace);
-    if (!registration || registration.status !== 'active' || registration.sourceFile !== sourceFile) {
-      throw new Error(`rule source file does not match active index registration for ${namespace}`);
-    }
-    if (!rulesByFile.has(sourceFile)) {
-      rulesByFile.set(sourceFile, parseConstructionRuleFile(activeRuleFiles.get(sourceFile), sourceFile));
-    }
-    const rule = rulesByFile.get(sourceFile).get(ruleRef);
+    const rule = catalog.rules.get(ruleRef);
     if (!rule) throw new Error(`rule source is missing active rule ${ruleRef}`);
     return {
-      namespace,
+      namespace: rule.namespace,
       ruleRef,
       ruleLevel: rule.ruleLevel,
-      sourceFile,
+      sourceFile: rule.sourceFile,
       sourceHash: `sha256:${'0'.repeat(64)}`,
-      trigger: registration.trigger,
+      trigger: rule.trigger,
       appliesTo: rule.appliesTo,
       summary: rule.summary,
       ruleText: rule.ruleText,
       ...(rule.failureConditions.length > 0 ? { failureConditions: rule.failureConditions } : {}),
     };
+  });
+}
+
+function buildConstructionRuleCatalog(snapshotRule, ruleFileExists) {
+  const indexFile = snapshotRule('.agents/rules/index.md');
+  const index = parseConstructionRuleIndex(indexFile.content);
+  const files = [];
+  const rules = new Map();
+
+  index.forEach((registration, namespace) => {
+    if (registration.status !== 'active') return;
+    const file = snapshotRule(registration.sourceFile);
+    files.push(file);
+    parseConstructionRuleFile(file.content, registration.sourceFile, namespace).forEach((rule, ruleRef) => {
+      if (rules.has(ruleRef)) throw new Error(`duplicate active rule ID: ${ruleRef}`);
+      rules.set(ruleRef, {
+        ...rule,
+        namespace,
+        sourceFile: registration.sourceFile,
+        trigger: registration.trigger,
+      });
+    });
+  });
+
+  if (ruleFileExists('.agents/rules/retired.md')) {
+    const retiredRefs = parseConstructionRetiredRuleRefs(
+      snapshotRule('.agents/rules/retired.md').content,
+      index,
+    );
+    retiredRefs.forEach((ruleRef) => {
+      if (rules.has(ruleRef)) throw new Error(`rule ID is both active and retired: ${ruleRef}`);
+    });
+  }
+
+  files.sort((left, right) => compareStrings(left.path, right.path));
+  return { indexFile, index, files, rules };
+}
+
+function parseConstructionRetiredRuleRefs(content, index) {
+  const refs = new Set();
+  for (const match of content.matchAll(/^###\s+([A-Z][A-Z0-9]*-\d{3})\s+(.+?)\s*$/gm)) {
+    const ruleRef = match[1];
+    const namespace = ruleRef.split('-')[0];
+    if (!index.has(namespace)) throw new Error(`retired rule namespace is not registered: ${ruleRef}`);
+    if (refs.has(ruleRef)) throw new Error(`duplicate retired rule ID: ${ruleRef}`);
+    refs.add(ruleRef);
+  }
+  return refs;
+}
+
+function validateConstructionCatalogSource(catalogSource, rulesCommit, catalog) {
+  const source = requireConstructionObject(catalogSource, 'catalogSource');
+  const expectedKind = rulesCommit ? 'commit' : 'workspace';
+  const expectedFields = rulesCommit
+    ? ['kind', 'commit', 'indexHash', 'files']
+    : ['kind', 'indexHash', 'files'];
+  assertConstructionKeys(source, expectedFields, 'catalogSource');
+  if (source.kind !== expectedKind) {
+    throw new Error(`catalogSource.kind must equal ${expectedKind}`);
+  }
+  if (rulesCommit && source.commit !== rulesCommit) {
+    throw new Error('catalogSource.commit must equal repository.rulesCommit');
+  }
+  if (source.indexHash !== catalog.indexFile.contentHash) {
+    throw new Error('catalogSource.indexHash does not match the current rule index hash');
+  }
+
+  const declaredFiles = constructionArray(source.files, 'catalogSource.files');
+  const declaredByPath = new Map();
+  declaredFiles.forEach((file, index) => {
+    const entry = requireConstructionObject(file, `catalogSource.files.${index}`);
+    assertConstructionKeys(entry, ['path', 'contentHash'], `catalogSource.files.${index}`);
+    assertSafeRepoRelativePath(entry.path);
+    if (!SHA256_RE.test(entry.contentHash || '')) {
+      throw new Error(`catalogSource.files.${index}.contentHash must use sha256:<64hex>`);
+    }
+    if (declaredByPath.has(entry.path)) {
+      throw new Error(`catalogSource.files contains duplicate path ${entry.path}`);
+    }
+    declaredByPath.set(entry.path, entry.contentHash);
+  });
+  const actualByPath = new Map(catalog.files.map((file) => [file.path, file.contentHash]));
+  if (!setsEqual(new Set(declaredByPath.keys()), new Set(actualByPath.keys()))) {
+    throw new Error('catalogSource.files paths must equal all active rule files');
+  }
+  actualByPath.forEach((contentHash, repoPath) => {
+    if (declaredByPath.get(repoPath) !== contentHash) {
+      throw new Error(`catalogSource.files contentHash does not match current rule file: ${repoPath}`);
+    }
   });
 }
 
@@ -611,6 +690,7 @@ function parseConstructionRuleIndex(content) {
   }
 
   const registrations = new Map();
+  const activeFiles = new Set();
   tableLines.slice(2).forEach((line) => {
     const row = parseConstructionTableRow(line);
     if (!row || row.length !== 4) throw new Error(`invalid namespace row: ${line}`);
@@ -620,6 +700,9 @@ function parseConstructionRuleIndex(content) {
     const trigger = row[3].trim();
     if (!/^[A-Z][A-Z0-9]*$/.test(namespace)) throw new Error(`invalid namespace: ${namespace}`);
     if (status !== 'active' && status !== 'retired') throw new Error(`invalid namespace status for ${namespace}: ${status}`);
+    if (path.isAbsolute(file) || file.startsWith('./') || file.includes('\\') || file.split('/').includes('..')) {
+      throw new Error(`invalid rule file path: ${file}`);
+    }
     const sourceFile = `.agents/rules/${file}`;
     assertSafeRepoRelativePath(sourceFile);
     if (status === 'active' && file !== 'always/constraints.md'
@@ -628,6 +711,10 @@ function parseConstructionRuleIndex(content) {
     }
     if (!isNonEmptyString(trigger)) throw new Error(`namespace trigger must be non-empty: ${namespace}`);
     if (registrations.has(namespace)) throw new Error(`duplicate namespace in rules index: ${namespace}`);
+    if (status === 'active' && activeFiles.has(sourceFile)) {
+      throw new Error(`active rule file is registered more than once: ${sourceFile}`);
+    }
+    if (status === 'active') activeFiles.add(sourceFile);
     registrations.set(namespace, { status, sourceFile, trigger });
   });
   const core = registrations.get('CORE');
@@ -648,21 +735,30 @@ function stripConstructionTicks(value) {
   return trimmed.startsWith('`') && trimmed.endsWith('`') ? trimmed.slice(1, -1) : trimmed;
 }
 
-function parseConstructionRuleFile(content, sourceFile) {
+function parseConstructionRuleFile(content, sourceFile, namespace) {
   const headings = [...content.matchAll(/^###\s+([A-Z][A-Z0-9]*-\d{3})\s+(.+?)\s*$/gm)];
   const rules = new Map();
   headings.forEach((heading, index) => {
     const ruleRef = heading[1];
     if (rules.has(ruleRef)) throw new Error(`duplicate rule ${ruleRef} in ${sourceFile}`);
+    if (namespace && ruleRef.split('-')[0] !== namespace) {
+      throw new Error(`active rule ${ruleRef} does not match namespace ${namespace}`);
+    }
     const block = content.slice(heading.index, headings[index + 1] ? headings[index + 1].index : content.length);
     const ruleLevel = parseConstructionRuleField(block, '级别');
     if (!RULE_LEVELS.includes(ruleLevel)) throw new Error(`invalid rule level for ${ruleRef}`);
+    const evidenceRequirements = parseConstructionRuleList(block, '证据要求');
+    const failureConditions = parseConstructionRuleList(block, '失败条件');
+    const unverifiableConditions = parseConstructionRuleList(block, '无法验证条件');
+    if (evidenceRequirements.length === 0) throw new Error(`rule list is empty: 证据要求 for ${ruleRef}`);
+    if (failureConditions.length === 0) throw new Error(`rule list is empty: 失败条件 for ${ruleRef}`);
+    if (unverifiableConditions.length === 0) throw new Error(`rule list is empty: 无法验证条件 for ${ruleRef}`);
     rules.set(ruleRef, {
       summary: heading[2].trim(),
       ruleLevel,
       appliesTo: parseConstructionRuleField(block, '生效条件'),
       ruleText: parseConstructionRuleField(block, '规则'),
-      failureConditions: parseConstructionRuleList(block, '失败条件').map((summary, failureIndex) => ({
+      failureConditions: failureConditions.map((summary, failureIndex) => ({
         conditionId: `${ruleRef}-FC-${String(failureIndex + 1).padStart(2, '0')}`,
         summary,
       })),
@@ -713,7 +809,7 @@ function requireConstructionObject(value, labelText) {
 
 function assertConstructionKeys(value, keys, labelText) {
   if (!setsEqual(new Set(Object.keys(value)), new Set(keys))) {
-    throw new Error(`${labelText} fields do not match construction-input v1`);
+    throw new Error(`${labelText} fields do not match construction-input v2`);
   }
 }
 
@@ -781,7 +877,7 @@ function sealDispatchMode(args, result) {
   result.rendered = args.input;
 }
 
-function sealDispatchDraft(draft, args, root, constructionSnapshotRule) {
+function sealDispatchDraft(draft, args, root, constructionSnapshotRule, constructionRulePaths) {
   if (draft.reviewRange && Object.prototype.hasOwnProperty.call(draft.reviewRange, 'targetTree')) {
     throw new Error('sealed dispatch cannot be resealed; create a fresh run for a new TARGET');
   }
@@ -802,16 +898,20 @@ function sealDispatchDraft(draft, args, root, constructionSnapshotRule) {
   const targetTree = resolveTree(root, `${boundCommit}^{tree}`);
   let ruleInputSource;
   let snapshotRule;
+  let ruleFileExists;
   if (args['rules-commit'] === undefined) {
     ruleInputSource = { kind: 'workspace' };
     snapshotRule = constructionSnapshotRule || ((repoPath) => snapshotWorkspaceRuleFile(root, repoPath));
+    ruleFileExists = (repoPath) => fs.existsSync(path.resolve(root, ...repoPath.split('/')));
   } else {
     if (!isNonEmptyString(args['rules-commit'])) throw new Error('--rules-commit requires a Git revision');
     const rulesCommit = resolveCommit(root, args['rules-commit']);
     const rulesTree = resolveTree(root, `${rulesCommit}^{tree}`);
     ruleInputSource = { kind: 'commit', commit: rulesCommit };
     snapshotRule = constructionSnapshotRule || ((repoPath) => snapshotRuleFile(root, rulesTree, repoPath));
+    ruleFileExists = (repoPath) => readTreeEntry(root, rulesTree, repoPath).state === 'present';
   }
+  snapshotRule = memoizeConstructionRuleSnapshot(snapshotRule);
 
   const sealed = JSON.parse(JSON.stringify(draft));
   sealed.ruleInputSource = ruleInputSource;
@@ -834,7 +934,17 @@ function sealDispatchDraft(draft, args, root, constructionSnapshotRule) {
 
   if (!isObject(sealed.ruleSet)) throw new Error('dispatch.ruleSet must be an object before sealing');
   if (!Array.isArray(sealed.ruleSet.ruleSources)) throw new Error('dispatch.ruleSet.ruleSources must be an array before sealing');
-  const rulePaths = ['.agents/rules/index.md'];
+  let rulePaths;
+  if (constructionRulePaths) {
+    rulePaths = [...constructionRulePaths];
+  } else {
+    const catalog = buildConstructionRuleCatalog(snapshotRule, ruleFileExists);
+    const candidateRuleRefs = new Set(asArray(sealed.ruleSet.candidateRuleRefs));
+    if (!setsEqual(candidateRuleRefs, new Set(catalog.rules.keys()))) {
+      throw new Error('dispatch.ruleSet.candidateRuleRefs must equal all active rule IDs');
+    }
+    rulePaths = ['.agents/rules/index.md', ...catalog.files.map((file) => file.path)];
+  }
   sealed.ruleSet.ruleSources.forEach((source, index) => {
     if (!isNonEmptyString(source && source.sourceFile)) throw new Error(`ruleSources[${index}].sourceFile must be a non-empty repository path`);
     assertSafeRepoRelativePath(source.sourceFile);
@@ -1049,7 +1159,7 @@ function snapshotWorkspaceRuleFile(root, repoPath) {
   return { path: repoPath, content, contentHash: hashBytes(bytes) };
 }
 
-function validateSealedInputShape(dispatch, reviewItems, artifact, result) {
+function validateSealedInputShape(dispatch, reviewItems, artifact, result, fullRuleCatalog = false) {
   validateReviewRangeShape(dispatch.reviewRange, artifact, result);
   const referencedTargetIds = new Set([...reviewItems.values()].map((item) => item && item.targetId).filter(Boolean));
   const allInputRefs = new Set();
@@ -1117,7 +1227,7 @@ function validateSealedInputShape(dispatch, reviewItems, artifact, result) {
       }
     }
   });
-  validateRuleSnapshotShape(dispatch, artifact, result);
+  validateRuleSnapshotShape(dispatch, artifact, result, fullRuleCatalog);
 }
 
 function validateReviewRangeShape(reviewRange, artifact, result) {
@@ -1161,13 +1271,13 @@ function validateRuleInputSource(ruleInputSource, artifact, result, code) {
   addViolation(result, code, artifact, '/ruleInputSource/kind', 'ruleInputSource kind must be workspace or commit', ['workspace', 'commit'], ruleInputSource.kind);
 }
 
-function validateRuleSnapshotShape(dispatch, artifact, result) {
+function validateRuleSnapshotShape(dispatch, artifact, result, fullRuleCatalog = false) {
   const snapshot = dispatch && dispatch.ruleSnapshot;
   if (!isObject(snapshot) || !Array.isArray(snapshot.files)) {
     addViolation(result, 'D235', artifact, '/ruleSnapshot/files', 'ruleSnapshot.files must be an array', 'array', snapshot && snapshot.files);
     return;
   }
-  const expectedPaths = new Set(['.agents/rules/index.md', ...asArray(dispatch.ruleSet && dispatch.ruleSet.ruleSources).map((source) => source && source.sourceFile).filter(Boolean)]);
+  let expectedPaths = new Set(['.agents/rules/index.md', ...asArray(dispatch.ruleSet && dispatch.ruleSet.ruleSources).map((source) => source && source.sourceFile).filter(Boolean)]);
   const actualPaths = new Set();
   snapshot.files.forEach((entry, index) => {
     const pointer = `/ruleSnapshot/files/${index}`;
@@ -1186,8 +1296,26 @@ function validateRuleSnapshotShape(dispatch, artifact, result) {
       addViolation(result, 'D239', artifact, `${pointer}/contentHash`, 'ruleSnapshot contentHash must match content bytes', contentHash, entry.contentHash);
     }
   });
-  if (!setsEqual(expectedPaths, actualPaths)) addViolation(result, 'D242', artifact, '/ruleSnapshot/files', 'ruleSnapshot must exactly cover the rule index and rule source files', [...expectedPaths].sort(compareStrings), [...actualPaths].sort(compareStrings));
   const byPath = new Map(snapshot.files.map((entry) => [entry && entry.path, entry]));
+  if (fullRuleCatalog) {
+    try {
+      const catalog = deriveDispatchRuleCatalog(byPath);
+      expectedPaths = catalog.paths;
+      const candidateRuleRefs = new Set(asArray(dispatch.ruleSet && dispatch.ruleSet.candidateRuleRefs));
+      if (!setsEqual(candidateRuleRefs, new Set(catalog.rules.keys()))) {
+        addViolation(result, 'D248', artifact, '/ruleSet/candidateRuleRefs', 'candidateRuleRefs must equal active rule IDs recomputed from ruleSnapshot', [...catalog.rules.keys()].sort(compareStrings), [...candidateRuleRefs].sort(compareStrings));
+      }
+      asArray(dispatch.ruleSet && dispatch.ruleSet.ruleSources).forEach((source, index) => {
+        const rule = catalog.rules.get(source && source.ruleRef);
+        if (rule && (source.sourceFile !== rule.sourceFile || source.namespace !== rule.namespace)) {
+          addViolation(result, 'D249', artifact, `/ruleSet/ruleSources/${index}`, 'rule source identity must match ruleSnapshot catalog', { namespace: rule.namespace, sourceFile: rule.sourceFile }, { namespace: source.namespace, sourceFile: source.sourceFile });
+        }
+      });
+    } catch (error) {
+      addViolation(result, 'D247', artifact, '/ruleSnapshot', `cannot recompute active rule catalog from ruleSnapshot: ${error.message}`, 'valid rule-steward index and all active rule files', error.message);
+    }
+  }
+  if (!setsEqual(expectedPaths, actualPaths)) addViolation(result, 'D242', artifact, '/ruleSnapshot/files', fullRuleCatalog ? 'ruleSnapshot must exactly cover the rule index and all active rule files' : 'ruleSnapshot must exactly cover the rule index and rule source files', [...expectedPaths].sort(compareStrings), [...actualPaths].sort(compareStrings));
   if (dispatch.ruleSet && byPath.get('.agents/rules/index.md') && dispatch.ruleSet.sourceIndexHash !== byPath.get('.agents/rules/index.md').contentHash) {
     addViolation(result, 'D243', artifact, '/ruleSet/sourceIndexHash', 'sourceIndexHash must equal sealed rule index snapshot', byPath.get('.agents/rules/index.md').contentHash, dispatch.ruleSet.sourceIndexHash);
   }
@@ -1197,6 +1325,31 @@ function validateRuleSnapshotShape(dispatch, artifact, result) {
       addViolation(result, 'D244', artifact, `/ruleSet/ruleSources/${index}/sourceHash`, 'sourceHash must equal sealed rule source snapshot', file.contentHash, source.sourceHash);
     }
   });
+}
+
+function deriveDispatchRuleCatalog(byPath) {
+  const indexFile = byPath.get('.agents/rules/index.md');
+  if (!indexFile || typeof indexFile.content !== 'string') throw new Error('missing rule index snapshot');
+  const index = parseConstructionRuleIndex(indexFile.content);
+  const paths = new Set(['.agents/rules/index.md']);
+  const rules = new Map();
+  index.forEach((registration, namespace) => {
+    if (registration.status !== 'active') return;
+    paths.add(registration.sourceFile);
+    const file = byPath.get(registration.sourceFile);
+    if (!file || typeof file.content !== 'string') {
+      throw new Error(`missing active rule file snapshot: ${registration.sourceFile}`);
+    }
+    parseConstructionRuleFile(file.content, registration.sourceFile, namespace).forEach((rule, ruleRef) => {
+      if (rules.has(ruleRef)) throw new Error(`duplicate active rule ID: ${ruleRef}`);
+      rules.set(ruleRef, {
+        ...rule,
+        namespace,
+        sourceFile: registration.sourceFile,
+      });
+    });
+  });
+  return { paths, rules };
 }
 
 function validateRepoPathArray(value, artifact, result, code, pointer, optional = false) {
@@ -1295,7 +1448,7 @@ function validateDispatch(dispatch, artifact, result, currentInputPath = artifac
   validateApplicabilityMatrix(dispatch.applicabilityMatrix, ruleSet, targets, reviewItems, artifact, result);
   validateRequiredContextCoverage(ruleSet, dispatch.targets, artifact, result);
   validateReviewBatches(dispatch, reviewItems, artifact, result);
-  validateSealedInputShape(dispatch, reviewItems, artifact, result);
+  validateSealedInputShape(dispatch, reviewItems, artifact, result, true);
   verifyTreeDispatchInputs(dispatch, currentInputPath, artifact, result);
 }
 

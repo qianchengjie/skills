@@ -1169,12 +1169,63 @@ async function materializeRulesReviewV8RunFixture({
   if (!gitignore.split(/\r?\n/).includes('.rules-review-tmp/')) {
     await fs.writeFile(gitignorePath, `${gitignore.trimEnd()}\n.rules-review-tmp/\n`, 'utf8');
   }
-  await fs.mkdir(path.join('.agents', 'rules'), { recursive: true });
   await Promise.all([
-    fs.writeFile(path.join('.agents', 'rules', 'index.md'), '# Rules\n', 'utf8'),
-    fs.writeFile(path.join('.agents', 'rules', 'core.md'), '# CORE-001\n', 'utf8'),
-    fs.writeFile(path.join('.agents', 'rules', 'type.md'), '# TYPE-001\n', 'utf8'),
-    fs.writeFile(path.join('.agents', 'rules', 'ui.md'), '# UI-001\n', 'utf8'),
+    fs.mkdir(path.join('.agents', 'rules', 'always'), { recursive: true }),
+    fs.mkdir(path.join('.agents', 'rules', 'concerns'), { recursive: true }),
+  ]);
+  await Promise.all([
+    fs.writeFile(path.join('.agents', 'rules', 'index.md'), `# Rules Index
+
+## Namespaces
+
+| Namespace | 状态 | 文件 | 触发条件 |
+| --- | --- | --- | --- |
+| \`CORE\` | active | \`always/constraints.md\` | 每次任务必读 |
+| \`TYPE\` | active | \`concerns/type.md\` | 修改类型时 |
+| \`UI\` | active | \`concerns/ui.md\` | 修改界面时 |
+`, 'utf8'),
+    fs.writeFile(path.join('.agents', 'rules', 'always', 'constraints.md'), `# Constraints
+
+### CORE-001 基础约束
+
+- 级别：MUST
+- 生效条件：每次任务
+- 规则：遵守基础约束。
+- 证据要求：
+  - 记录审查证据。
+- 失败条件：
+  - 未遵守基础约束。
+- 无法验证条件：
+  - 缺少审查材料。
+`, 'utf8'),
+    fs.writeFile(path.join('.agents', 'rules', 'concerns', 'type.md'), `# Type Rules
+
+### TYPE-001 类型约束
+
+- 级别：SHOULD
+- 生效条件：修改类型时
+- 规则：遵守类型约束。
+- 证据要求：
+  - 记录审查证据。
+- 失败条件：
+  - 未遵守类型约束。
+- 无法验证条件：
+  - 缺少审查材料。
+`, 'utf8'),
+    fs.writeFile(path.join('.agents', 'rules', 'concerns', 'ui.md'), `# UI Rules
+
+### UI-001 界面约束
+
+- 级别：SHOULD
+- 生效条件：修改界面时
+- 规则：遵守界面约束。
+- 证据要求：
+  - 记录审查证据。
+- 失败条件：
+  - 未遵守界面约束。
+- 无法验证条件：
+  - 缺少审查材料。
+`, 'utf8'),
   ]);
   if (execFileSync('git', ['status', '--porcelain', '--', '.agents/rules', gitignorePath], { encoding: 'utf8' }).trim()) {
     execFileSync('git', ['add', '.agents/rules', gitignorePath]);
@@ -1211,10 +1262,12 @@ async function materializeRulesReviewV8RunFixture({
         namespace: ruleRef.split('-')[0],
         ruleRef,
         ruleLevel: ruleRef === 'CORE-001' ? 'MUST' : 'SHOULD',
-        sourceFile: `.agents/rules/${ruleRef.split('-')[0].toLowerCase()}.md`,
+        sourceFile: ruleRef === 'CORE-001'
+          ? '.agents/rules/always/constraints.md'
+          : `.agents/rules/concerns/${ruleRef.split('-')[0].toLowerCase()}.md`,
         sourceHash: `sha256:${'0'.repeat(64)}`,
-        trigger: ['always'],
-        appliesTo: ['*'],
+        trigger: ruleRef === 'CORE-001' ? '每次任务必读' : ruleRef === 'TYPE-001' ? '修改类型时' : '修改界面时',
+        appliesTo: ruleRef === 'CORE-001' ? '每次任务' : ruleRef === 'TYPE-001' ? '修改类型时' : '修改界面时',
         summary: `${ruleRef} fixture`,
       })),
     },

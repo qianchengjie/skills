@@ -39,7 +39,7 @@ validator 或 schema。
 - Subject-visible semantic input: `fixture/dispatch-input.json`
 - Mounted path: `/input/dispatch-input.json`
 - Semantic input SHA-256:
-  `40f9be492ca14baa8423b2de948845422c90427bd127baa79c91408b2fb6a5fb`
+  `534a6058d875cbc5ae88464718f07ceb6e53b061565f820a70d846383a39d6af`
 - Synthetic Git input: `fixture/project.bundle`
 - Git input SHA-256:
   `1f30b5b9a1fc946eb6c20070fd98cc1a09e46881a796d2f523e144098898aeaa`
@@ -73,7 +73,7 @@ package 的 rules-review 来源。
 - 最终文件位于
   `.rules-review-tmp/eval-dispatch-construction/dispatch.json`，并记录
   SHA-256。
-- BASE、TARGET、rules source、规则分区、16 个 targets、512 个适用性决定、
+- BASE、TARGET、catalogSource、规则分区、16 个 targets、512 个适用性决定、
   191 个 reviewItems 和 5 个 reviewBatches 与 fixture 精确一致。
 - 每个 `A` 决定生成一个 reviewItem；每个 `N` 决定不生成
   reviewItem，并使用 fixture 指定的 reason 和 evidence 投影。

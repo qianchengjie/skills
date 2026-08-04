@@ -22,7 +22,7 @@ controller 只把用户语法解析为固定的 BASE commit 与 TARGET commit，
 BASE、TARGET 或目标解释不唯一时立即 blocked，不任选一种解释。用户要求审查 current、staged、worktree、branch 或裸 tree 时，停止并要求先形成目标 commit；不要把这些入口静默降级为 commit 审查。
 
 controller 完成规则分区、targets、适用性决定和 batch 分组后，只写
-`kind = "rules-review-dispatch-construction-input"`、`schemaVersion = 1`
+`kind = "rules-review-dispatch-construction-input"`、`schemaVersion = 2`
 的紧凑 dispatch 语义输入，再使用官方构造入口：
 
 ```text
@@ -31,11 +31,32 @@ node scripts/validate.js --mode construct-dispatch \
   --output .rules-review-tmp/<run-id>/dispatch.json
 ```
 
-该 v1 输入使用固定字段集合和固定投影描述。`repository` 必须包含完整
+该 v2 输入使用固定字段集合和固定投影描述；v1 直接拒绝。`repository` 必须包含完整
 `baseCommit`、`targetCommit` 和 `excludedFiles = []`；默认省略 `rulesCommit`
-以读取当前 workspace 规则，显式固定规则来源时才填写完整 `rulesCommit`。其它
-kind、未知字段、非规范 commit OID 或不符合 `rule-steward` Namespaces 表协议
-的规则索引一律 fail closed。
+以读取当前 workspace 规则，显式固定规则来源时才填写完整 `rulesCommit`。
+`catalogSource` 必填，并逐字段复制 `rule-steward --catalog` 输出的 `source`：
+
+```json
+{
+  "kind": "rules-review-dispatch-construction-input",
+  "schemaVersion": 2,
+  "catalogSource": {
+    "kind": "workspace",
+    "indexHash": "sha256:...",
+    "files": [
+      {
+        "path": ".agents/rules/concerns/testing.md",
+        "contentHash": "sha256:..."
+      }
+    ]
+  }
+}
+```
+
+commit 来源的 `catalogSource` 还必须携带与 `repository.rulesCommit` 相同的完整
+规范 OID。v2 不携带 catalog 条目、`indexFile` 或 `ruleSourceFiles`。其它 kind、
+未知字段、非规范 commit OID 或不符合 `rule-steward` Namespaces 表协议的规则索引
+一律 fail closed。
 
 入口从当前 Git worktree 读取固定的 BASE、TARGET 和所选规则来源，按
 `selectedRuleRefs × targetOrder` 顺序展开适用性矩阵，并按 `A = 适用`、
@@ -53,10 +74,13 @@ controller 入口；官方 `construct-dispatch` 无法闭合时，本轮必须 b
 
 `construct-dispatch` 内部固定 `targetTree = targetCommit^{tree}`、
 `boundCommit = targetCommit`、`excludedFiles = []`。省略 `rulesCommit` 时规则
-来源为当前工作区；填写时只从该 commit tree 读取规则。构造与封印复用同一次
-规则快照，避免 workspace 内容在两阶段之间漂移。该过程不创建 Git object，不
-修改真实 index、工作文件、staged/unstaged 状态或 worktree 列表。新 TARGET
-必须创建新 run。
+来源为当前工作区；填写时只从该 commit tree 读取规则。写出前从该来源重新发现
+index 与全部 active 文件，校验 `catalogSource` 的来源身份、index hash、active
+文件路径全集及逐文件 hash，并重新检查可选 `retired.md` 与 active IDs 无交集。
+`retired.md` 不进入 catalog hash、dispatch snapshot 或 reviewer task。构造与封印
+复用同一次规则快照，避免 workspace 内容在两阶段之间漂移。该过程不创建 Git
+object，不修改真实 index、工作文件、staged/unstaged 状态或 worktree 列表。
+新 TARGET 必须创建新 run。
 
 ## 2. 不可变输入
 
@@ -109,6 +133,9 @@ ruleSnapshot:
     - path: .agents/rules/index.md
       content: <封印文本>
       contentHash: sha256:...
+    - path: .agents/rules/concerns/testing.md
+      content: <封印文本，包括空文本>
+      contentHash: sha256:...
 ```
 
 `ruleSnapshot` 是规则文件内容的事实源。封印后所有 controller、reviewer、task builder、aggregator 和 renderer：
@@ -148,7 +175,32 @@ excludedRuleRefs 为空 => full
 
 ## 4. 规则与目标
 
-项目规则入口是 `.agents/rules/index.md`。controller 必须从命令选择的同一规则来源读取索引、候选规则、active 状态、`trigger / applies-to` 元数据和规则正文：
+项目规则入口是 `.agents/rules/index.md`。controller 必须按以下顺序从同一规则来源完成分类：
+
+```text
+确定 ruleInputSource
+→ 生成并浏览全部 catalog 条目
+→ trigger / appliesTo 足以明确排除的规则归入 globallyNotApplicableRuleRefs
+→ 对可能适用或仅凭 catalog 无法判断的规则，按 ID 批量获取完整规则块
+→ 根据完整规则完成 selected / excluded / globallyNotApplicable 三分区
+→ 提交 construction input v2
+```
+
+命令分别为：
+
+```text
+# workspace
+node skills/rule-steward/scripts/get-rules.mjs --catalog
+node skills/rule-steward/scripts/get-rules.mjs <RULE-ID>...
+
+# commit
+node skills/rule-steward/scripts/get-rules.mjs --catalog --commit <FULL-OID>
+node skills/rule-steward/scripts/get-rules.mjs --commit <FULL-OID> <RULE-ID>...
+```
+
+catalog 只保证完整发现并投影标题、级别、namespace trigger、生效条件和来源文件，
+不替代完整规则内容。完整规则仍不足以判断适用性时，本轮 blocked；不得默认归为
+不适用。
 
 - `workspace`：读取当前文件系统，包含未提交规则内容。
 - `commit`：只读取 `ruleInputSource.commit` 对应 tree；内容不足时 blocked，不从工作区或代码 TARGET 补充。
@@ -164,11 +216,15 @@ candidateRuleRefs
 ∪ globallyNotApplicableRuleRefs
 ```
 
+`candidateRuleRefs` 必须等于 catalog 的全部 active rule IDs，三分区必须覆盖全集。
+
 - `selectedRuleRefs`：实际进入本轮逐目标适用性判断和审查的规则。
 - `excludedRuleRefs`：已判定适用，但被有意跳过的规则。
 - `globallyNotApplicableRuleRefs`：不适用于当前 TARGET 的规则。
 
-validator 校验来源身份、snapshot 字节与 hash、声明集合的完整互斥和引用闭合；候选发现、元数据提取与适用性结论由 controller/reviewer 负责。
+validator 从 dispatch snapshot 独立复算 active 文件和 rule IDs，校验来源身份、
+snapshot 字节与 hash、声明集合的完整互斥和引用闭合；候选浏览、元数据的业务含义
+与适用性结论由 controller/reviewer 负责。
 
 目标统一使用 `targetId`。最小审查原子为：
 
@@ -201,7 +257,7 @@ ruleRef x targetId = reviewItem
 所有 agent 间工件必须是 strict JSON。
 
 - `dispatch.json`：controller 的规则、目标、适用性、固定 range 和静态 batch 分组；不得含审查结论或 batch 运行状态。
-- `tasks/*.json`：由 `build-tasks` 从 dispatch 机械投影，携带相同 `reviewRange`、`ruleInputSource`、`inputSnapshot`，以及规则索引和本批规则的 `ruleSnapshot`；`taskHash` 是删除自身字段后整份 task 的 canonical JSON SHA-256。
+- `tasks/*.json`：由 `build-tasks` 从 dispatch 机械投影，携带相同 `reviewRange`、`ruleInputSource`、`inputSnapshot`，以及规则索引和本批实际使用规则文件的 `ruleSnapshot`；不携带其它 active 文件或 `retired.md`。`taskHash` 是删除自身字段后整份 task 的 canonical JSON SHA-256。
 - `shards/*.json`：reviewer 对本 batch 的当前结果，必须回显 task 的 `targetTree` 与 `taskHash`；是产生 `passed / finding / observation / cannot_verify` 的唯一位置。可选的 `otherConcerns` 只承载审查过程中自然注意到的规则外事项。
 - `finalReview.json`：由 `aggregate-final` 仅从当前 run 的 shards 聚合；同一 batch 内相同显式 `rootCause` 的 finding results 合并为一个 finding，并逐项保留 `evidenceGroups`。
 - `final.md`、`response.md`、`handoff.md`：展示层，不是事实源。`handoff.md` 由 `finalReview.json` 与 `dispatch.json` 机械渲染，用于把目标 commit、审查结论、全部 finding 和 `cannot_verify` 转交给其他同事；代码位置只保留仓库相对路径，不生成本机绝对路径链接。
@@ -286,14 +342,15 @@ validator 检查：
 - commit/tree/blob 存在，baseCommit/tree、boundCommit/tree 身份一致，且 `excludedFiles = []`。
 - 完整 commit 文件范围和规则声明分区闭合。
 - input snapshot 的 mode、hash、内容与 `targetTree` 一致。
-- `ruleInputSource` 身份、rule snapshot 字节/hash 与规则投影闭合；commit 来源额外与对应 commit tree 一致。
+- construction v2 的 `catalogSource` 与实际 index、全部 active 文件路径及逐文件 hash 一致，active/retired ID 无交集，`candidateRuleRefs` 等于全部 active IDs。
+- `ruleInputSource` 身份、dispatch rule snapshot 字节/hash、完整 active 文件与规则投影闭合；commit 来源额外与对应 commit tree 一致。
 - task 投影、batch 引用和当前结果唯一覆盖。
 - finalReview、Markdown 与当前结果的机械派生一致。
 
 validator 明确不检查：
 
 - BASE 选择是否符合业务意图。
-- 候选规则发现、元数据提取、规则投影语义、适用性结论和 finding 是否正确。
+- catalog 字段、规则正文和规则投影的语义是否正确，适用性结论和 finding 是否正确。
 - 多个 finding results 是否确属同一根因，以及 `rootCause` 表述是否准确。
 - evidence 强度或可信度。
 - target、inputRefs 与 hunk 的业务归属。

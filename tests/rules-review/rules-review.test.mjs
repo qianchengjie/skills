@@ -74,13 +74,67 @@ async function expectFailure(args, pattern, cwd = repoRoot) {
   assert.fail(`命令应失败：${args.join(" ")}`);
 }
 
+function testRuleBlock(ruleRef) {
+  return [
+    `### ${ruleRef} 检查当前变更`,
+    "",
+    "- 级别：MUST",
+    "- 生效条件：每次任务",
+    "- 规则：检查当前变更。",
+    "- 证据要求：",
+    "  - 记录检查证据。",
+    "- 失败条件：",
+    "  - 未检查当前变更。",
+    "- 无法验证条件：",
+    "  - 当前材料不足。",
+    "",
+  ].join("\n");
+}
+
+function writeTestRuleStore(root, ruleRefs) {
+  const refsByNamespace = new Map();
+  for (const ruleRef of ruleRefs) {
+    const namespace = ruleRef.split("-")[0];
+    if (!refsByNamespace.has(namespace)) refsByNamespace.set(namespace, []);
+    refsByNamespace.get(namespace).push(ruleRef);
+  }
+  if (!refsByNamespace.has("CORE")) refsByNamespace.set("CORE", []);
+  const namespaces = ["CORE", ...[...refsByNamespace.keys()].filter((namespace) => namespace !== "CORE").sort()];
+  const rows = namespaces.map((namespace) => {
+    const file = namespace === "CORE"
+      ? "always/constraints.md"
+      : `concerns/${namespace.toLowerCase()}.md`;
+    return `| \`${namespace}\` | active | \`${file}\` | ${namespace === "CORE" ? "每次任务必读" : `命中 ${namespace} 关注点时`} |`;
+  });
+  fs.mkdirSync(path.join(root, ".agents/rules/always"), { recursive: true });
+  fs.mkdirSync(path.join(root, ".agents/rules/concerns"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".agents/rules/index.md"), [
+    "# Rules Index",
+    "",
+    "## Namespaces",
+    "",
+    "| Namespace | 状态 | 文件 | 触发条件 |",
+    "| --- | --- | --- | --- |",
+    ...rows,
+    "",
+  ].join("\n"));
+  for (const namespace of namespaces) {
+    const file = namespace === "CORE"
+      ? "always/constraints.md"
+      : `concerns/${namespace.toLowerCase()}.md`;
+    fs.writeFileSync(
+      path.join(root, ".agents/rules", ...file.split("/")),
+      refsByNamespace.get(namespace).map(testRuleBlock).join("\n"),
+    );
+  }
+}
+
 function createRepository() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-v8-"));
   fs.mkdirSync(path.join(root, ".agents/rules"), { recursive: true });
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
   fs.writeFileSync(path.join(root, ".gitignore"), ".rules-review-tmp/\n");
-  fs.writeFileSync(path.join(root, ".agents/rules/index.md"), "# Rules\n\n- CORE-001\n");
-  fs.writeFileSync(path.join(root, ".agents/rules/core.md"), "# CORE-001\n\n检查当前变更。\n");
+  writeTestRuleStore(root, ["CORE-001"]);
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 1;\n");
   fs.writeFileSync(path.join(root, "src/other.js"), "export const other = 1;\n");
   git(root, ["init", "-q"]);
@@ -95,7 +149,11 @@ function createConstructionCase(t, {
   runId = "construction-test",
   productionInput = false,
   workspaceRules = false,
-  indexContent = [
+  emptyActiveFile = false,
+  indexContent,
+  mutateInput,
+} = {}) {
+  const resolvedIndexContent = indexContent || [
     "# Rules Index",
     "",
     "## Namespaces",
@@ -103,10 +161,11 @@ function createConstructionCase(t, {
     "| Namespace | 状态 | 文件 | 触发条件 |",
     "| --- | --- | --- | --- |",
     "| `CORE` | active | `always/constraints.md` | 每次任务必读 |",
+    ...(emptyActiveFile
+      ? ["| `EMPTY` | active | `domain/empty.md` | 修改空领域时 |"]
+      : []),
     "",
-  ].join("\n"),
-  mutateInput,
-} = {}) {
+  ].join("\n");
   const root = createRepository();
   const inputRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rules-review-construction-input-"));
   const rulesContent = [
@@ -139,8 +198,12 @@ function createConstructionCase(t, {
   t.after(() => fs.rmSync(inputRoot, { recursive: true, force: true }));
 
   fs.mkdirSync(path.join(root, ".agents/rules/always"), { recursive: true });
-  fs.writeFileSync(path.join(root, ".agents/rules/index.md"), indexContent);
+  fs.writeFileSync(path.join(root, ".agents/rules/index.md"), resolvedIndexContent);
   fs.writeFileSync(path.join(root, ".agents/rules/always/constraints.md"), rulesContent);
+  if (emptyActiveFile) {
+    fs.mkdirSync(path.join(root, ".agents/rules/domain"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".agents/rules/domain/empty.md"), "");
+  }
   git(root, ["add", ".agents/rules"]);
   git(root, ["commit", "-qm", "construction rules"]);
   const baseCommit = git(root, ["rev-parse", "HEAD"]);
@@ -153,7 +216,7 @@ function createConstructionCase(t, {
     kind: productionInput
       ? "rules-review-dispatch-construction-input"
       : "rules-review-dispatch-construction-eval-input",
-    schemaVersion: 1,
+    schemaVersion: 2,
     runId,
     repository: productionInput
       ? {
@@ -169,11 +232,24 @@ function createConstructionCase(t, {
         rulesCommit: targetCommit,
         excludedFiles: [],
       },
+    catalogSource: {
+      kind: workspaceRules ? "workspace" : "commit",
+      ...(!workspaceRules ? { commit: targetCommit } : {}),
+      indexHash: contentHash(resolvedIndexContent),
+      files: [
+        {
+          path: ".agents/rules/always/constraints.md",
+          contentHash: contentHash(rulesContent),
+        },
+        ...(emptyActiveFile
+          ? [{
+            path: ".agents/rules/domain/empty.md",
+            contentHash: contentHash(""),
+          }]
+          : []),
+      ],
+    },
     ruleProjection: {
-      indexFile: ".agents/rules/index.md",
-      ruleSourceFiles: {
-        CORE: ".agents/rules/always/constraints.md",
-      },
       ruleSetId: "RS-CONSTRUCTION",
       candidateRuleRefs: ["CORE-001", "CORE-002"],
       selectedRuleRefs: ["CORE-001", "CORE-002"],
@@ -246,7 +322,7 @@ function createConstructionCase(t, {
     inputPath,
     output,
     outputPath: path.join(root, output),
-    indexContent,
+    indexContent: resolvedIndexContent,
     rulesContent,
     baseCommit,
     targetCommit,
@@ -281,7 +357,9 @@ function draft({
         namespace: ruleRef.split("-")[0],
         ruleRef,
         ruleLevel: "MUST",
-        sourceFile: ".agents/rules/core.md",
+        sourceFile: ruleRef.startsWith("CORE-")
+          ? ".agents/rules/always/constraints.md"
+          : `.agents/rules/concerns/${ruleRef.split("-")[0].toLowerCase()}.md`,
         sourceHash: `sha256:${"0".repeat(64)}`,
         trigger: ["always"],
         appliesTo: ["*"],
@@ -321,6 +399,9 @@ function draft({
 }
 
 function createDraft(root, options = {}) {
+  if (options.candidateRuleRefs?.includes("AUX-001")) {
+    writeTestRuleStore(root, options.candidateRuleRefs);
+  }
   const file = path.join(root, ".rules-review-tmp", options.runId || "run-v8", "dispatch.json");
   writeJson(file, draft(options));
   return file;
@@ -507,7 +588,9 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
     ...draftDispatch.ruleSet.ruleSources[0],
     namespace: "AUX",
     ruleRef: "AUX-001",
+    sourceFile: ".agents/rules/concerns/aux.md",
   });
+  writeTestRuleStore(root, ["CORE-001", "AUX-001"]);
   const targetSpecs = [
     ["T001", "src/main.js", "CI 是否组装 backend 制品", "CORE-001"],
     ["T002", "src/other.js", "WebView 是否允许进入 /backend", "CORE-001"],
@@ -1027,6 +1110,8 @@ test("construct-dispatch 用普通紧凑输入封印 workspace 规则", async (t
     path.join(fixture.root, ".agents/rules/always/constraints.md"),
     workspaceRules,
   );
+  fixture.input.catalogSource.files[0].contentHash = contentHash(workspaceRules);
+  writeJson(fixture.inputPath, fixture.input);
 
   const construction = await runJson([
     "--mode", "construct-dispatch",
@@ -1049,6 +1134,128 @@ test("construct-dispatch 用普通紧凑输入封印 workspace 规则", async (t
     fixture.root,
   );
   assert.equal(validation.ok, true);
+});
+
+test("construct-dispatch 拒绝 construction input v1", async (t) => {
+  const fixture = createConstructionCase(t, {
+    productionInput: true,
+    mutateInput(input) {
+      input.schemaVersion = 1;
+    },
+  });
+  await expectFailure([
+    "--mode", "construct-dispatch",
+    "--input", fixture.inputPath,
+    "--output", fixture.output,
+  ], /schemaVersion must equal 2/, fixture.root);
+  assert.equal(fs.existsSync(fixture.outputPath), false);
+});
+
+test("construct-dispatch 在 catalogSource 漂移时失败且不产生 dispatch", async (t) => {
+  const fixture = createConstructionCase(t, {
+    runId: "catalog-drift",
+    productionInput: true,
+    workspaceRules: true,
+  });
+  fs.writeFileSync(
+    path.join(fixture.root, ".agents/rules/always/constraints.md"),
+    fixture.rulesContent.replace("检查主文件。", "catalog 后修改规则。"),
+  );
+  await expectFailure([
+    "--mode", "construct-dispatch",
+    "--input", fixture.inputPath,
+    "--output", fixture.output,
+  ], /catalogSource.*contentHash|catalog source.*hash/i, fixture.root);
+  assert.equal(fs.existsSync(fixture.outputPath), false);
+});
+
+test("construct-dispatch 重新检查 retired 冲突", async (t) => {
+  const fixture = createConstructionCase(t, {
+    runId: "retired-drift",
+    productionInput: true,
+    workspaceRules: true,
+  });
+  fs.writeFileSync(
+    path.join(fixture.root, ".agents/rules/retired.md"),
+    [
+      "# Retired Rules",
+      "",
+      "### CORE-001 检查主文件",
+      "",
+      "- 替代：无",
+      "- 原因：catalog 后形成冲突",
+      "",
+    ].join("\n"),
+  );
+  await expectFailure([
+    "--mode", "construct-dispatch",
+    "--input", fixture.inputPath,
+    "--output", fixture.output,
+  ], /both active and retired/, fixture.root);
+  assert.equal(fs.existsSync(fixture.outputPath), false);
+});
+
+test("construct-dispatch 要求 candidateRuleRefs 等于全部 active IDs", async (t) => {
+  const fixture = createConstructionCase(t, {
+    runId: "missing-candidate",
+    productionInput: true,
+    mutateInput(input) {
+      input.ruleProjection.candidateRuleRefs = ["CORE-001"];
+      input.ruleProjection.selectedRuleRefs = ["CORE-001"];
+      delete input.applicability.byRule["CORE-002"];
+      input.batchRuleRefs.B001 = ["CORE-001"];
+      Object.assign(input.expectedCounts, {
+        candidateRuleRefs: 1,
+        selectedRuleRefs: 1,
+        applicabilityMatrix: 2,
+        reviewItems: 1,
+      });
+    },
+  });
+  await expectFailure([
+    "--mode", "construct-dispatch",
+    "--input", fixture.inputPath,
+    "--output", fixture.output,
+  ], /candidateRuleRefs must equal all active rule IDs/, fixture.root);
+  assert.equal(fs.existsSync(fixture.outputPath), false);
+});
+
+test("dispatch 封印空 active 文件，task 仍只投影当前 batch 规则文件", async (t) => {
+  const fixture = createConstructionCase(t, {
+    runId: "empty-active-file",
+    productionInput: true,
+    emptyActiveFile: true,
+  });
+  await run([
+    "--mode", "construct-dispatch",
+    "--input", fixture.inputPath,
+    "--output", fixture.output,
+  ], fixture.root);
+  const dispatch = readJson(fixture.outputPath);
+  assert.deepEqual(dispatch.ruleSnapshot.files.map(({ path: file }) => file), [
+    ".agents/rules/always/constraints.md",
+    ".agents/rules/domain/empty.md",
+    ".agents/rules/index.md",
+  ]);
+  const taskDir = path.join(path.dirname(fixture.outputPath), "tasks");
+  await run([
+    "--mode", "build-tasks",
+    "--dispatch", fixture.outputPath,
+    "--out", taskDir,
+  ], fixture.root);
+  assert.deepEqual(readJson(path.join(taskDir, "B001.json")).ruleSnapshot.files.map(({ path: file }) => file), [
+    ".agents/rules/always/constraints.md",
+    ".agents/rules/index.md",
+  ]);
+  dispatch.ruleSnapshot.files = dispatch.ruleSnapshot.files.filter(
+    ({ path: file }) => file !== ".agents/rules/domain/empty.md",
+  );
+  writeJson(fixture.outputPath, dispatch);
+  await expectFailure(
+    ["--mode", "dispatch", "--input", fixture.outputPath],
+    /all active rule files|missing active rule file snapshot/,
+    fixture.root,
+  );
 });
 
 test("construct-dispatch 拒绝未声明的构造输入身份", async (t) => {
@@ -1133,7 +1340,7 @@ test("target-commit 固定完整提交范围，且封印过程不写 Git object 
   assert.equal(git(root, ["show", `${dispatch.reviewRange.targetTree}:src/new.js`]), "export const added = true;");
   assert.equal(git(root, ["ls-tree", "--name-only", dispatch.reviewRange.targetTree, "--", ".rules-review-tmp"]), "");
   assert.deepEqual(dispatch.inputSnapshot.files.map((entry) => entry.inputRef), ["src/main.js", "src/new.js", "src/other.js"]);
-  assert.deepEqual(dispatch.ruleSnapshot.files.map((entry) => entry.path), [".agents/rules/core.md", ".agents/rules/index.md"]);
+  assert.deepEqual(dispatch.ruleSnapshot.files.map((entry) => entry.path), [".agents/rules/always/constraints.md", ".agents/rules/index.md"]);
 
   fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 99;\n");
   const validation = await runJson(["--mode", "dispatch", "--input", file]);
@@ -1165,10 +1372,14 @@ test("默认规则来源使用当前工作区，封印后不再回读工作区�
   git(root, ["add", "src/main.js"]);
   git(root, ["commit", "-qm", "target"]);
   const target = git(root, ["rev-parse", "HEAD"]);
-  const targetRule = git(root, ["show", `${target}:.agents/rules/core.md`]);
+  const targetRule = git(root, ["show", `${target}:.agents/rules/always/constraints.md`]);
 
-  fs.writeFileSync(path.join(root, ".agents/rules/index.md"), "# Rules\n\n- WORK-001\n");
-  fs.writeFileSync(path.join(root, ".agents/rules/core.md"), "# WORK-001\n\n工作区新规则。\n");
+  writeTestRuleStore(root, ["WORK-001"]);
+  const workspaceRulePath = path.join(root, ".agents/rules/concerns/work.md");
+  fs.writeFileSync(
+    workspaceRulePath,
+    testRuleBlock("WORK-001").replace("检查当前变更。", "工作区新规则。"),
+  );
   const file = createDraft(root, {
     runId: "workspace-rules",
     candidateRuleRefs: ["WORK-001"],
@@ -1177,7 +1388,7 @@ test("默认规则来源使用当前工作区，封印后不再回读工作区�
       namespace: "WORK",
       ruleRef: "WORK-001",
       ruleLevel: "MUST",
-      sourceFile: ".agents/rules/core.md",
+      sourceFile: ".agents/rules/concerns/work.md",
       sourceHash: `sha256:${"0".repeat(64)}`,
       trigger: ["always"],
       appliesTo: ["*"],
@@ -1186,19 +1397,19 @@ test("默认规则来源使用当前工作区，封印后不再回读工作区�
   });
 
   const dispatch = await seal(file, target, base);
-  const snapshotRule = dispatch.ruleSnapshot.files.find((entry) => entry.path === ".agents/rules/core.md");
+  const snapshotRule = dispatch.ruleSnapshot.files.find((entry) => entry.path === ".agents/rules/concerns/work.md");
   assert.deepEqual(dispatch.ruleInputSource, { kind: "workspace" });
   assert.deepEqual(dispatch.ruleSet.candidateRuleRefs, ["WORK-001"]);
   assert.equal(dispatch.ruleSet.ruleSources[0].summary, "工作区新规则");
   assert.match(snapshotRule.content, /工作区新规则/);
   assert.doesNotMatch(targetRule, /工作区新规则/);
 
-  fs.writeFileSync(path.join(root, ".agents/rules/core.md"), "# WORK-001\n\n封印后再次修改。\n");
+  fs.writeFileSync(workspaceRulePath, testRuleBlock("WORK-001").replace("检查当前变更。", "封印后再次修改。"));
   const runDir = await materializePassingRun(file);
   const task = readJson(path.join(runDir, "tasks/B001.json"));
   assert.deepEqual(task.ruleInputSource, { kind: "workspace" });
-  assert.match(task.ruleSnapshot.files.find((entry) => entry.path === ".agents/rules/core.md").content, /工作区新规则/);
-  assert.doesNotMatch(task.ruleSnapshot.files.find((entry) => entry.path === ".agents/rules/core.md").content, /封印后再次修改/);
+  assert.match(task.ruleSnapshot.files.find((entry) => entry.path === ".agents/rules/concerns/work.md").content, /工作区新规则/);
+  assert.doesNotMatch(task.ruleSnapshot.files.find((entry) => entry.path === ".agents/rules/concerns/work.md").content, /封印后再次修改/);
   const validation = await runJson(["--mode", "run", "--dir", runDir]);
   assert.equal(validation.ok, true);
   await run(["--mode", "render-response", "--dir", runDir]);
@@ -1217,19 +1428,26 @@ test("--rules-commit 只使用指定 commit，并拒绝错误 revision、缺失�
   git(root, ["commit", "-qm", "target"]);
   const target = git(root, ["rev-parse", "HEAD"]);
 
-  fs.writeFileSync(path.join(root, ".agents/rules/index.md"), "# Rules\n\n- RULE-001\n");
-  fs.writeFileSync(path.join(root, ".agents/rules/core.md"), "# RULE-001\n\n指定 commit 规则。\n");
+  writeTestRuleStore(root, ["RULE-001"]);
+  const committedRulePath = path.join(root, ".agents/rules/concerns/rule.md");
+  fs.writeFileSync(
+    committedRulePath,
+    testRuleBlock("RULE-001").replace("检查当前变更。", "指定 commit 规则。"),
+  );
   git(root, ["add", ".agents/rules"]);
   git(root, ["commit", "-qm", "rules"]);
   const rulesCommit = git(root, ["rev-parse", "HEAD"]);
 
-  fs.writeFileSync(path.join(root, ".agents/rules/index.md"), "# Rules\n\n- WORK-001\n");
-  fs.writeFileSync(path.join(root, ".agents/rules/core.md"), "# WORK-001\n\n工作区规则。\n");
+  writeTestRuleStore(root, ["WORK-001"]);
+  fs.writeFileSync(
+    path.join(root, ".agents/rules/concerns/work.md"),
+    testRuleBlock("WORK-001").replace("检查当前变更。", "工作区规则。"),
+  );
   const ruleSources = [{
     namespace: "RULE",
     ruleRef: "RULE-001",
     ruleLevel: "MUST",
-    sourceFile: ".agents/rules/core.md",
+    sourceFile: ".agents/rules/concerns/rule.md",
     sourceHash: `sha256:${"0".repeat(64)}`,
     trigger: ["always"],
     appliesTo: ["*"],
@@ -1243,12 +1461,12 @@ test("--rules-commit 只使用指定 commit，并拒绝错误 revision、缺失�
   });
 
   const dispatch = await seal(file, target, base, rulesCommit);
-  const snapshotRule = dispatch.ruleSnapshot.files.find((entry) => entry.path === ".agents/rules/core.md");
+  const snapshotRule = dispatch.ruleSnapshot.files.find((entry) => entry.path === ".agents/rules/concerns/rule.md");
   assert.deepEqual(dispatch.ruleInputSource, { kind: "commit", commit: rulesCommit });
   assert.deepEqual(dispatch.ruleSet.candidateRuleRefs, ["RULE-001"]);
   assert.match(snapshotRule.content, /指定 commit 规则/);
   assert.doesNotMatch(snapshotRule.content, /工作区规则/);
-  assert.doesNotMatch(git(root, ["show", `${target}:.agents/rules/core.md`]), /指定 commit 规则/);
+  assert.doesNotMatch(git(root, ["show", `${target}:.agents/rules/always/constraints.md`]), /指定 commit 规则/);
 
   const runDir = await materializePassingRun(file);
   await run(["--mode", "render-response", "--dir", runDir]);
@@ -1273,7 +1491,7 @@ test("--rules-commit 只使用指定 commit，并拒绝错误 revision、缺失�
   ], /seal-dispatch failed closed/);
 
   const drifted = readJson(file);
-  const driftedRule = drifted.ruleSnapshot.files.find((entry) => entry.path === ".agents/rules/core.md");
+  const driftedRule = drifted.ruleSnapshot.files.find((entry) => entry.path === ".agents/rules/concerns/rule.md");
   driftedRule.content = "# RULE-001\n\n篡改快照。\n";
   driftedRule.contentHash = `sha256:${crypto.createHash("sha256").update(driftedRule.content).digest("hex")}`;
   drifted.ruleSet.ruleSources[0].sourceHash = driftedRule.contentHash;
@@ -1446,6 +1664,7 @@ test("commit 文件范围必须完整，scopeMode 只由规则排除事实派生
   const result = await runJson(["--mode", "run", "--dir", runDir]);
   assert.equal(result.ok, true);
 
+  writeTestRuleStore(root, ["CORE-001"]);
   const invalidFile = createDraft(root, { runId: "missing-file", inputRefs: ["src/main.js"] });
   await expectFailure(
     ["--mode", "seal-dispatch", "--input", invalidFile, "--base", dispatch.reviewRange.baseCommit, "--target-commit", dispatch.reviewRange.boundCommit],

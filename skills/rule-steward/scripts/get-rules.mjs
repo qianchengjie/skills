@@ -1,13 +1,19 @@
 #!/usr/bin/env node
 
-import { existsSync } from "node:fs";
+import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
 const ID_RE = /^[A-Z][A-Z0-9]*-[0-9]{3}$/;
 const NS_RE = /^[A-Z][A-Z0-9]*$/;
+const GIT_OID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const RULE_HEADING_RE = /^###\s+([A-Z][A-Z0-9]*-[0-9]{3})\s+(.+?)\s*$/;
+const RULE_LEVELS = new Set(["MUST", "SHOULD", "ADVISORY"]);
+const INDEX_PATH = ".agents/rules/index.md";
+const RETIRED_PATH = ".agents/rules/retired.md";
 
 function fail(message) {
   console.error(message);
@@ -16,6 +22,8 @@ function fail(message) {
 
 function parseArgs(argv) {
   let root = process.cwd();
+  let commit = null;
+  let catalog = false;
   const ids = [];
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -27,13 +35,92 @@ function parseArgs(argv) {
       i += 1;
       continue;
     }
+    if (arg === "--commit") {
+      if (commit !== null) fail("Duplicate option: --commit");
+      const value = argv[i + 1];
+      if (!value) fail("Missing value for --commit");
+      commit = value;
+      i += 1;
+      continue;
+    }
+    if (arg === "--catalog") {
+      if (catalog) fail("Duplicate option: --catalog");
+      catalog = true;
+      continue;
+    }
     if (arg.startsWith("--")) fail(`Unknown option: ${arg}`);
     ids.push(arg);
   }
 
-  if (ids.length === 0) fail("Usage: get-rules.mjs [--root <path>] <RULE-ID>...");
+  if (catalog && ids.length > 0) fail("--catalog cannot be combined with rule IDs");
+  if (!catalog && ids.length === 0) {
+    fail("Usage: get-rules.mjs [--root <path>] [--commit <FULL-OID>] <RULE-ID>...\n       get-rules.mjs [--root <path>] --catalog [--commit <FULL-OID>]");
+  }
 
-  return { root, ids };
+  return { root, commit, catalog, ids };
+}
+
+function git(root, args, options = {}) {
+  return execFileSync("git", ["-C", root, ...args], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+    env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+    ...options,
+  });
+}
+
+function resolveCommit(root, commit) {
+  if (!GIT_OID_RE.test(commit)) fail("Commit must use a full normalized commit OID");
+  let resolved;
+  try {
+    resolved = git(root, ["rev-parse", "--verify", `${commit}^{commit}`]).trim();
+  } catch {
+    fail("Commit must resolve to the same commit OID");
+  }
+  if (resolved !== commit) fail("Commit must resolve to the same commit OID");
+  return resolved;
+}
+
+function createReader(root, requestedCommit) {
+  if (requestedCommit === null) {
+    return {
+      source: { kind: "workspace" },
+      root,
+      exists(repoPath) {
+        return existsSync(path.join(root, ...repoPath.split("/")));
+      },
+      async read(repoPath) {
+        return readFile(path.join(root, ...repoPath.split("/")), "utf8");
+      },
+    };
+  }
+
+  let repositoryRoot;
+  try {
+    repositoryRoot = realpathSync(git(root, ["rev-parse", "--show-toplevel"]).trim());
+  } catch {
+    fail(`Not a Git repository: ${root}`);
+  }
+  const commit = resolveCommit(repositoryRoot, requestedCommit);
+  return {
+    source: { kind: "commit", commit },
+    root: repositoryRoot,
+    exists(repoPath) {
+      try {
+        git(repositoryRoot, ["cat-file", "-e", `${commit}:${repoPath}`], { stdio: ["ignore", "ignore", "ignore"] });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    async read(repoPath) {
+      try {
+        return git(repositoryRoot, ["show", `${commit}:${repoPath}`]);
+      } catch {
+        throw new Error(`Missing file at commit ${commit}: ${repoPath}`);
+      }
+    },
+  };
 }
 
 function stripTicks(value) {
@@ -47,9 +134,7 @@ function assertSafeRulePath(file) {
   if (path.isAbsolute(file) || file.startsWith("./") || file.includes("\\")) {
     fail(`Invalid rule file path: ${file}`);
   }
-  if (file.split(/[\\/]+/).includes("..")) {
-    fail(`Invalid rule file path: ${file}`);
-  }
+  if (file.split("/").includes("..")) fail(`Invalid rule file path: ${file}`);
 }
 
 function assertActiveRulePath(file) {
@@ -73,11 +158,15 @@ function isSeparatorRow(cells) {
   return cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
-async function parseIndex(rulesRoot) {
-  const indexPath = path.join(rulesRoot, "index.md");
-  if (!existsSync(indexPath)) fail(`Missing rules index: ${indexPath}`);
+function ruleRepoPath(file) {
+  return `.agents/rules/${file}`;
+}
 
-  const content = await readFile(indexPath, "utf8");
+async function parseIndex(reader) {
+  if (!reader.exists(INDEX_PATH)) {
+    fail(`Missing rules index: ${path.join(reader.root, ".agents/rules/index.md")}`);
+  }
+  const content = await reader.read(INDEX_PATH);
   const lines = content.split(/\r?\n/);
   const start = lines.findIndex((line) => line.trim() === "## Namespaces");
   if (start === -1) fail("Missing ## Namespaces table in .agents/rules/index.md");
@@ -97,16 +186,15 @@ async function parseIndex(rulesRoot) {
   }
 
   if (tableLines.length < 2) fail("Invalid Namespaces table");
-
   const header = parseMarkdownTableRow(tableLines[0]);
   if (!header || header.join("|") !== "Namespace|状态|文件|触发条件") {
     fail("Namespaces table header must be: | Namespace | 状态 | 文件 | 触发条件 |");
   }
-
   const separator = parseMarkdownTableRow(tableLines[1]);
   if (!separator || !isSeparatorRow(separator)) fail("Invalid Namespaces table separator");
 
   const namespaces = new Map();
+  const activeFiles = new Set();
   for (const line of tableLines.slice(2)) {
     const row = parseMarkdownTableRow(line);
     if (!row || row.length !== 4) fail(`Invalid namespace row: ${line}`);
@@ -115,31 +203,29 @@ async function parseIndex(rulesRoot) {
     const status = row[1].trim();
     const file = stripTicks(row[2]);
     const trigger = row[3].trim();
-
     if (!NS_RE.test(namespace)) fail(`Invalid namespace: ${namespace}`);
     if (status !== "active" && status !== "retired") {
       fail(`Invalid namespace status for ${namespace}: ${status}`);
     }
     assertSafeRulePath(file);
     if (status === "active") assertActiveRulePath(file);
+    if (!trigger) fail(`Missing namespace trigger for ${namespace}`);
     if (namespaces.has(namespace)) fail(`Duplicate namespace: ${namespace}`);
 
-    const absoluteFile = path.join(rulesRoot, file);
-    if (status === "active" && !existsSync(absoluteFile)) {
-      fail(`Missing active rule file for ${namespace}: ${absoluteFile}`);
+    const repoPath = ruleRepoPath(file);
+    if (status === "active") {
+      if (activeFiles.has(repoPath)) fail(`Active rule file is registered more than once: ${repoPath}`);
+      if (!reader.exists(repoPath)) fail(`Missing active rule file for ${namespace}: ${repoPath}`);
+      activeFiles.add(repoPath);
     }
-
-    namespaces.set(namespace, { status, file, trigger, absoluteFile });
+    namespaces.set(namespace, { status, file, trigger, repoPath });
   }
 
   const core = namespaces.get("CORE");
   if (!core) fail("Missing required CORE namespace");
   if (core.status !== "active") fail("CORE namespace must be active");
-  if (core.file !== "always/constraints.md") {
-    fail("CORE namespace must use always/constraints.md");
-  }
-
-  return namespaces;
+  if (core.file !== "always/constraints.md") fail("CORE namespace must use always/constraints.md");
+  return { content, namespaces };
 }
 
 function splitRuleId(id) {
@@ -147,38 +233,80 @@ function splitRuleId(id) {
   return id.slice(0, id.indexOf("-"));
 }
 
-async function findRuleInFile(filePath, id) {
-  const content = await readFile(filePath, "utf8");
-  const lines = content.split(/\r?\n/);
-  const matches = [];
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const match = lines[i].match(RULE_HEADING_RE);
-    if (match?.[1] === id) matches.push(i);
-  }
-
-  if (matches.length > 1) fail(`Duplicate rule ID ${id} in ${filePath}`);
-  if (matches.length === 0) return null;
-
-  const start = matches[0];
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i += 1) {
-    if (RULE_HEADING_RE.test(lines[i])) {
-      end = i;
-      break;
-    }
-  }
-
-  return {
-    title: lines[start].replace(/^###\s+[A-Z][A-Z0-9]*-[0-9]{3}\s+/, "").trim(),
-    markdown: lines.slice(start, end).join("\n").trimEnd(),
-  };
-}
-
 function parseField(markdown, fieldName) {
   const escaped = fieldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = markdown.match(new RegExp(`^- ${escaped}：(.+)$`, "m"));
   return match?.[1]?.trim() ?? null;
+}
+
+function parseList(markdown, fieldName, id) {
+  const lines = markdown.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === `- ${fieldName}：`);
+  if (start === -1) fail(`Missing ${fieldName} field for active rule: ${id}`);
+  const items = [];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const match = lines[i].match(/^\s{2}-\s+(.+?)\s*$/);
+    if (match) {
+      items.push(match[1]);
+      continue;
+    }
+    if (/^-\s/.test(lines[i]) || RULE_HEADING_RE.test(lines[i])) break;
+  }
+  if (items.length === 0) fail(`Missing ${fieldName} items for active rule: ${id}`);
+}
+
+function parseActiveRuleFile(content, registration) {
+  const lines = content.split(/\r?\n/);
+  const headingIndexes = [];
+  lines.forEach((line, index) => {
+    const match = line.match(RULE_HEADING_RE);
+    if (match) headingIndexes.push({ index, match });
+  });
+
+  const rules = [];
+  headingIndexes.forEach(({ index, match }, headingIndex) => {
+    const id = match[1];
+    if (splitRuleId(id) !== registration.namespace) {
+      fail(`Active rule ${id} does not match namespace ${registration.namespace}`);
+    }
+    const end = headingIndexes[headingIndex + 1]?.index ?? lines.length;
+    const markdown = lines.slice(index, end).join("\n").trimEnd();
+    const ruleLevel = parseField(markdown, "级别");
+    const appliesTo = parseField(markdown, "生效条件");
+    const ruleText = parseField(markdown, "规则");
+    if (!ruleLevel) fail(`Missing 级别 field for active rule: ${id}`);
+    if (!RULE_LEVELS.has(ruleLevel)) fail(`Invalid rule level for ${id}: ${ruleLevel}`);
+    if (!appliesTo) fail(`Missing 生效条件 field for active rule: ${id}`);
+    if (!ruleText) fail(`Missing 规则 field for active rule: ${id}`);
+    parseList(markdown, "证据要求", id);
+    parseList(markdown, "失败条件", id);
+    parseList(markdown, "无法验证条件", id);
+    rules.push({
+      id,
+      title: match[2].trim(),
+      ruleLevel,
+      appliesTo,
+      markdown,
+      sourceFile: registration.repoPath,
+      trigger: registration.trigger,
+    });
+  });
+  return rules;
+}
+
+async function parseActiveRules(reader, namespaces) {
+  const active = new Map();
+  const files = [];
+  for (const [namespace, registration] of namespaces) {
+    if (registration.status !== "active") continue;
+    const content = await reader.read(registration.repoPath);
+    files.push({ path: registration.repoPath, content });
+    for (const rule of parseActiveRuleFile(content, { ...registration, namespace })) {
+      if (active.has(rule.id)) fail(`Duplicate active rule ID: ${rule.id}`);
+      active.set(rule.id, rule);
+    }
+  }
+  return { active, files };
 }
 
 function normalizeReplacement(value) {
@@ -189,23 +317,18 @@ function normalizeReplacement(value) {
     .filter(Boolean);
 }
 
-async function parseRetiredRules(rulesRoot, namespaces) {
-  const retiredPath = path.join(rulesRoot, "retired.md");
+async function parseRetiredRules(reader, namespaces) {
   const retired = new Map();
-  if (!existsSync(retiredPath)) return retired;
-
-  const content = await readFile(retiredPath, "utf8");
+  if (!reader.exists(RETIRED_PATH)) return retired;
+  const content = await reader.read(RETIRED_PATH);
   const lines = content.split(/\r?\n/);
 
   for (let i = 0; i < lines.length; i += 1) {
     const match = lines[i].match(RULE_HEADING_RE);
     if (!match) continue;
-
     const id = match[1];
     const namespace = splitRuleId(id);
-    if (!namespaces.has(namespace)) {
-      fail(`Retired rule namespace is not registered: ${id}`);
-    }
+    if (!namespaces.has(namespace)) fail(`Retired rule namespace is not registered: ${id}`);
     if (retired.has(id)) fail(`Duplicate retired rule ID: ${id}`);
 
     let end = lines.length;
@@ -215,26 +338,17 @@ async function parseRetiredRules(rulesRoot, namespaces) {
         break;
       }
     }
-
     const markdown = lines.slice(i, end).join("\n").trimEnd();
     const replacementText = parseField(markdown, "替代");
     const reason = parseField(markdown, "原因");
     if (!replacementText) fail(`Missing 替代 field for retired rule: ${id}`);
     if (!reason) fail(`Missing 原因 field for retired rule: ${id}`);
-
     const replacements = normalizeReplacement(replacementText);
     for (const replacement of replacements) {
       if (!ID_RE.test(replacement)) fail(`Invalid replacement ID for ${id}: ${replacement}`);
     }
-
-    retired.set(id, {
-      id,
-      title: match[2].trim(),
-      replacements,
-      reason,
-    });
+    retired.set(id, { id, title: match[2].trim(), replacements, reason });
   }
-
   return retired;
 }
 
@@ -249,37 +363,56 @@ function formatRetired(rule) {
   ].join("\n");
 }
 
-const { root, ids } = parseArgs(process.argv.slice(2));
+function contentHash(content) {
+  return `sha256:${crypto.createHash("sha256").update(content).digest("hex")}`;
+}
+
+const { root, commit, catalog, ids } = parseArgs(process.argv.slice(2));
 const duplicate = ids.find((id, index) => ids.indexOf(id) !== index);
 if (duplicate) fail(`Duplicate requested rule ID: ${duplicate}`);
 
-const rulesRoot = path.join(root, ".agents", "rules");
-const namespaces = await parseIndex(rulesRoot);
-const retired = await parseRetiredRules(rulesRoot, namespaces);
-const outputs = [];
-
-for (const id of ids) {
-  const namespace = splitRuleId(id);
-  const registration = namespaces.get(namespace);
-  if (!registration) fail(`Namespace is not registered for rule ID: ${id}`);
-
-  const retiredRule = retired.get(id);
-  const activeRule =
-    registration.status === "active"
-      ? await findRuleInFile(registration.absoluteFile, id)
-      : null;
-
-  if (activeRule && retiredRule) fail(`Rule ID is both active and retired: ${id}`);
-  if (activeRule) {
-    outputs.push(activeRule.markdown);
-    continue;
-  }
-  if (retiredRule) {
-    outputs.push(formatRetired(retiredRule));
-    continue;
-  }
-
-  fail(`Rule not found: ${id}`);
+const reader = createReader(root, commit);
+const { content: indexContent, namespaces } = await parseIndex(reader);
+const { active, files } = await parseActiveRules(reader, namespaces);
+const retired = await parseRetiredRules(reader, namespaces);
+for (const id of active.keys()) {
+  if (retired.has(id)) fail(`Rule ID is both active and retired: ${id}`);
 }
 
-console.log(outputs.join("\n\n"));
+if (catalog) {
+  const output = {
+    source: {
+      ...reader.source,
+      indexHash: contentHash(indexContent),
+      files: files
+        .map(({ path: filePath, content }) => ({ path: filePath, contentHash: contentHash(content) }))
+        .sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0),
+    },
+    rules: [...active.values()]
+      .sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
+      .map((rule) => ({
+        ruleRef: rule.id,
+        title: rule.title,
+        ruleLevel: rule.ruleLevel,
+        trigger: rule.trigger,
+        appliesTo: rule.appliesTo,
+        sourceFile: rule.sourceFile,
+      })),
+  };
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  process.exit(0);
+}
+
+const outputs = [];
+for (const id of ids) {
+  const namespace = splitRuleId(id);
+  if (!namespaces.has(namespace)) fail(`Namespace is not registered for rule ID: ${id}`);
+  if (active.has(id)) {
+    outputs.push(active.get(id).markdown);
+  } else if (retired.has(id)) {
+    outputs.push(formatRetired(retired.get(id)));
+  } else {
+    fail(`Rule not found: ${id}`);
+  }
+}
+process.stdout.write(`${outputs.join("\n\n")}\n`);
