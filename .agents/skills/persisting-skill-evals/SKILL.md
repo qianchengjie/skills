@@ -1,6 +1,8 @@
 ---
 name: persisting-skill-evals
 description: 当 writing-skills 已产生稳定的 Skill 行为用例，并明确需要在仓库中长期复跑、保留回归边界或比较版本时使用。
+metadata:
+  internal: true
 ---
 
 # Persisting Skill Evals

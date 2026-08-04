@@ -13,7 +13,6 @@ skills/
   sliced-dev/
 scripts/
   validate-all.sh
-  install.sh
 ```
 
 ## 验证
@@ -22,16 +21,10 @@ scripts/
 ./scripts/validate-all.sh
 ```
 
-## 安装到本机 Codex
+## 安装
 
 ```bash
-./scripts/install.sh
+npx skills@1.5.20 add qianchengjie/skills --global
 ```
 
-安装脚本会把 `skills/*` 同步到 `~/.agents/skills`，并覆盖本机同名 skill。
-
-未克隆仓库且 GitHub 仓库可访问时：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/qianchengjie/skills/master/scripts/install.sh | sh
-```
+可在 [skills.sh](https://skills.sh/qianchengjie/skills) 查看本仓库 skills。
