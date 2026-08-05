@@ -363,17 +363,9 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs review-prompt dev-plans/<date-s
 
 reviewer subagent 调用模板和权限边界见 [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md)。
 
-general reviewer 三项 verdict 固定为：
-
-- `需求符合性`：当前 diff 是否满足本片 `任务内容` / 验收。
-- `切片边界 / 交接一致性`：是否遵守全局约束、上下文预检、非目标、禁止修改和切片交接。
-- `代码质量 / AI 污染检查`：是否覆盖 maintainability、test quality、unnecessary complexity、project style consistency、performance footguns、error handling consistency，以及无领域语义 helper、无证据 null / fallback、新同义词、主流程切碎、过早抽象或吞非法状态。
-
-AI Review 结论表必须使用 `Verdict | Status | Severity | Evidence | Note` 五列格式。最终写回四个 verdict：general reviewer 的三项，加 controller 根据 `项目规则审查` 预检和 rule-reviewer fixed summary 写入的 `项目规则审查`。前三项 Evidence 必须各自且只引用同一个当前 general review A*；第四项填项目规则审查 A* 或固定不适用标记（`N/A` / `NA` / `not applicable` / `不适用`）。自然语言判断说明写 Note。`required` 时同节还要有唯一 `- 项目规则审查 runId：<runId>`。脚本校验固定 verdict、各 verdict 允许的 Status、Status / Severity 固定组合和 Evidence 非空；`close-check` 还检查新格式 package 的 general review A* 与当前 package SHA-256、模式和基线绑定，并回源重验选择的真实 rules-review run。
+general reviewer 输出 [PLAN-FILE.md 的「AI Review 结论」](PLAN-FILE.md#ai-review-结论)定义的前三项 verdict，controller 再按同一节写入第四项 `项目规则审查`。固定名称、语义、五列表格、`Status` / `Severity` 枚举及组合和 Evidence 规则只在该节维护；当前 `review-prompt` 是 reviewer 的直接运行时契约。`required` 时同节还要有唯一 `- 项目规则审查 runId：<runId>`。脚本校验结构化协议；`close-check` 还检查新格式 package 的 general review A* 与当前 package SHA-256、模式和基线绑定，并回源重验选择的真实 rules-review run。
 
 项目规则语义审查必须在代码 commit 后执行。首轮 `pre-commit-check` 要求 `HEAD == baseCommit`，返修轮要求 `HEAD == previousHeadCommit`；controller 创建普通单父 commit 后用 `record-commit` 固定范围，再以 rules-review `--target-commit <headCommit>` 自动精确绑定，不做后置绑定。无代码轮不创建空 commit，Review Range 保持 `previousHeadCommit == headCommit`。
-
-general reviewer 三项 `Status` 只允许 `passed` / `failed` / `cannot-verify-from-package`；第四项 `项目规则审查` 仅在上下文预检为 `not-applicable` 时额外允许 `not-applicable`。`Severity` 只允许 `critical` / `major` / `minor` / `not-applicable`。`passed` / `not-applicable` 只能搭配 `Severity=not-applicable`；`failed` / `cannot-verify-from-package` 只能搭配 `critical` / `major` / `minor`。
 
 `cannot-verify-from-package` 必须由 controller 补证：补测试结果、代码证据、调用链、D/A 引用或重新生成 package；不能靠口头解释改成 passed。补证后仍无法判断时，写 `AI Review：blocked（原因）` 或转 `D* open`。
 
@@ -381,7 +373,7 @@ general reviewer 三项 `Status` 只允许 `passed` / `failed` / `cannot-verify-
 
 AI Review 结果写回：
 
-- 无问题：`AI Review：passed`，并写 `#### AI Review 结论`；前三项为 `passed + Severity=not-applicable`，第四项按项目规则审查预检写为 `passed + Severity=not-applicable` 或 `not-applicable + Severity=not-applicable`。
+- 无问题：按 [PLAN-FILE.md 的「AI Review 结论」](PLAN-FILE.md#ai-review-结论)写 `AI Review：passed` 和完整结论表。
 - 有问题且可修：`AI Review：issues（<摘要>）`，进入有限修复循环。
 - 无法判断 / 需要人判：`AI Review：blocked（<原因>）`。
 - A 类低风险且用户允许跳过：`AI Review：skipped（<原因>）`。

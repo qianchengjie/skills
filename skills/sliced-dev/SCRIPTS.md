@@ -275,25 +275,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs review-prompt dev-plans/YYYY-MM
 
 作用：生成一段窄 AI Review prompt。prompt 给 reviewer package 路径、`reviewType / previousReview / baseCommit / previousHeadCommit / headCommit` 和 `reviewPackageHash`。reviewer final summary 必须原样返回全部绑定字段。
 
-`full` 的三 verdict 固定为：
-
-- `需求符合性`
-- `切片边界 / 交接一致性`
-- `代码质量 / AI 污染检查`
-
-每个 verdict 的 `Status` 只允许：
-
-- `passed`
-- `failed`
-- `cannot-verify-from-package`
-- `not-applicable`
-
-每个 verdict 的 `Severity` 只允许：
-
-- `critical`
-- `major`
-- `minor`
-- `not-applicable`
+`full` 输出 [PLAN-FILE.md 的「AI Review 结论」](PLAN-FILE.md#ai-review-结论)定义的前三项 General Review verdict。固定名称、`Status` / `Severity` 枚举及组合只在该节维护；`review-prompt` 从运行时状态枚举生成直接交给 reviewer 的约束，本文件不重复枚举。
 
 `repair` 不输出三 verdict，只输出直接前序每个 finding 的 `addressed / not_addressed` 和机械派生后的完整 `openFindings`。
 
@@ -425,13 +407,12 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不能是 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规则审查` 必须写明确状态，`禁止修改` 可显式写 `无`。
 - 若切片存在 `#### 切片交接`，必须包含 `输入`、`输出`，且每项必须显式写 `无` 或至少一条非占位内容；`无` 不得和真实条目混写。
 - `依赖` 不能声明当前切片自身；普通 `依赖：S*` 不强制触发 `#### 切片交接`。
-- 只要切片头部写 `AI Review：passed`，就必须有 `#### AI Review 结论`，且包含四个固定 verdict：`需求符合性`、`切片边界 / 交接一致性`、`代码质量 / AI 污染检查`、`项目规则审查`。
+- 只要切片头部写 `AI Review：passed`，就必须有 `#### AI Review 结论`，且包含 [PLAN-FILE.md 的「AI Review 结论」](PLAN-FILE.md#ai-review-结论)定义的完整四 verdict。
 - `项目规则审查：required` 且切片写 `AI Review：passed` / `状态：done` 时，`#### AI Review 结论` 必须且只能有一个安全的 `项目规则审查 runId`；`not-applicable` 时不得出现该选择器。
 - `#### AI Review 结论` 必须使用 `Verdict | Status | Severity | Evidence | Note` 五列格式；旧四列格式会被判为无效表格。
 - `AI Review：issues` / `AI Review：blocked` 必须有非占位头部原因，或在 `#### AI Review 结论` 中有 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位。
-- 前三个 verdict 的 `Status` 只允许 `passed` / `failed` / `cannot-verify-from-package`；第四项 `项目规则审查` 在预检不适用时额外允许 `not-applicable`；整任务五项额外允许 `blocked`，但不允许 `not-applicable`。`Severity` 只允许 `critical` / `major` / `minor` / `not-applicable`；`passed` / `not-applicable` 只能搭配 `Severity=not-applicable`，其余 Status 只能搭配 `critical` / `major` / `minor`。
+- AI Review verdict 的固定名称、`Status` / `Severity` 枚举、组合和完成态阻塞条件以 [PLAN-FILE.md 的「AI Review 结论」](PLAN-FILE.md#ai-review-结论)为唯一文档真源；本命令直接按该结构校验。整任务五项额外允许 `blocked`，但不允许 `not-applicable`。
 - `项目规则审查：not-applicable` 不得列出适用规则 ID；有适用规则但 `rules-review` 不可用时必须写 `blocked`，并把切片头部 `上下文预检` 同步写为 `blocked`。
-- `AI Review：passed` 或 `状态：done` 的切片中，前三项为 `not-applicable`、任一项违反 Status / Severity 固定组合，或任一 verdict 为 `failed`、`cannot-verify-from-package`、`Severity=critical` 都非法。
 - `状态：done` 的切片必须满足 [PLAN-FILE.md](PLAN-FILE.md) 的完成态约束；`风险：B/C` 不允许三项机器门禁为 `skipped`；`执行：需确认` / `风险：C` 必须有 `用户验收：passed/skipped`。
 - 依赖字段中出现的 `S*` 必须存在。
 - 关联项只能包含 `D*` 和 `A*`，ID 不能重复。

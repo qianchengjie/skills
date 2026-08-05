@@ -350,6 +350,8 @@ Evidence 字段规则：
 
 `#### AI Review 结论` 是 AI Review 的结构化状态真源。执行前可省略；general reviewer 和必要的 rule-reviewer 都完成后，controller 一次性写回。`AI Review` 头部字段仍是真源状态：有可修问题写 `issues`，无法判断写 `blocked`，四项 verdict 收口后才写 `passed`；一旦头部写 `AI Review：passed`，本表必须存在且四项 verdict 完整。`AI Review：issues` / `AI Review：blocked` 必须在头部写非占位摘要 / 原因；若头部未写原因，本表必须提供对应 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位的说明。general reviewer 每轮返回后，controller 新建当前 `done` A* 保存 `reviewPackageHash`、三 verdict 和 Findings，再让 plan 前三个 verdict 的 Evidence 统一引用该 A*；A* 只是审计证据，不取代本表真源。自然语言说明写 Note。
 
+本节是固定 verdict 名称、`Status` / `Severity` 枚举及组合的唯一文档真源；其它 sliced-dev 文档只说明各自调用方式并引用本节，不重复维护这些枚举。运行时 `review-prompt` 和校验器共同读取 `dev-plan.mjs` 中的状态枚举常量。
+
 General Review 固定为三阶段累计协议：
 
 - 首次 `full` 审查 `baseCommit..headCommit`，完整给出三个 verdict 和当前完整 `openFindings`。若没有进入 repair，它同时是最终 full。

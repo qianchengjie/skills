@@ -6100,8 +6100,13 @@ async function buildReviewPrompt(planDir, sliceId) {
 - previousHeadCommit: ${stage.context.previousHeadCommit}
 - headCommit: ${stage.context.headCommit}
 - reviewPackageHash: ${reviewPackageHash}`;
+  const generalVerdictStatuses = [...GENERAL_REVIEW_VERDICT_STATUSES].join(' / ');
+  const reviewVerdictSeverities = [...REVIEW_VERDICT_SEVERITIES].join(' / ');
   const outputContract = stage.context.reviewType === 'full'
     ? `完整评估三个 verdict，名称必须完全一致：需求符合性、切片边界 / 交接一致性、${CODE_QUALITY_REVIEW_VERDICT}。
+
+前三项 Status 只允许 ${generalVerdictStatuses}，不允许 not-applicable；Severity 只允许 ${reviewVerdictSeverities}。
+passed 只能搭配 Severity=not-applicable；failed / cannot-verify-from-package 只能搭配 Severity=critical / major / minor。
 
 | Verdict | Status | Severity | Evidence | Note |
 | --- | --- | --- | --- | --- |

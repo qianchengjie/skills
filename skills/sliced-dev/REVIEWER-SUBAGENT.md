@@ -94,17 +94,7 @@ repair 不输出三个 verdict；每个旧 finding 输出 addressed/not_addresse
 final summary 原样返回全部绑定字段；hash 只绑定输入，不代表审查通过。
 ```
 
-full 的 verdict 表：
-
-```markdown
-| Verdict | Status | Severity | Evidence | Note |
-| --- | --- | --- | --- | --- |
-| 需求符合性 | ... | ... | ... | ... |
-| 切片边界 / 交接一致性 | ... | ... | ... | ... |
-| 代码质量 / AI 污染检查 | ... | ... | ... | ... |
-```
-
-`passed` 只能搭配 `not-applicable`；`failed / cannot-verify-from-package` 只能搭配 `critical / major / minor`。
+full 的 verdict 输出结构和 `Status` / `Severity` 约束直接使用本轮 `review-prompt`；唯一文档定义见 [PLAN-FILE.md 的「AI Review 结论」](PLAN-FILE.md#ai-review-结论)，本文件不重复枚举。
 
 repair 的结果表：
 

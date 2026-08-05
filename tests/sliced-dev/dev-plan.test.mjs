@@ -5125,6 +5125,7 @@ test('CLI review-prompt only points reviewer to review-package path', async () =
     assert.match(stdout, /- reviewPackageHash: sha256:[0-9a-f]{64}/);
     assert.match(stdout, /final summary 必须原样返回上述全部绑定字段/);
     assert.match(stdout, /\| Verdict \| Status \| Severity \| Evidence \| Note \|/);
+    assert.match(stdout, /前三项 Status 只允许 passed \/ failed \/ cannot-verify-from-package，不允许 not-applicable/);
     assert.match(stdout, /#### openFindings/);
     assert.match(stdout, /cannot-verify-from-package/);
     assert.match(stdout, /防操控/);
