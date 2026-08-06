@@ -1191,6 +1191,8 @@ async function materializeRulesReviewV8RunFixture({
 - 级别：MUST
 - 生效条件：每次任务
 - 规则：遵守基础约束。
+- 通过条件：
+  - 基础约束已经满足。
 - 证据要求：
   - 记录审查证据。
 - 失败条件：
@@ -1205,6 +1207,8 @@ async function materializeRulesReviewV8RunFixture({
 - 级别：SHOULD
 - 生效条件：修改类型时
 - 规则：遵守类型约束。
+- 通过条件：
+  - 类型约束已经满足。
 - 证据要求：
   - 记录审查证据。
 - 失败条件：
@@ -1219,6 +1223,8 @@ async function materializeRulesReviewV8RunFixture({
 - 级别：SHOULD
 - 生效条件：修改界面时
 - 规则：遵守界面约束。
+- 通过条件：
+  - 界面约束已经满足。
 - 证据要求：
   - 记录审查证据。
 - 失败条件：

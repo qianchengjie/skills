@@ -278,6 +278,7 @@ function parseActiveRuleFile(content, registration) {
     if (!RULE_LEVELS.has(ruleLevel)) fail(`Invalid rule level for ${id}: ${ruleLevel}`);
     if (!appliesTo) fail(`Missing 生效条件 field for active rule: ${id}`);
     if (!ruleText) fail(`Missing 规则 field for active rule: ${id}`);
+    parseList(markdown, "通过条件", id);
     parseList(markdown, "证据要求", id);
     parseList(markdown, "失败条件", id);
     parseList(markdown, "无法验证条件", id);

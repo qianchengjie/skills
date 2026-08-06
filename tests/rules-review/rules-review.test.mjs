@@ -81,6 +81,8 @@ function testRuleBlock(ruleRef) {
     "- 级别：MUST",
     "- 生效条件：每次任务",
     "- 规则：检查当前变更。",
+    "- 通过条件：",
+    "  - 当前变更已经按规则完成检查。",
     "- 证据要求：",
     "  - 记录检查证据。",
     "- 失败条件：",
@@ -175,6 +177,8 @@ function createConstructionCase(t, {
     "- 级别：MUST",
     "- 生效条件：每次任务",
     "- 规则：检查主文件。",
+    "- 通过条件：",
+    "  - 主文件已经完成检查。",
     "- 证据要求：",
     "  - 记录主文件。",
     "- 失败条件：",
@@ -186,6 +190,8 @@ function createConstructionCase(t, {
     "- 级别：SHOULD",
     "- 生效条件：存在上下文候选时",
     "- 规则：检查上下文。",
+    "- 通过条件：",
+    "  - 上下文候选已经完成检查。",
     "- 证据要求：",
     "  - 记录上下文。",
     "- 失败条件：",
@@ -1057,8 +1063,72 @@ test("construct-dispatch 对 2×2 紧凑输入做完整确定性投影", async (
     reviewBatchId: "B001",
     reviewItemIds: ["RI001", "RI002", "RI003"],
   }]);
+  assert.match(
+    dispatch.ruleSnapshot.files.find((entry) =>
+      entry.path === ".agents/rules/always/constraints.md"
+    ).content,
+    /- 通过条件：/,
+  );
+  assert.equal("passConditions" in dispatch.ruleSet.ruleSources[0], false);
   const validation = await runJson(["--mode", "dispatch", "--input", fixture.outputPath], fixture.root);
   assert.equal(validation.ok, true);
+});
+
+test("construct-dispatch 要求通过条件使用非空两空格缩进列表", async (t) => {
+  const cases = [
+    {
+      name: "missing",
+      mutate(content) {
+        return content.replace(
+          "- 通过条件：\n  - 主文件已经完成检查。\n",
+          "",
+        );
+      },
+      expected: /rule list is missing: 通过条件/,
+    },
+    {
+      name: "empty",
+      mutate(content) {
+        return content.replace(
+          "- 通过条件：\n  - 主文件已经完成检查。\n",
+          "- 通过条件：\n",
+        );
+      },
+      expected: /rule list is empty: 通过条件/,
+    },
+    {
+      name: "misindented",
+      mutate(content) {
+        return content.replace(
+          "  - 主文件已经完成检查。",
+          "    - 主文件已经完成检查。",
+        );
+      },
+      expected: /rule list is empty: 通过条件/,
+    },
+  ];
+
+  for (const { name, mutate, expected } of cases) {
+    const fixture = createConstructionCase(t, {
+      runId: `pass-conditions-${name}`,
+      productionInput: true,
+      workspaceRules: true,
+    });
+    const invalidRules = mutate(fixture.rulesContent);
+    fs.writeFileSync(
+      path.join(fixture.root, ".agents/rules/always/constraints.md"),
+      invalidRules,
+    );
+    fixture.input.catalogSource.files[0].contentHash = contentHash(invalidRules);
+    writeJson(fixture.inputPath, fixture.input);
+
+    await expectFailure([
+      "--mode", "construct-dispatch",
+      "--input", fixture.inputPath,
+      "--output", fixture.output,
+    ], expected, fixture.root);
+    assert.equal(fs.existsSync(fixture.outputPath), false);
+  }
 });
 
 test("空 TARGET 即使 selected 规则声明 requiredContext 也不生成审查工件", async (t) => {

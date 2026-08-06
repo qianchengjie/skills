@@ -20,13 +20,15 @@ git show <targetTree>:<path>
 
 必须逐项处理 task 中的全部 reviewItems，发现一个问题后也继续检查剩余项。语义相连的 targets 仍分别返回 result。规则只读取 task 的 `ruleSnapshot`，即使 `ruleInputSource.kind = workspace` 也不得回读当前同名规则文件。不得读取当前同名代码文件、真实 index 或其它 TARGET 的 run 来替代封印 blob。Git object 缺失、tree identity 不一致或任务内容不足时返回 `cannot_verify`，并通知 controller 将 run 置为 blocked；不得猜测内容。
 
+按 `ruleRef` 从 `ruleSnapshot` 读取完整规则块。`规则` 是语义真源，全部 `通过条件` 必须忠实覆盖正文，`失败条件` 只是非穷尽反证。`passed` 的 evidence 必须证明全部通过条件，failureChecks 不能替代正向证明；finding 可在现有 `rootCause` 或 evidence 文本中用对应条件描述尚未达到的可观察修复终点。通过条件缺失、遗漏、扩大或改变规则正文时停止当前 run，并通知 controller 将 run 置为 blocked、报告规则定义缺陷和请求用户明确授权；授权前任何 agent 都不得修改 `.agents/rules/`，也不得归责于被审查对象。获批后由 controller 按 `rule-steward` 维护规则并为同一 TARGET 创建 fresh run。通过条件不得扩大 `生效条件`；规则级别只影响处置，不改变是否满足的事实。
+
 ## 输出
 
 输出必须是符合 shard schema 的 strict JSON：
 
 - `runId`、`reviewBatchId` 与 task 一致，`targetTree` 等于 task 的 `reviewRange.targetTree`，`taskHash` 原样回显 task 的机械身份。
 - 每个 task reviewItem 恰好返回一个 result。
-- `passed` 包含 evidence 与 failureChecks。
+- `passed` 包含能证明全部通过条件的 evidence 与 failureChecks。
 - `finding` 包含 origin、evidence 与非空 `rootCause`，不含 findingId。
 - `observation` 包含 origin，以及 reason 或 evidence。
 - 无法判断时返回 `cannot_verify`；shard result 不支持 `not_applicable`。

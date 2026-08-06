@@ -69,6 +69,8 @@ const files = [
 - 级别：MUST | SHOULD | ADVISORY
 - 生效条件：<什么时候适用>
 - 规则：<一句话写清楚必须做什么 / 禁止做什么>
+- 通过条件：
+  - <规则满足时必须达到的可观察、实现无关结果>
 - 证据要求：
   - <规则适用时必须留下的证据；载体由消费 workflow 指定，可以是 final report、review package、handoff、提交说明或其他可复核记录>
 - 失败条件：

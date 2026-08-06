@@ -205,7 +205,7 @@ catalog 只保证完整发现并投影标题、级别、namespace trigger、生�
 - `workspace`：读取当前文件系统，包含未提交规则内容。
 - `commit`：只读取 `ruleInputSource.commit` 对应 tree；内容不足时 blocked，不从工作区或代码 TARGET 补充。
 
-controller 据此形成稳定 `ruleRef`、来源文件和规则分区；`construct-dispatch` 从同一次规则快照生成 `ruleSet` 与 `ruleSnapshot`，并用 `sourceFile / sourceHash` 绑定 `ruleSet.ruleSources`。`summary / ruleText` 等 reviewer 投影不得反向覆盖 snapshot。
+controller 据此形成稳定 `ruleRef`、来源文件和规则分区；`construct-dispatch` 从同一次规则快照生成 `ruleSet` 与 `ruleSnapshot`，并用 `sourceFile / sourceHash` 绑定 `ruleSet.ruleSources`。`summary / ruleText` 等 reviewer 投影不得反向覆盖 snapshot。active rule 缺少非空、两空格缩进的 `通过条件` 列表时构造入口 fail closed，不兼容旧格式规则来源；需要继续审查时创建 fresh run。
 
 规则集合必须是完整互斥分区：
 
@@ -274,12 +274,16 @@ ruleRef x targetId = reviewItem
 
 reviewer 必须按 task 中的全部 reviewItems 分别完成审查并返回结果，不能在发现首个问题后停止，也不能依赖主线程历史补齐规则或目标。语义相连的 targets 仍是独立 reviewItems；审查代码只能使用固定 tree diff/blob；规则正文只以 task 与 `ruleSnapshot` 的封印内容为准，不因 `ruleInputSource = workspace` 回读当前工作区。
 
+reviewer 按 `ruleRef` 从 `ruleSnapshot` 中读取完整规则块。`规则` 是语义真源；全部 `通过条件` 必须忠实覆盖该正文，`失败条件` 只是非穷尽反证。若通过条件遗漏、扩大或改变规则正文，先停止当前 run 并报告规则定义缺陷；只有取得用户对规则维护的明确授权后，才能按 `rule-steward` 维护规则并针对同一 TARGET 创建 fresh run。授权前不得修改 `.agents/rules/`，也不得把规则定义缺陷归责于被审查对象。`生效条件` 仍独立决定适用范围，通过条件不得扩大适用性；规则级别只影响处置，不改变是否满足的事实。
+
 结果要求：
 
-- `passed`：包含 evidence 与 failureChecks。
+- `passed`：包含 evidence 与 failureChecks；evidence 必须足以证明全部通过条件，failureChecks 仍只记录失败条件检查，不能替代正向证明。
 - `finding`：包含 origin、evidence 和非空 `rootCause`；MUST finding 为 must_fix。
 - `observation`：包含 origin，以及 reason 或 evidence。
 - `cannot_verify`：包含 reason 或 evidence。
+
+finding 可以在现有 `rootCause` 或 evidence 文本中使用对应通过条件描述尚未达到的可观察修复终点，但不得引入规则正文之外的要求或新增结果字段。
 
 reviewer 若能确认某个 reviewItem 实际不适用，即判定上游适用性输入错误：不得用 `passed / finding / observation / cannot_verify` 中的任何状态代替 `not_applicable`，也不得写合法 shard。reviewer 必须停止当前 batch 并通知 controller；controller 作废当前 run，不聚合、不用于门禁，再针对同一 TARGET 以修正后的适用性输入创建 fresh run。
 
@@ -343,6 +347,7 @@ validator 检查：
 - 完整 commit 文件范围和规则声明分区闭合。
 - input snapshot 的 mode、hash、内容与 `targetTree` 一致。
 - construction v2 的 `catalogSource` 与实际 index、全部 active 文件路径及逐文件 hash 一致，active/retired ID 无交集，`candidateRuleRefs` 等于全部 active IDs。
+- active rule 的 `通过条件` 字段存在，且是非空、两空格缩进的列表。
 - `ruleInputSource` 身份、dispatch rule snapshot 字节/hash、完整 active 文件与规则投影闭合；commit 来源额外与对应 commit tree 一致。
 - task 投影、batch 引用和当前结果唯一覆盖。
 - finalReview、Markdown 与当前结果的机械派生一致。
@@ -350,9 +355,9 @@ validator 检查：
 validator 明确不检查：
 
 - BASE 选择是否符合业务意图。
-- catalog 字段、规则正文和规则投影的语义是否正确，适用性结论和 finding 是否正确。
+- catalog 字段、规则正文、通过条件和规则投影的语义是否正确，或通过条件是否完整、忠实且未扩大适用范围；适用性结论和 finding 是否正确。
 - 多个 finding results 是否确属同一根因，以及 `rootCause` 表述是否准确。
-- evidence 强度或可信度。
+- evidence 是否足以证明全部通过条件，以及 evidence 强度或可信度。
 - target、inputRefs 与 hunk 的业务归属。
 - review 是否足够深入。
 

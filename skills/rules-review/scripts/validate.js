@@ -747,9 +747,11 @@ function parseConstructionRuleFile(content, sourceFile, namespace) {
     const block = content.slice(heading.index, headings[index + 1] ? headings[index + 1].index : content.length);
     const ruleLevel = parseConstructionRuleField(block, '级别');
     if (!RULE_LEVELS.includes(ruleLevel)) throw new Error(`invalid rule level for ${ruleRef}`);
+    const passConditions = parseConstructionRuleList(block, '通过条件');
     const evidenceRequirements = parseConstructionRuleList(block, '证据要求');
     const failureConditions = parseConstructionRuleList(block, '失败条件');
     const unverifiableConditions = parseConstructionRuleList(block, '无法验证条件');
+    if (passConditions.length === 0) throw new Error(`rule list is empty: 通过条件 for ${ruleRef}`);
     if (evidenceRequirements.length === 0) throw new Error(`rule list is empty: 证据要求 for ${ruleRef}`);
     if (failureConditions.length === 0) throw new Error(`rule list is empty: 失败条件 for ${ruleRef}`);
     if (unverifiableConditions.length === 0) throw new Error(`rule list is empty: 无法验证条件 for ${ruleRef}`);

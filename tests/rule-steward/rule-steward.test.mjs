@@ -53,6 +53,10 @@ assert.match(
   await readFile(path.join(root, ".agents/rules/always/constraints.md"), "utf8"),
   /载体由消费 workflow 指定/,
 );
+assert.match(
+  await readFile(path.join(root, ".agents/rules/always/constraints.md"), "utf8"),
+  /- 通过条件：/,
+);
 
 await assertFails([initScript, "--root", root], /Refusing to overwrite existing file/);
 await assertFails([getScript, "--root", root, "CORE-001"], /Rule not found: CORE-001/);
@@ -158,6 +162,8 @@ await writeFile(
 - 级别：MUST
 - 生效条件：每次任务
 - 规则：不得修改任务范围外的无关代码。
+- 通过条件：
+  - 实际修改仅包含当前任务范围内的内容。
 - 证据要求：
   - 说明实际修改范围。
 - 失败条件：
@@ -169,6 +175,7 @@ await writeFile(
 
 const activeResult = await runNode([getScript, "--root", root, "CORE-001"]);
 assert.match(activeResult.stdout, /### CORE-001 不越界修改/);
+assert.match(activeResult.stdout, /- 通过条件：\n  - 实际修改仅包含当前任务范围内的内容。/);
 
 await mkdir(path.join(root, ".agents/rules/concerns"), { recursive: true });
 await writeFile(
@@ -180,6 +187,8 @@ await writeFile(
 - 级别：MUST
 - 生效条件：测试
 - 规则：不应被读取。
+- 通过条件：
+  - 未登记规则不进入 active 规则读取结果。
 - 证据要求：
   - 无
 - 失败条件：
@@ -240,6 +249,8 @@ const catalogCore = `# Constraints
 - 级别：SHOULD
 - 生效条件：修改多个文件时
 - 规则：只修改任务范围内的文件。
+- 通过条件：
+  - 实际改动只包含任务范围内的文件。
 - 证据要求：
   - 列出修改文件。
 - 失败条件：
@@ -252,6 +263,8 @@ const catalogCore = `# Constraints
 - 级别：MUST
 - 生效条件：每次任务
 - 规则：先读取项目约束。
+- 通过条件：
+  - 项目约束在执行任务前已读取。
 - 证据要求：
   - 引用约束。
 - 失败条件：
@@ -266,6 +279,8 @@ const catalogTesting = `# Testing
 - 级别：ADVISORY
 - 生效条件：修改测试代码时
 - 规则：运行相关定向测试。
+- 通过条件：
+  - 相关定向测试已通过明确入口执行并记录结果。
 - 证据要求：
   - 记录测试命令。
 - 失败条件：
@@ -390,6 +405,33 @@ const invalidCatalogCases = [
     index: catalogIndex,
     core: catalogCore.replace("- 级别：MUST", "- 级别：REQUIRED"),
     pattern: /Invalid rule level/,
+  },
+  {
+    name: "missing-pass-conditions",
+    index: catalogIndex,
+    core: catalogCore.replace(
+      "- 通过条件：\n  - 项目约束在执行任务前已读取。\n",
+      "",
+    ),
+    pattern: /Missing 通过条件 field/,
+  },
+  {
+    name: "empty-pass-conditions",
+    index: catalogIndex,
+    core: catalogCore.replace(
+      "- 通过条件：\n  - 项目约束在执行任务前已读取。\n",
+      "- 通过条件：\n",
+    ),
+    pattern: /Missing 通过条件 items/,
+  },
+  {
+    name: "misindented-pass-conditions",
+    index: catalogIndex,
+    core: catalogCore.replace(
+      "  - 项目约束在执行任务前已读取。",
+      "    - 项目约束在执行任务前已读取。",
+    ),
+    pattern: /Missing 通过条件 items/,
   },
   {
     name: "namespace-mismatch",
