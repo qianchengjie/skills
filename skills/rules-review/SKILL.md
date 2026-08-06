@@ -279,11 +279,11 @@ reviewer 按 `ruleRef` 从 `ruleSnapshot` 中读取完整规则块。`规则` �
 结果要求：
 
 - `passed`：包含 evidence 与 failureChecks；evidence 必须足以证明全部通过条件，failureChecks 仍只记录失败条件检查，不能替代正向证明。
-- `finding`：包含 origin、evidence 和非空 `rootCause`；MUST finding 为 must_fix。
+- `finding`：包含 origin、evidence 和非空 `rootCause`，并明确指出未满足的通过条件；MUST finding 为 must_fix。
 - `observation`：包含 origin，以及 reason 或 evidence。
 - `cannot_verify`：包含 reason 或 evidence。
 
-finding 可以在现有 `rootCause` 或 evidence 文本中使用对应通过条件描述尚未达到的可观察修复终点，但不得引入规则正文之外的要求或新增结果字段。
+finding 必须明确指出哪项通过条件未满足。`rootCause` 仍描述导致该条件未满足的失效不变量，并保持现有根因分组语义；evidence 只记录可定位的当前事实，可以说明该事实如何反证对应通过条件，但不得承载未来实现步骤或把修复方案当作证据。
 
 reviewer 若能确认某个 reviewItem 实际不适用，即判定上游适用性输入错误：不得用 `passed / finding / observation / cannot_verify` 中的任何状态代替 `not_applicable`，也不得写合法 shard。reviewer 必须停止当前 batch 并通知 controller；controller 作废当前 run，不聚合、不用于门禁，再针对同一 TARGET 以修正后的适用性输入创建 fresh run。
 
