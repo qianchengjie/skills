@@ -65,6 +65,20 @@ test('subagent 文档使用当前共享工作区契约', async () => {
   assert.doesNotMatch(contract, /只有原 reviewer 不可用|已有审查结论后只生成|只要已有一轮结论，后续修复复核必须是 `incremental`/);
 });
 
+test('项目规则闭包文档保持 selected 义务先消费契约', async () => {
+  const [skill, implementer, executionRules, planFile, scriptsDoc] = await Promise.all(
+    ['SKILL.md', 'IMPLEMENTER-SUBAGENT.md', 'EXECUTION-RULES.md', 'PLAN-FILE.md', 'SCRIPTS.md']
+      .map((name) => fs.readFile(new URL(`../../skills/sliced-dev/${name}`, import.meta.url), 'utf8')),
+  );
+
+  assert.match(skill, /控制器还必须读取 selected 规则，并把每条可执行义务纳入现有执行契约/);
+  assert.match(executionRules, /义务未写入、冲突未解决时保持 `pending` \/ `blocked`/);
+  assert.match(planFile, /`selectedRuleIds` 与 `notApplicable` 无内部重复、互斥、无 unknown、完整覆盖 actual catalog/);
+  assert.match(scriptsDoc, /get-rules\.mjs --root <repo> --catalog --optional-source/);
+  assert.match(scriptsDoc, /同一份 actual catalog 供所有 ready 切片复用/);
+  assert.match(implementer, /只包含 selectedRuleIds 和 `规则获取`/);
+});
+
 test('拷问展示明确区分整体拆分与当前切片', async () => {
   const [skill, executionRules] = await Promise.all(
     ['SKILL.md', 'EXECUTION-RULES.md']
@@ -200,7 +214,10 @@ async function writeValidExecutingPlan(planDir) {
   - rules-review：not-checked
   - 规则获取：不适用
   - 规则校验：skipped（已检查规则仓，本片无适用 rule ID）
-  - 适用规则：无
+  - selectedRuleIds：
+    - 无
+  - notApplicable：
+    - 无
 - 允许修改：
   - src/example.ts
   - test/example.test.ts
@@ -307,7 +324,10 @@ function createConsumerSliceBlock() {
   - rules-review：not-checked
   - 规则获取：不适用
   - 规则校验：skipped（已检查规则仓，本片无适用 rule ID）
-  - 适用规则：无
+  - selectedRuleIds：
+    - 无
+  - notApplicable：
+    - 无
 - 允许修改：
   - src/consumer.ts
 - 禁止修改：
@@ -524,6 +544,7 @@ function withFilledContextPreflight(plan) {
 
 function withRequiredProjectRuleReview(plan, {
   ruleIds = ['CORE-001', 'TYPE-001', 'UI-001'],
+  notApplicableRuleIds = [],
 } = {}) {
   const reasons = {
     'CORE-001': '当前切片修改核心流程。',
@@ -535,13 +556,18 @@ function withRequiredProjectRuleReview(plan, {
   - rules-review：not-checked
   - 规则获取：不适用
   - 规则校验：skipped（已检查规则仓，本片无适用 rule ID）
-  - 适用规则：无`, `- 项目规则审查:
+  - selectedRuleIds：
+    - 无
+  - notApplicable：
+    - 无`, `- 项目规则审查:
   - 状态：required
   - rules-review：available
   - 规则获取：node .agents/skills/rule-steward/scripts/get-rules.mjs ${ruleIds.join(' ')}
   - 规则校验：passed
-  - 适用规则：
-${ruleIds.map((ruleId) => `    - ${ruleId}：适用原因：${reasons[ruleId]}`).join('\n')}`);
+  - selectedRuleIds：
+${ruleIds.length > 0 ? ruleIds.map((ruleId) => `    - ${ruleId}：${reasons[ruleId] ?? '当前切片适用该规则。'}`).join('\n') : '    - 无'}
+  - notApplicable：
+${notApplicableRuleIds.length > 0 ? notApplicableRuleIds.map((ruleId) => `    - ${ruleId}：当前切片不涉及该规则约束的对象。`).join('\n') : '    - 无'}`);
 }
 
 function withZeroKnownDefectsClosure(plan) {
@@ -557,13 +583,18 @@ function withUnavailableProjectRuleReview(plan) {
   - rules-review：not-checked
   - 规则获取：不适用
   - 规则校验：skipped（已检查规则仓，本片无适用 rule ID）
-  - 适用规则：无`, `- 项目规则审查:
+  - selectedRuleIds：
+    - 无
+  - notApplicable：
+    - 无`, `- 项目规则审查:
   - 状态：blocked
   - rules-review：unavailable
   - 规则获取：node .agents/skills/rule-steward/scripts/get-rules.mjs CORE-001
   - 规则校验：skipped（rules-review unavailable）
-  - 适用规则：
-    - CORE-001：适用原因：当前切片修改核心流程。`);
+  - selectedRuleIds：
+    - CORE-001：当前切片修改核心流程。
+  - notApplicable：
+    - 无`);
 }
 
 function withPassedRequiredProjectRuleReviewVerdict(plan, {
@@ -609,6 +640,25 @@ function getScriptPath() {
 
 function runDevPlanCli(args) {
   return spawnSync('node', [getScriptPath(), ...args]);
+}
+
+async function runWithIsolatedRuleCatalogProvider(args, providerSource) {
+  const isolatedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'sliced-dev-rule-provider-'));
+  try {
+    const isolatedScript = path.join(isolatedRoot, 'sliced-dev', 'scripts', 'dev-plan.mjs');
+    const providerScript = path.join(isolatedRoot, 'rule-steward', 'scripts', 'get-rules.mjs');
+    await Promise.all([
+      fs.mkdir(path.dirname(isolatedScript), { recursive: true }),
+      fs.mkdir(path.dirname(providerScript), { recursive: true }),
+    ]);
+    await Promise.all([
+      fs.copyFile(getScriptPath(), isolatedScript),
+      fs.writeFile(providerScript, providerSource, 'utf8'),
+    ]);
+    return spawnSync('node', [await fs.realpath(isolatedScript), ...args]);
+  } finally {
+    await fs.rm(isolatedRoot, { recursive: true, force: true });
+  }
 }
 
 async function writeTaskBriefFixture(planDir, sliceId = 'S1') {
@@ -1158,17 +1208,7 @@ function initGitRepo() {
   execFileSync('git', ['config', 'user.name', 'Test User']);
 }
 
-async function materializeRulesReviewV8RunFixture({
-  hasCodeChange = true,
-  runId = 'run-pass-full-clean',
-} = {}) {
-  await prepareReviewableSliceDiffFixture();
-  await fs.writeFile('src/example.ts', 'export const value = 1;\n', 'utf8');
-  const gitignorePath = '.gitignore';
-  const gitignore = await fs.readFile(gitignorePath, 'utf8').catch(() => '');
-  if (!gitignore.split(/\r?\n/).includes('.rules-review-tmp/')) {
-    await fs.writeFile(gitignorePath, `${gitignore.trimEnd()}\n.rules-review-tmp/\n`, 'utf8');
-  }
+async function writeRuleCatalogFixture() {
   await Promise.all([
     fs.mkdir(path.join('.agents', 'rules', 'always'), { recursive: true }),
     fs.mkdir(path.join('.agents', 'rules', 'concerns'), { recursive: true }),
@@ -1233,6 +1273,20 @@ async function materializeRulesReviewV8RunFixture({
   - 缺少审查材料。
 `, 'utf8'),
   ]);
+}
+
+async function materializeRulesReviewV8RunFixture({
+  hasCodeChange = true,
+  runId = 'run-pass-full-clean',
+} = {}) {
+  await prepareReviewableSliceDiffFixture();
+  await fs.writeFile('src/example.ts', 'export const value = 1;\n', 'utf8');
+  const gitignorePath = '.gitignore';
+  const gitignore = await fs.readFile(gitignorePath, 'utf8').catch(() => '');
+  if (!gitignore.split(/\r?\n/).includes('.rules-review-tmp/')) {
+    await fs.writeFile(gitignorePath, `${gitignore.trimEnd()}\n.rules-review-tmp/\n`, 'utf8');
+  }
+  await writeRuleCatalogFixture();
   if (execFileSync('git', ['status', '--porcelain', '--', '.agents/rules', gitignorePath], { encoding: 'utf8' }).trim()) {
     execFileSync('git', ['add', '.agents/rules', gitignorePath]);
     execFileSync('git', ['commit', '-m', 'rules baseline']);
@@ -3147,7 +3201,10 @@ test('validate requires 项目规则审查 in context preflight', async () => {
   - rules-review：not-checked
   - 规则获取：不适用
   - 规则校验：skipped（已检查规则仓，本片无适用 rule ID）
-  - 适用规则：无
+  - selectedRuleIds：
+    - 无
+  - notApplicable：
+    - 无
 `, ''),
       'utf8',
     );
@@ -3228,6 +3285,225 @@ test('validate accepts blocked 项目规则审查 when rules-review is unavailab
     await fs.writeFile(planPath, plan, 'utf8');
 
     assert.deepEqual(await validatePlan(planDir), []);
+  });
+});
+
+test('validate rejects malformed rule partitions even while pending or blocked', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-project-rule-partition-malformed');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const original = await fs.readFile(planPath, 'utf8');
+
+    await fs.writeFile(
+      planPath,
+      original.replace('  - selectedRuleIds：\n    - 无\n', ''),
+      'utf8',
+    );
+    let errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('missing selectedRuleIds')));
+
+    const blocked = withUnavailableProjectRuleReview(original)
+      .replace('- 状态：not-started', '- 状态：blocked')
+      .replace('- 上下文预检：pending', '- 上下文预检：blocked（rules-review unavailable）')
+      .replace('    - CORE-001：当前切片修改核心流程。', '    - CORE-001');
+    await fs.writeFile(planPath, blocked, 'utf8');
+    errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('malformed selectedRuleIds')));
+  });
+});
+
+test('validate allows well-formed incomplete rule partitions while pending or blocked', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-project-rule-partition-incomplete');
+    await writeValidExecutingPlan(planDir);
+    await writeRuleCatalogFixture();
+    const planPath = path.join(planDir, 'plan.md');
+    const original = await fs.readFile(planPath, 'utf8');
+
+    await fs.writeFile(
+      planPath,
+      withRequiredProjectRuleReview(original, { ruleIds: ['CORE-001'] }),
+      'utf8',
+    );
+    assert.deepEqual(await validatePlan(planDir), []);
+
+    await fs.writeFile(
+      planPath,
+      withUnavailableProjectRuleReview(original)
+        .replace('- 状态：not-started', '- 状态：blocked')
+        .replace('- 上下文预检：pending', '- 上下文预检：blocked（rules-review unavailable）'),
+      'utf8',
+    );
+    assert.deepEqual(await validatePlan(planDir), []);
+  });
+});
+
+test('validate closes ready rule partitions against the actual catalog', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-project-rule-partition-ready');
+    await writeValidExecutingPlan(planDir);
+    await writeRuleCatalogFixture();
+    const planPath = path.join(planDir, 'plan.md');
+    const original = await fs.readFile(planPath, 'utf8');
+    const valid = withRequiredProjectRuleReview(withFilledContextPreflight(original), {
+      ruleIds: ['CORE-001', 'TYPE-001'],
+      notApplicableRuleIds: ['UI-001'],
+    }).replace('- 上下文预检：pending', '- 上下文预检：ready');
+
+    await fs.writeFile(planPath, valid, 'utf8');
+    assert.deepEqual(await validatePlan(planDir), []);
+
+    const invalidCases = [
+      {
+        name: 'missing',
+        plan: valid.replace('    - UI-001：当前切片不涉及该规则约束的对象。\n', ''),
+        pattern: /missing rule IDs.*UI-001/,
+      },
+      {
+        name: 'unknown',
+        plan: valid.replace('UI-001', 'OTHER-001'),
+        pattern: /unknown rule IDs.*OTHER-001/,
+      },
+      {
+        name: 'overlap',
+        plan: valid.replace('  - notApplicable：\n', '  - notApplicable：\n    - CORE-001：当前切片不涉及该规则约束的对象。\n'),
+        pattern: /overlap.*CORE-001/,
+      },
+      {
+        name: 'selected duplicate',
+        plan: valid.replace('    - TYPE-001：当前切片修改 TypeScript 类型相关代码。\n', '    - TYPE-001：当前切片修改 TypeScript 类型相关代码。\n    - TYPE-001：重复。\n'),
+        pattern: /duplicate selectedRuleIds.*TYPE-001/,
+      },
+      {
+        name: 'notApplicable duplicate',
+        plan: valid.replace('    - UI-001：当前切片不涉及该规则约束的对象。\n', '    - UI-001：当前切片不涉及该规则约束的对象。\n    - UI-001：重复。\n'),
+        pattern: /duplicate notApplicable.*UI-001/,
+      },
+      {
+        name: 'selected empty reason',
+        plan: valid.replace('CORE-001：当前切片修改核心流程。', 'CORE-001：'),
+        pattern: /selectedRuleIds.*reason/,
+      },
+      {
+        name: 'notApplicable placeholder reason',
+        plan: valid.replace('UI-001：当前切片不涉及该规则约束的对象。', 'UI-001：待补充'),
+        pattern: /notApplicable.*reason/,
+      },
+    ];
+    for (const invalid of invalidCases) {
+      await fs.writeFile(planPath, invalid.plan, 'utf8');
+      const errors = await validatePlan(planDir);
+      assert(errors.some((error) => invalid.pattern.test(error)), invalid.name);
+    }
+  });
+});
+
+test('validate does not accept the legacy 适用规则 field', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-project-rule-legacy-field');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = (await fs.readFile(planPath, 'utf8')).replace(
+      '  - selectedRuleIds：\n    - 无\n  - notApplicable：\n    - 无',
+      '  - 适用规则：无',
+    );
+    await fs.writeFile(planPath, plan, 'utf8');
+
+    const errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('missing selectedRuleIds')));
+    assert(errors.some((error) => error.includes('missing notApplicable')));
+  });
+});
+
+test('validate skips the catalog provider for pending-only plans', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-provider-not-called');
+    await writeValidExecutingPlan(planDir);
+    const result = await runWithIsolatedRuleCatalogProvider(
+      ['validate', planDir],
+      'process.stderr.write("provider must not run\\n"); process.exit(9);\n',
+    );
+    assert.equal(result.status, 0, result.stderr.toString());
+  });
+});
+
+test('validate fails closed on invalid catalog provider results', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-provider-invalid');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const ready = withFilledContextPreflight(await fs.readFile(planPath, 'utf8'))
+      .replace('- 上下文预检：pending', '- 上下文预检：ready');
+    await fs.writeFile(planPath, ready, 'utf8');
+
+    const invalidProviders = [
+      ['process.stderr.write("boom\\n"); process.exit(7);\n', /catalog provider failed/],
+      ['process.stdout.write("not json\\n");\n', /invalid catalog provider JSON/],
+      ['process.stdout.write(JSON.stringify({ source: { kind: "anything" } }));\n', /rules must be an array/],
+      ['process.stdout.write(JSON.stringify({ rules: [{}] }));\n', /invalid ruleRef/],
+    ];
+    for (const [source, pattern] of invalidProviders) {
+      const result = await runWithIsolatedRuleCatalogProvider(['validate', planDir], source);
+      assert.equal(result.status, 1, result.stderr.toString());
+      assert.match(result.stderr.toString(), pattern);
+    }
+  });
+});
+
+test('validate derives the same empty catalog from different provider metadata', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-provider-metadata-ignored');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withFilledContextPreflight(await fs.readFile(planPath, 'utf8'))
+        .replace('- 上下文预检：pending', '- 上下文预检：ready'),
+      'utf8',
+    );
+
+    for (const output of [
+      { source: { kind: 'absent' }, rules: [] },
+      { source: { kind: 'workspace', files: [{ arbitrary: true }] }, rules: [] },
+    ]) {
+      const result = await runWithIsolatedRuleCatalogProvider(
+        ['validate', planDir],
+        `process.stdout.write(${JSON.stringify(JSON.stringify(output))});\n`,
+      );
+      assert.equal(result.status, 0, result.stderr.toString());
+    }
+  });
+});
+
+test('validate calls the optional catalog provider once for multiple ready slices', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-provider-once');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    let plan = `${await fs.readFile(planPath, 'utf8')}${createConsumerSliceBlock()}`;
+    plan = plan
+      .replaceAll('- 需理解：待执行前补充。', '- 需理解：已理解当前切片边界。')
+      .replaceAll('- 必读上下文：待执行前补充。', '- 必读上下文：已读取直接相关文件。')
+      .replaceAll('- 上下文预检：pending', '- 上下文预检：ready');
+    await fs.writeFile(planPath, plan, 'utf8');
+    await fs.rm('provider-calls.jsonl', { force: true });
+
+    const result = await runWithIsolatedRuleCatalogProvider(
+      ['validate', planDir],
+      `import { appendFileSync } from 'node:fs';
+appendFileSync('provider-calls.jsonl', JSON.stringify(process.argv.slice(2)) + '\\n');
+process.stdout.write(JSON.stringify({ source: { kind: 'ignored' }, rules: [] }));
+`,
+    );
+    assert.equal(result.status, 0, result.stderr.toString());
+    const calls = (await fs.readFile('provider-calls.jsonl', 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    assert.deepEqual(calls, [[
+      '--root',
+      await fs.realpath('.'),
+      '--catalog',
+      '--optional-source',
+    ]]);
   });
 });
 
@@ -3831,7 +4107,10 @@ test('CLI task-brief includes constraints context and slice handoff', async () =
     const planDir = path.join('dev-plans', '2026-06-10-task-brief-content');
     await writeValidExecutingPlan(planDir);
     const planPath = path.join(planDir, 'plan.md');
-    const plan = await fs.readFile(planPath, 'utf8');
+    const plan = withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8'), {
+      ruleIds: ['CORE-001'],
+      notApplicableRuleIds: ['TYPE-001'],
+    });
     await fs.writeFile(
       planPath,
       plan.replace('- 非目标：', '- 禁止词：\n  - unsafeHelper\n- 基线脏文件：\n  - docs/legacy-note.md\n- 非目标：'),
@@ -3844,7 +4123,10 @@ test('CLI task-brief includes constraints context and slice handoff', async () =
     assert.match(brief, /## 全局约束/);
     assert.match(brief, /不新增 ks \/ dd 平台分支/);
     assert.match(brief, /### 项目规则审查/);
-    assert.match(brief, /状态：not-applicable/);
+    assert.match(brief, /selectedRuleIds：/);
+    assert.match(brief, /CORE-001：当前切片修改核心流程/);
+    assert.match(brief, /规则获取：node \.agents\/skills\/rule-steward\/scripts\/get-rules\.mjs CORE-001/);
+    assert.doesNotMatch(brief, /notApplicable|TYPE-001|状态：required|rules-review：|规则校验：/);
     assert.match(brief, /### 允许修改/);
     assert.match(brief, /src\/example\.ts/);
     assert.match(brief, /test\/example\.test\.ts/);
@@ -5687,7 +5969,10 @@ test('CLI close-check binds rules-review dispatch rules to current slice rules',
     const planPath = path.join(planDir, 'plan.md');
     await fs.writeFile(
       planPath,
-      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8'), { ruleIds: ['CORE-001'] }),
+      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8'), {
+        ruleIds: ['CORE-001'],
+        notApplicableRuleIds: ['TYPE-001', 'UI-001'],
+      }),
       'utf8',
     );
     await writeCloseCheckHandoffFixtures(planDir, 'S1', { rulesReview });
@@ -5847,8 +6132,15 @@ test('CLI close-check fails closed when the isolated skill root lacks its truste
     const isolatedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'sliced-dev-missing-validator-'));
     try {
       const isolatedScript = path.join(isolatedRoot, 'sliced-dev', 'scripts', 'dev-plan.mjs');
-      await fs.mkdir(path.dirname(isolatedScript), { recursive: true });
-      await fs.copyFile(sourceScript, isolatedScript);
+      const isolatedProvider = path.join(isolatedRoot, 'rule-steward', 'scripts', 'get-rules.mjs');
+      await Promise.all([
+        fs.mkdir(path.dirname(isolatedScript), { recursive: true }),
+        fs.mkdir(path.dirname(isolatedProvider), { recursive: true }),
+      ]);
+      await Promise.all([
+        fs.copyFile(sourceScript, isolatedScript),
+        fs.copyFile(fileURLToPath(new URL('../../skills/rule-steward/scripts/get-rules.mjs', import.meta.url)), isolatedProvider),
+      ]);
       const result = spawnSync('node', [await fs.realpath(isolatedScript), 'close-check', planDir]);
       assert.equal(result.status, 1, result.stderr.toString());
       assert.match(result.stderr.toString(), /trusted rules-review validator missing/);

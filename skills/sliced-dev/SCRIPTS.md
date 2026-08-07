@@ -165,7 +165,7 @@ task brief 只从 `plan.md`、`decisions.md`、`audits.md` 和 `claims/<S-id>.js
 
 - 当前切片标题和 `任务内容`。
 - `全局约束`。
-- `上下文预检` 中的 `需理解`、`必读上下文`、`项目规则审查`、`允许修改`、`禁止修改`、`禁止词`、`基线脏文件`、`非目标`、`停止条件`。
+- `上下文预检` 中的 `需理解`、`必读上下文`、`允许修改`、`禁止修改`、`禁止词`、`基线脏文件`、`非目标`、`停止条件`；`项目规则审查` 只投影 `selectedRuleIds` 与 `规则获取`，不投影 `notApplicable` 或状态账务。
 - `切片交接` 的 `输入` / `输出`。
 - 当前切片关联的 D/A 正文。
 - 当前切片 claims 概览，作为实现约束。
@@ -370,6 +370,14 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 
 ## validate 校验范围
 
+一次 `validate` 中只要至少一个切片写 `上下文预检：ready`，脚本就在当前 plan 绑定的项目根目录执行一次：
+
+```bash
+get-rules.mjs --root <repo> --catalog --optional-source
+```
+
+成功后只读取 `rules[].ruleRef`，构造同一份 actual catalog 供所有 ready 切片复用；不读取或解释 `source.kind` 等 provider metadata。`rules: []` 直接表示空 catalog。provider 非零退出、JSON 无法解析、`rules` 不是数组或任一条目缺少合法 `ruleRef` 时 fail closed。只有 `pending` / `blocked` 的计划不调用 provider；sliced-dev 不检查规则目录、index、`HEAD`，也不解释 provider 判定 source absent / broken 的原因。
+
 - 目录名必须匹配 `dev-plans/YYYY-MM-DD-<slug>`。
 - 必须存在 `plan.md`、`decisions.md`、`audits.md`。
 - `plan.md` 必须有 H1、必需章节、顶部元信息和当前状态。
@@ -403,8 +411,8 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - `AI Review` 只允许 `pending` / `passed` / `issues` / `blocked` / `skipped` 开头。
 - 写入 `用户验收` 时只允许 `pending` / `passed` / `issues` / `skipped` 开头；`issues` 必须写明用户拒收原因，`skipped` 必须写明用户明确跳过原因。
 - `修复次数` 必须是 `当前次数/最大次数`，最大次数只允许 `2` / `4`，当前次数不能超过最大次数；默认使用 `/4`。
-- `上下文预检` 必须包含 `需理解`、`必读上下文`、`项目规则审查`、`允许修改`、`禁止修改`、`非目标`、`停止条件`；`项目规则审查` 的 `状态` 只允许 `required` / `not-applicable` / `blocked`。
-- `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不能是 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规则审查` 必须写明确状态，`禁止修改` 可显式写 `无`。
+- `上下文预检` 必须包含 `需理解`、`必读上下文`、`项目规则审查`、`允许修改`、`禁止修改`、`非目标`、`停止条件`；`项目规则审查` 的 `状态` 只允许 `required` / `not-applicable` / `blocked`，任何状态都必须存在结构可解析的 `selectedRuleIds` 与 `notApplicable`。旧 `适用规则` 字段不兼容。
+- `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不能是 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规则审查` 必须写明确状态，`禁止修改` 可显式写 `无`。`selectedRuleIds` 与 `notApplicable` 必须各自无重复、互斥、无 unknown、完整覆盖 actual catalog，且每条 reason 非空、非占位。
 - 若切片存在 `#### 切片交接`，必须包含 `输入`、`输出`，且每项必须显式写 `无` 或至少一条非占位内容；`无` 不得和真实条目混写。
 - `依赖` 不能声明当前切片自身；普通 `依赖：S*` 不强制触发 `#### 切片交接`。
 - 只要切片头部写 `AI Review：passed`，就必须有 `#### AI Review 结论`，且包含 [PLAN-FILE.md 的「AI Review 结论」](PLAN-FILE.md#ai-review-结论)定义的完整四 verdict。
@@ -412,7 +420,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs roster dev-plans/YYYY-MM-DD-<sl
 - `#### AI Review 结论` 必须使用 `Verdict | Status | Severity | Evidence | Note` 五列格式；旧四列格式会被判为无效表格。
 - `AI Review：issues` / `AI Review：blocked` 必须有非占位头部原因，或在 `#### AI Review 结论` 中有 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位。
 - AI Review verdict 的固定名称、`Status` / `Severity` 枚举、组合和完成态阻塞条件以 [PLAN-FILE.md 的「AI Review 结论」](PLAN-FILE.md#ai-review-结论)为唯一文档真源；本命令直接按该结构校验。整任务五项额外允许 `blocked`，但不允许 `not-applicable`。
-- `项目规则审查：not-applicable` 不得列出适用规则 ID；有适用规则但 `rules-review` 不可用时必须写 `blocked`，并把切片头部 `上下文预检` 同步写为 `blocked`。
+- `项目规则审查：not-applicable` 的 `selectedRuleIds` 必须为空；有 selected 规则但 `rules-review` 不可用时必须写 `blocked`，并把切片头部 `上下文预检` 同步写为 `blocked`。脚本不判断分类 reason 是否真实，也不判断 selected 规则义务是否已充分映射进执行契约。
 - `状态：done` 的切片必须满足 [PLAN-FILE.md](PLAN-FILE.md) 的完成态约束；`风险：B/C` 不允许三项机器门禁为 `skipped`；`执行：需确认` / `风险：C` 必须有 `用户验收：passed/skipped`。
 - 依赖字段中出现的 `S*` 必须存在。
 - 关联项只能包含 `D*` 和 `A*`，ID 不能重复。

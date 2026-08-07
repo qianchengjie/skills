@@ -298,12 +298,15 @@ node skills/rule-steward/scripts/get-rules.mjs --commit <FULL-OID> REQ-001
 node skills/rule-steward/scripts/get-rules.mjs --catalog
 node skills/rule-steward/scripts/get-rules.mjs --root /path/to/repo --catalog
 node skills/rule-steward/scripts/get-rules.mjs --catalog --commit <FULL-OID>
+node skills/rule-steward/scripts/get-rules.mjs --root /path/to/repo --catalog --optional-source
 ```
 
 `--catalog` 与规则 ID 互斥。catalog 只投影 active 规则的标题、级别、namespace
 触发条件、生效条件和来源文件，并携带规则来源身份；它用于完整发现，不替代完整
 规则正文。`source.files` 包含全部 active 文件，包括空文件，不包含
 `retired.md`。所有路径均为 `.agents/rules/...` 仓库相对路径。
+
+`--optional-source` 只允许与 workspace `--catalog` 一起使用，不能配合 `--commit`。当项目从未存在 `.agents/rules/` 来源时，它成功返回 `source.kind = absent` 与空 `rules`；合法但零 active 规则的规则仓仍返回真实 workspace source 与空 `rules`。只要工作区、Git index 或 `HEAD` 表明规则来源应存在，缺失 index、缺失 active 文件、残缺格式、损坏内容或重复 ID 都继续 fail closed。普通 `--catalog` 的 strict 语义不变。
 
 `--commit` 只接受 Git 返回的相同 40/64 位完整规范 commit OID；短 OID、tree、
 blob 均失败，且不回退 workspace。`get-rules.mjs` 在所有校验成功后才写 stdout，

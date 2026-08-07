@@ -66,6 +66,7 @@ const AUDIT_ID_RE = /^A\d+$/;
 const DECISION_REF_RE = /(?<![A-Za-z0-9])D\d+(?:\.\d+)*(?![A-Za-z0-9.])/g;
 const AUDIT_REF_RE = /(?<![A-Za-z0-9])A\d+(?![A-Za-z0-9.])/g;
 const SLICE_REF_RE = /(?<![A-Za-z0-9])S\d+(?:\.\d+)*(?![A-Za-z0-9.])/g;
+const RULE_REF_RE = /^[A-Z][A-Z0-9]*-[0-9]{3}$/;
 const PLAN_GLOBAL_CONSTRAINTS_SECTION = '全局约束';
 const ZERO_KNOWN_DEFECTS_CLOSURE_FIELD = '零已知缺陷收口';
 const PLAN_WHOLE_REVIEW_FIELD = '整任务审查';
@@ -882,15 +883,84 @@ function parseRuleIds(items) {
   return [...ids];
 }
 
+function parseRulePartition(section, label) {
+  const { lines } = parseMarkdownLines(section);
+  const listField = /^([ \t]*)-\s*([^：:]+)[：:]\s*(.*)$/;
+  const parentIndex = lines.findIndex(({ line, inFence }) => {
+    if (inFence) return false;
+    const match = listField.exec(line);
+    return match?.[2].trim() === PROJECT_RULE_REVIEW_FIELD;
+  });
+  if (parentIndex === -1) return { present: false, entries: [], errors: [] };
+
+  const parentIndent = listField.exec(lines[parentIndex].line)[1].length;
+  let parentEnd = lines.length;
+  for (let index = parentIndex + 1; index < lines.length; index += 1) {
+    if (lines[index].inFence) continue;
+    const match = /^([ \t]*)-\s*/.exec(lines[index].line);
+    if (match && match[1].length <= parentIndent) {
+      parentEnd = index;
+      break;
+    }
+  }
+
+  const fields = [];
+  for (let index = parentIndex + 1; index < parentEnd; index += 1) {
+    if (lines[index].inFence) continue;
+    const match = listField.exec(lines[index].line);
+    if (match && match[1].length > parentIndent && match[2].trim() === label) {
+      fields.push({ index, indent: match[1].length, inline: match[3].trim() });
+    }
+  }
+  if (fields.length === 0) return { present: false, entries: [], errors: [] };
+
+  const errors = fields.length > 1 ? [`duplicate ${label} field`] : [];
+  const field = fields[0];
+  const values = field.inline ? [field.inline] : [];
+  for (let index = field.index + 1; index < parentEnd; index += 1) {
+    if (lines[index].inFence || !lines[index].line.trim()) continue;
+    const match = /^([ \t]*)-\s*(.*)$/.exec(lines[index].line);
+    if (match && match[1].length <= field.indent) break;
+    if (!match || match[1].length <= field.indent || !match[2].trim()) {
+      errors.push(`malformed ${label} entry: ${lines[index].line.trim() || '<empty>'}`);
+      continue;
+    }
+    values.push(match[2].trim());
+  }
+
+  if (values.some(isExplicitNoneItem)) {
+    if (values.length > 1) errors.push(`${label} cannot mix 无 with rule entries`);
+    return { present: true, entries: [], errors };
+  }
+
+  const entries = [];
+  for (const value of values) {
+    const match = /^([A-Z][A-Z0-9]*-[0-9]{3})[：:](.*)$/.exec(value);
+    if (!match || !RULE_REF_RE.test(match[1])) {
+      errors.push(`malformed ${label} entry: ${value}`);
+      continue;
+    }
+    entries.push({ ruleRef: match[1], reason: match[2].trim() });
+  }
+  return { present: true, entries, errors };
+}
+
 function parseProjectRuleReview(section) {
   const items = parseRawNestedList(section, [PROJECT_RULE_REVIEW_FIELD]);
+  const selected = parseRulePartition(section, 'selectedRuleIds');
+  const notApplicable = parseRulePartition(section, 'notApplicable');
   return {
     items,
     status: getNestedFieldValue(items, '状态'),
     rulesReview: getNestedFieldValue(items, 'rules-review'),
     ruleFetch: getNestedFieldValue(items, '规则获取'),
     ruleValidation: getNestedFieldValue(items, '规则校验'),
-    selectedRuleIds: parseRuleIds(items),
+    selected,
+    notApplicable,
+    selectedRules: selected.entries,
+    notApplicableRules: notApplicable.entries,
+    selectedRuleIds: selected.entries.map((entry) => entry.ruleRef),
+    notApplicableRuleIds: notApplicable.entries.map((entry) => entry.ruleRef),
   };
 }
 
@@ -915,11 +985,11 @@ function hasContextPreflightLabel(section, label) {
   return re.test(section);
 }
 
-function validateContextPreflightReady(id, section, errors) {
+function validateContextPreflightReady(id, section, actualCatalog, errors) {
   for (const label of REQUIRED_FILLED_CONTEXT_PREFLIGHT_LABELS) {
     validateReadyContextPreflightField(id, section, label, { allowExplicitNone: false }, errors);
   }
-  validateReadyProjectRuleReview(id, section, errors);
+  validateReadyProjectRuleReview(id, section, actualCatalog, errors);
   validateReadyContextPreflightField(id, section, '禁止修改', { allowExplicitNone: true }, errors);
 }
 
@@ -935,6 +1005,17 @@ function validateProjectRuleReviewField(id, section, errors) {
     errors.push(
       `plan.md:${id}: ${SLICE_CONTEXT_PREFLIGHT_SECTION} ${PROJECT_RULE_REVIEW_FIELD} invalid 状态 ${projectRuleReview.status ?? '<missing>'}`,
     );
+  }
+  for (const [label, partition] of [
+    ['selectedRuleIds', projectRuleReview.selected],
+    ['notApplicable', projectRuleReview.notApplicable],
+  ]) {
+    if (!partition.present) {
+      errors.push(`plan.md:${id}: ${SLICE_CONTEXT_PREFLIGHT_SECTION} ${PROJECT_RULE_REVIEW_FIELD} missing ${label}`);
+    }
+    for (const error of partition.errors) {
+      errors.push(`plan.md:${id}: ${SLICE_CONTEXT_PREFLIGHT_SECTION} ${PROJECT_RULE_REVIEW_FIELD} ${error}`);
+    }
   }
   if (projectRuleReview.status === 'required') {
     if (projectRuleReview.selectedRuleIds.length === 0) {
@@ -966,10 +1047,42 @@ function validateProjectRuleReviewField(id, section, errors) {
   }
 }
 
-function validateReadyProjectRuleReview(id, section, errors) {
+function validateReadyProjectRuleReview(id, section, actualCatalog, errors) {
   const projectRuleReview = parseProjectRuleReview(section);
   if (projectRuleReview.items.length === 0 || isPlaceholderText(projectRuleReview.status)) {
     errors.push(`plan.md:${id}: ${SLICE_CONTEXT_PREFLIGHT_SECTION} ${PROJECT_RULE_REVIEW_FIELD} must be filled before ready`);
+  }
+
+  for (const [label, entries] of [
+    ['selectedRuleIds', projectRuleReview.selectedRules],
+    ['notApplicable', projectRuleReview.notApplicableRules],
+  ]) {
+    const ruleIds = entries.map((entry) => entry.ruleRef);
+    const duplicates = [...new Set(ruleIds.filter((ruleRef, index) => ruleIds.indexOf(ruleRef) !== index))];
+    if (duplicates.length > 0) {
+      errors.push(`plan.md:${id}: ${PROJECT_RULE_REVIEW_FIELD} duplicate ${label} rule IDs: ${duplicates.join(', ')}`);
+    }
+    for (const entry of entries) {
+      if (isPlaceholderText(entry.reason) || hasTemplatePlaceholder(entry.reason)) {
+        errors.push(`plan.md:${id}: ${PROJECT_RULE_REVIEW_FIELD} ${label} ${entry.ruleRef} reason must be non-empty and non-placeholder before ready`);
+      }
+    }
+  }
+
+  const selected = new Set(projectRuleReview.selectedRuleIds);
+  const notApplicable = new Set(projectRuleReview.notApplicableRuleIds);
+  const overlap = [...selected].filter((ruleRef) => notApplicable.has(ruleRef));
+  if (overlap.length > 0) {
+    errors.push(`plan.md:${id}: ${PROJECT_RULE_REVIEW_FIELD} rule partition overlap: ${overlap.join(', ')}`);
+  }
+  const classified = new Set([...selected, ...notApplicable]);
+  const unknown = [...classified].filter((ruleRef) => !actualCatalog.has(ruleRef));
+  if (unknown.length > 0) {
+    errors.push(`plan.md:${id}: ${PROJECT_RULE_REVIEW_FIELD} unknown rule IDs: ${unknown.join(', ')}`);
+  }
+  const missing = [...actualCatalog].filter((ruleRef) => !classified.has(ruleRef));
+  if (missing.length > 0) {
+    errors.push(`plan.md:${id}: ${PROJECT_RULE_REVIEW_FIELD} missing rule IDs from actual catalog: ${missing.join(', ')}`);
   }
 }
 
@@ -2644,7 +2757,16 @@ function renderAssociatedBlocksById(sliceBody, blocks, idRe) {
 
 function renderTaskBriefContextSection(sliceBody) {
   const contextPreflight = getSubsection(sliceBody, SLICE_CONTEXT_PREFLIGHT_SECTION);
-  const renderContextField = (label) => `### ${label}\n\n${renderList(parseRawNestedList(contextPreflight, [label]))}`;
+  const renderContextField = (label) => {
+    if (label !== PROJECT_RULE_REVIEW_FIELD) {
+      return `### ${label}\n\n${renderList(parseRawNestedList(contextPreflight, [label]))}`;
+    }
+    const review = parseProjectRuleReview(contextPreflight);
+    const selected = review.selectedRules.length > 0
+      ? review.selectedRules.map(({ ruleRef, reason }) => `  - ${ruleRef}：${reason}`).join('\n')
+      : '  - 无';
+    return `### ${label}\n\n- selectedRuleIds：\n${selected}\n- 规则获取：${review.ruleFetch ?? '<missing>'}`;
+  };
   return TASK_BRIEF_CONTEXT_LABELS.map(renderContextField).join('\n\n');
 }
 
@@ -2679,6 +2801,54 @@ async function resolveGitRepoRoot() {
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
   return fs.realpath(output);
+}
+
+async function readActualRuleCatalog() {
+  const repoRoot = await resolveGitRepoRoot();
+  const provider = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '..',
+    '..',
+    'rule-steward',
+    'scripts',
+    'get-rules.mjs',
+  );
+  let stdout;
+  try {
+    stdout = execFileSync(process.execPath, [
+      provider,
+      '--root',
+      repoRoot,
+      '--catalog',
+      '--optional-source',
+    ], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch (error) {
+    const detail = String(error.stderr || error.stdout || error.message || '').trim();
+    throw new Error(`catalog provider failed${detail ? `: ${detail}` : ''}`);
+  }
+
+  let catalog;
+  try {
+    catalog = JSON.parse(stdout);
+  } catch {
+    throw new Error('invalid catalog provider JSON');
+  }
+  if (!catalog || !Array.isArray(catalog.rules)) {
+    throw new Error('catalog provider rules must be an array');
+  }
+  const ruleRefs = [];
+  for (const entry of catalog.rules) {
+    if (!entry || !RULE_REF_RE.test(entry.ruleRef)) {
+      throw new Error(`catalog provider returned invalid ruleRef: ${entry?.ruleRef ?? '<missing>'}`);
+    }
+    ruleRefs.push(entry.ruleRef);
+  }
+  return new Set(ruleRefs);
 }
 
 async function validateRuleReviewRepairInput(sliceId, sliceBody, audits) {
@@ -5499,7 +5669,7 @@ function validateAuditBlocks(audits, errors) {
   }
 }
 
-function validatePlanMarkdown(plan, decisions, audits, errors) {
+function validatePlanMarkdown(plan, decisions, audits, actualCatalog, errors) {
   validateStructuredHeadings(
     plan,
     'plan.md',
@@ -5611,7 +5781,7 @@ function validatePlanMarkdown(plan, decisions, audits, errors) {
 
   const referencedDecisions = new Set();
   for (const [id, block] of slices) {
-    validateSliceBlock(id, block.body, slices, decisions, audits, referencedDecisions, errors);
+    validateSliceBlock(id, block.body, slices, decisions, audits, referencedDecisions, actualCatalog, errors);
     if (
       zeroKnownDefectsClosure
       && getField(getSliceHeaderBlock(block.body), '状态') === 'done'
@@ -5691,7 +5861,7 @@ function getSliceHeaderBlock(body) {
   return firstSubsection ? body.slice(0, firstSubsection.index) : body;
 }
 
-function validateSliceBlock(id, body, slices, decisions, audits, referencedDecisions, errors) {
+function validateSliceBlock(id, body, slices, decisions, audits, referencedDecisions, actualCatalog, errors) {
   // 执行控制字段唯一真源是切片头部字段列表；只从首个 #### 子节前读取，避免门禁记录等小节的同名行顶替
   const header = getSliceHeaderBlock(body);
   const status = getField(header, '状态');
@@ -5791,7 +5961,7 @@ function validateSliceBlock(id, body, slices, decisions, audits, referencedDecis
       }
     }
     if (getStatusPrefix(preflight) === 'ready') {
-      validateContextPreflightReady(id, contextPreflight, errors);
+      validateContextPreflightReady(id, contextPreflight, actualCatalog, errors);
     }
   }
   if (hasSubsection(body, LEGACY_SLICE_INTERFACES_SECTION)) {
@@ -6067,7 +6237,18 @@ export async function validatePlan(planDir) {
 
   validateDecisionBlocks(decisions, audits, errors);
   validateAuditBlocks(audits, errors);
-  validatePlanMarkdown(plan, decisions, audits, errors);
+  const readySlices = getBlocks(getSection(plan, '切片'), SLICE_ID_RE);
+  const needsCatalog = [...readySlices.values()].some((slice) =>
+    getStatusPrefix(getField(getSliceHeaderBlock(slice.body), '上下文预检')) === 'ready');
+  let actualCatalog = new Set();
+  if (needsCatalog) {
+    try {
+      actualCatalog = await readActualRuleCatalog();
+    } catch (error) {
+      errors.push(`plan.md: ${error.message}`);
+    }
+  }
+  validatePlanMarkdown(plan, decisions, audits, actualCatalog, errors);
 
   const slices = getBlocks(getSection(plan, '切片'), SLICE_ID_RE);
   errors.push(...await validateClaimsForPlan(planDir, slices));

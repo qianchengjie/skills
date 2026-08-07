@@ -22,7 +22,7 @@ disable-model-invocation: true
 - **规则审查结论绑定**：`项目规则审查：required` 时，每个已提交 TARGET 都创建全新 rules-review v8 run，完整审查全部当前 `reviewItems`，不得继承旧结果。sliced-dev 始终以 `--target-commit <headCommit>` 提交完整 commit 范围并保持 `excludedFiles: []`，不传 `--rules-commit`，因此规则来源使用封印时的当前工作区；代码模式在封印时直接写入 `targetTree = headCommit^{tree}` 与 `boundCommit = headCommit`，不再执行后置绑定。当前切片在 `AI Review 结论` 中用唯一安全的 `项目规则审查 runId` 选择 `.rules-review-tmp/<runId>`；controller 把 rule-reviewer fixed summary 原样投影到当前 `A*`，非 `ready_for_merge` 时同时记录 `.rules-review-tmp/<runId>/response.md`。`close-check` 从当前 skill root 定位受信任 validator，重跑真实 `--mode run`，并核对完整 commit 范围、`inputSnapshot`、changed units、runId、recommendation、三个计数及条件性 `shouldSetHash`；不执行 A* 中的 validation 展示命令，也不判断规则语义。
 - **默认 SHOULD 接受**：未启用“零已知缺陷收口”时，只有当前 run 为 `should_review_before_merge`、`mustFix=0`、`shouldFix>0`、`cannotVerify=0`，且当前 A*/真实用户 decided D*/Evidence/关联项/`<runId>#<A-id>#<shouldSetHash>`/非占位确认记录完整绑定，第四 verdict 才可单独写 `passed`；A* 仍保留 rules-review 原始 `failed`。`ready_for_merge` 仍要求三个计数均为 `0`；零已知缺陷收口和其它 recommendation 不借用该例外。机器只校验结构绑定，不判断风险说明是否充分、用户是否理解或确认记录是否真实。
 - **计划一致性预检**：切片清单产出后、拆分拷问门禁前，先检查整份计划内部是否一致；只写顶部 `计划一致性预检` 状态，分叉进 `decisions.md`，长矩阵进 `audits.md`，不新增 plan 章节。
-- **上下文预检**：动手前先暴露需要理解的上下文、必读上下文、项目规则审查、允许 / 禁止修改、非目标和停止条件；读完上下文前不得实现。写 `ready` 时必填字段不得仍是占位内容，`项目规则审查` 必须写 `required` / `not-applicable` / `blocked`；只有无适用规则时才能写 `not-applicable`，有适用规则但 `rules-review` 不可用时写 `blocked`，并把 `上下文预检` 同步写为 `blocked` 后停止。`允许修改` 是可更新的执行清单，`禁止修改` 是硬边界且可显式写 `无`。完整档写回当前切片块，轻量档在会话输出短版。
+- **上下文预检**：动手前先暴露需要理解的上下文、必读上下文、项目规则审查、允许 / 禁止修改、非目标和停止条件；读完上下文前不得实现。`项目规则审查` 在任何状态都显式填写 `selectedRuleIds` 与 `notApplicable`，每项附 reason；`pending` / `blocked` 允许分类尚未闭合。写 `ready` 时必填字段不得仍是占位内容，两类必须对 actual catalog 构成完整互斥分区。控制器还必须读取 selected 规则，并把每条可执行义务纳入现有执行契约、解决冲突；未完成时不得写 `ready`。有 selected 规则但 `rules-review` 不可用时写 `blocked`，并把 `上下文预检` 同步写为 `blocked` 后停止。`允许修改` 是可更新的执行清单，`禁止修改` 是硬边界且可显式写 `无`。完整档写回当前切片块，轻量档在会话输出短版。
 - **拒收门禁**：实现后必须跑硬门禁和 package-first AI Review；每个切片最多自动修复 4 次，只在实际修改任务范围内文件时计次。结构合法的负审查结论进入修复或阻塞，不能靠重派洗掉；只有未返回、越界或格式无法归属时才允许同一输入最多 fresh 重派一次，仍失败即 blocked。重生成 package 或修协议工件不计修复次数。次数用尽仍失败则停止。
 - **Claims / Evidence / Status**：完整档每个执行切片用 `claims/<S-id>.json` 记录可验证声明、证据和状态；Claim 是执行约束，不是事后总结。控制器按证据判断 claim 状态；脚本只校验 JSON / 字段形状，`close-check` 只信 claims 的最终状态。
 - **Subagent 隔离**：当前运行时只提供上下文 / 角色隔离，不提供 workspace 隔离。完整档首轮用 `spawn_agent(fork_turns: "none")` 派发 implementer；同一切片安全返修优先 `followup_task` 原 implementer，只有原 agent 不可用、接收门禁确认其越界 / 输出与实际 diff 冲突，或用户授权边界、任务目标、Claims 契约实质变化时 fresh fallback。既有授权内扩展执行 allowlist 不单独触发新建。所有 agent 共享当前工作区，同一时间只允许一个 implementer 写业务文件，控制器和其他写入型 agent 在 implementer 返回前不得修改业务文件。
@@ -215,7 +215,7 @@ disable-model-invocation: true
 7. **上下文预检与 Claims**
    - 只更新当前切片 `#### 上下文预检`、执行控制字段和 `claims/<S-id>.json`，不改业务代码。
    - 写明风险 A/B/C、必读上下文、项目规则审查、允许修改、禁止修改、非目标、停止条件，并核对 `全局约束` 与当前切片 `切片交接`。
-   - 读完 must-read 后再更新 `上下文预检：ready`；`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不得仍是 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规则审查` 必须写明确状态，`禁止修改` 可写 `无`。上下文不足时写 `blocked` 并停止；当前执行清单不足时，先按授权边界规则决定自动更新还是停止确认。
+   - 读完 must-read 后再更新 `上下文预检：ready`；`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不得仍是 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规则审查` 必须写明确状态及完整互斥分类。按 `规则获取` 读取 selected 规则，把可执行义务映射到现有 `允许修改` / `禁止修改`、验证、claims、停止条件或门禁记录并解决冲突后，才可写 `ready`；不要复制规则正文。上下文不足、义务尚未消费或冲突未解决时写 `pending` / `blocked` 并停止；当前执行清单不足时，先按授权边界规则决定自动更新还是停止确认。
    - 生成 task brief 前创建或细化 `claims/<S-id>.json`；claims 至少覆盖行为、边界、验证和残余风险中的关键项。
    - C 类切片在输出方案后必须停下等人工确认；方案并入执行预告，方案确认与执行确认是同一次停顿。
 8. **执行与门禁**

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -39,6 +39,33 @@ async function assertFails(args, pattern) {
 
 const root = await mkdtemp(path.join(os.tmpdir(), "rule-steward-"));
 
+const absentRoot = await mkdtemp(path.join(os.tmpdir(), "rule-steward-absent-"));
+await runGit(absentRoot, ["init", "-q"]);
+const optionalAbsentCatalog = JSON.parse((await runNode([
+  getScript,
+  "--root",
+  absentRoot,
+  "--catalog",
+  "--optional-source",
+])).stdout);
+assert.deepEqual(optionalAbsentCatalog, { source: { kind: "absent" }, rules: [] });
+await assertFails([getScript, "--root", absentRoot, "--catalog"], /Missing rules index/);
+await assertFails(
+  [getScript, "--root", path.join(absentRoot, "missing"), "--catalog", "--optional-source"],
+  /Invalid repository root/,
+);
+await assertFails(
+  [getScript, "--root", absentRoot, "--catalog", "--optional-source", "--commit", "0".repeat(40)],
+  /--optional-source only supports workspace catalogs/,
+);
+
+const partialRoot = await mkdtemp(path.join(os.tmpdir(), "rule-steward-partial-"));
+await mkdir(path.join(partialRoot, ".agents/rules"), { recursive: true });
+await assertFails(
+  [getScript, "--root", partialRoot, "--catalog", "--optional-source"],
+  /Missing rules index/,
+);
+
 const initResult = await runNode([initScript, "--root", root]);
 assert.match(initResult.stdout, /Initialized rule store/);
 assert.match(initResult.stdout, /建议加入 AGENTS\.md 的入口片段/);
@@ -57,6 +84,20 @@ assert.match(
   await readFile(path.join(root, ".agents/rules/always/constraints.md"), "utf8"),
   /- 通过条件：/,
 );
+
+const optionalEmptyCatalog = JSON.parse((await runNode([
+  getScript,
+  "--root",
+  root,
+  "--catalog",
+  "--optional-source",
+])).stdout);
+assert.equal(optionalEmptyCatalog.source.kind, "workspace");
+assert.match(optionalEmptyCatalog.source.indexHash, /^sha256:[0-9a-f]{64}$/);
+assert.deepEqual(optionalEmptyCatalog.source.files.map((file) => file.path), [
+  ".agents/rules/always/constraints.md",
+]);
+assert.deepEqual(optionalEmptyCatalog.rules, []);
 
 await assertFails([initScript, "--root", root], /Refusing to overwrite existing file/);
 await assertFails([getScript, "--root", root, "CORE-001"], /Rule not found: CORE-001/);
@@ -392,6 +433,12 @@ for (const invalidCommit of [commit.slice(0, 12), tree, blob]) {
   );
   assert.equal(failure.stdout, "");
 }
+
+await rm(path.join(catalogRoot, ".agents/rules"), { recursive: true });
+await assertFails(
+  [getScript, "--root", catalogRoot, "--catalog", "--optional-source"],
+  /Missing rules index/,
+);
 
 const invalidCatalogCases = [
   {

@@ -91,7 +91,10 @@ dev-plans/
   - rules-review：not-checked
   - 规则获取：不适用
   - 规则校验：skipped（未检查规则仓）
-  - 适用规则：无
+  - selectedRuleIds：
+    - 无
+  - notApplicable：
+    - 无
 - 允许修改：
   - 待执行前补充。
 - 禁止修改：
@@ -199,7 +202,7 @@ dev-plans/
 
 - `需理解`：本片必须理解的业务、调用链、项目风格或旧行为。
 - `必读上下文`：执行前必须读取的文件、搜索关键词或证据；只列必要上下文，不复述全项目。
-- `项目规则审查`：本片是否需要独立 rule-reviewer。`状态` 只允许 `required` / `not-applicable` / `blocked`；同时记录 `rules-review` 可用性、resolved `规则获取` 命令、`规则校验` 结果和适用规则 ID。无适用规则时写 `not-applicable`，不得列出适用规则 ID，并说明已检查规则仓但本片无适用 rule ID；有适用规则且 `rules-review` 可用、规则校验通过时写 `required`；有适用规则但 `rules-review` 不可用时写 `状态：blocked`、`rules-review：unavailable`，保留 selectedRuleIds 与 `规则获取` 命令，`规则校验` 写 `skipped`，并把切片头部 `上下文预检` 同步写为 `blocked` 后停止。
+- `项目规则审查`：本片是否需要独立 rule-reviewer。`状态` 只允许 `required` / `not-applicable` / `blocked`；同时记录 `rules-review` 可用性、resolved `规则获取` 命令、`规则校验` 结果，以及 `selectedRuleIds` / `notApplicable` 两个显式分类。两类字段在任何状态都必须存在且结构可解析；条目写成 `<RULE-ID>：<reason>`，空类写 `无`。`pending` / `blocked` 阶段允许分类尚未覆盖完整 catalog。无 selected 规则时写 `not-applicable`；有 selected 规则且 `rules-review` 可用、规则校验通过时写 `required`；有 selected 规则但 `rules-review` 不可用时写 `状态：blocked`、`rules-review：unavailable`，保留 `selectedRuleIds` 与 `规则获取` 命令，`规则校验` 写 `skipped`，并把切片头部 `上下文预检` 同步写为 `blocked` 后停止。
 - `允许修改`：控制器维护的可审计执行清单，列出本片当前允许改动的文件、目录或 glob；它不是用户授权范围，`diff-check` 会读取更新后的列表。
 - `禁止修改`：本片不可自动进入的硬边界，列出禁止改动的文件、目录或 glob；`diff-check` 会读取该列表。命中时必须停止确认，不能通过更新 `允许修改` 绕开。
 - `禁止词`：可选的禁止新增词 / 命名同义词 / 高风险模式；无则写 `无`。
@@ -209,7 +212,9 @@ dev-plans/
 
 `允许修改` 不允许长期写宽泛的“全部”。若执行中发现当前清单不足，先停止改代码并说明原因，再按 [EXECUTION-RULES.md](EXECUTION-RULES.md) 的授权边界规则处理：控制器先按拟扩范围重跑受影响的上下文预检，补读新增路径所需上下文，重新判断项目规则适用性、风险 / 执行和 claims；仍服务于既有授权目标、未命中 `禁止修改`、风险为 A/B、未新增命中「需确认」面且无需新的执行确认时，更新 `允许修改` 和相关验证 / task brief，在 `#### 门禁记录` 留下依据后继续，否则创建 / 更新 D 并等待确认。
 
-当切片头部写 `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 必须是已填写内容，不得仍为 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规则审查` 必须显式存在且不能是 `blocked`，`禁止修改` 也必须显式存在但可以写 `无`。
+当切片头部写 `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 必须是已填写内容，不得仍为 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规则审查` 必须显式存在且不能是 `blocked`，`禁止修改` 也必须显式存在但可以写 `无`。validator 会对当前 plan 绑定项目根目录执行一次 `get-rules.mjs --root <repo> --catalog --optional-source`，只用 `rules[].ruleRef` 构造 actual catalog，并要求 `selectedRuleIds` 与 `notApplicable` 无内部重复、互斥、无 unknown、完整覆盖 actual catalog，且每条 reason 非空、非占位。
+
+控制器还必须在写 `ready` 前按 `规则获取` 读取每条 selected 规则，把其中可执行义务映射进当前已有的执行契约字段，例如 `允许修改` / `禁止修改`、验证命令、claims、停止条件或门禁记录；解决冲突并完成写回后才能继续。义务尚未进入执行契约或规则冲突未解决时保持 `pending` / `blocked`。该判断属于内容审查，不由 validator 根据 reason 文本推断，也不要求在 plan 中复制规则正文。
 
 ## 切片交接
 
@@ -335,7 +340,7 @@ Evidence 字段规则：
 
 `task-briefs/<S-id>.md` 和 `task-reports/<S-id>.json` 由脚本生成，是实现与审查的注意力收束视图，不写入 `plan.md` 正文。task brief 限制 implementer 的默认上下文；task report 是 implementer 的最小结构化 handoff，不是 Claim / Evidence / Status 的最终真源。
 
-- task brief 从当前切片、`全局约束`、`上下文预检`（含 `项目规则审查` / `禁止词` / `基线脏文件`）、`切片交接`、关联 D/A、门禁记录和 `claims/<S-id>.json` 提取窄上下文；修改运行时逻辑时，implementer subagent 必须补直接相关测试，或在 task report 说明不适用原因。
+- task brief 从当前切片、`全局约束`、`上下文预检`、`切片交接`、关联 D/A、门禁记录和 `claims/<S-id>.json` 提取窄上下文；其中 `项目规则审查` 只投影 `selectedRuleIds` 及 `规则获取`，不投影 `notApplicable` 或审查状态账务。修改运行时逻辑时，implementer subagent 必须补直接相关测试，或在 task report 说明不适用原因。
 - `允许修改`、相邻测试或验证命令需要调整时，控制器先按拟扩范围重跑受影响的上下文预检，补读新增路径所需上下文，重新判断项目规则适用性、selectedRuleIds、规则校验、风险 / 执行和 claims。仍在既有用户授权边界内、未命中 `禁止修改`、风险为 A/B、未新增命中「需确认」面且无需新的执行确认时，更新 plan 后重新生成 task brief，不创建 open D、不要求用户重新确认；若 implementer 需要继续写文件，再按新 brief 重新派发。否则停止确认。
 - 自动更新只适用于 implementer 写入前以 `blocked` 报告清单不足，或硬门禁 / AI Review 提出后续修复；实际 diff 已越过旧 brief 时先判接收门禁失败并确认归属，只有确认由本轮 implementer 写入越界文件时才记录接收违约，不得回填 `允许修改` 使本轮通过。派发前已脏但漏记的文件无法仅靠路径状态排除 implementer 继续写入，按共享工作区冲突停止并报告，不得事后补入 `基线脏文件`；派发后出现且无法归属本轮 implementer 的改动同样停止并报告。
 - task report 由 implementer subagent 填写 `conclusion`、`changedFiles`、`validation` 和 `blockedReason`；控制器不得代写 ready report。
@@ -423,7 +428,7 @@ Evidence 必须非空。前三项必须各引用且只引用同一个当前 gene
 
 真实用户接受后，controller 必须人工把当前每个剩余问题的具体内容、风险和接受决定逐项记录到 `结论`，并把用户原话或可定位会话引用保存到 `确认记录`；controller、reviewer 或机器不得代替真实用户生成该 D*。机器只校验 token、状态、引用和字段非占位，不通过自然语言关键词或充分性启发式判断记录内容、用户理解或确认真实性。部分修复不等于部分接受：必须重跑得到新 runId / A*，若仍接受再绑定新的当前完整集合。启用 `零已知缺陷收口` 或 recommendation 为其它值时不得使用该例外，第四 verdict 必须与 A* 原始 verdict / severity 一致。
 
-`项目规则审查：not-applicable` 时，第四 verdict 必须为 `not-applicable`，且上下文预检不得列出适用规则 ID。`项目规则审查：blocked` 时不得写 `上下文预检：ready` 或 `AI Review：passed`，也不得把切片标记为 `done`。`close-check` 不判断 rule ID 是否该选、规则 finding 是否正确或用户确认是否真实。
+`项目规则审查：not-applicable` 时，第四 verdict 必须为 `not-applicable`，且 `selectedRuleIds` 必须为空。`项目规则审查：blocked` 时不得写 `上下文预检：ready` 或 `AI Review：passed`，也不得把切片标记为 `done`。`close-check` 不判断 rule ID 是否该选、分类 reason 是否真实、selected 义务是否已充分进入执行契约、规则 finding 是否正确或用户确认是否真实。
 
 `cannot-verify-from-package` 必须由 controller 补证：补测试结果、代码证据、调用链、D/A 引用或重新生成 package；补证后仍无法判断时，切片写 `AI Review：blocked（原因）` 或转 `D* open`。`failed`、`critical`、未解决的 `cannot-verify-from-package` 都阻塞 `AI Review：passed` 和 `状态：done`。
 

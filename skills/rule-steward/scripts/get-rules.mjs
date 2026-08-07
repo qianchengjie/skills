@@ -2,7 +2,7 @@
 
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -24,6 +24,7 @@ function parseArgs(argv) {
   let root = process.cwd();
   let commit = null;
   let catalog = false;
+  let optionalSource = false;
   const ids = [];
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -48,16 +49,23 @@ function parseArgs(argv) {
       catalog = true;
       continue;
     }
+    if (arg === "--optional-source") {
+      if (optionalSource) fail("Duplicate option: --optional-source");
+      optionalSource = true;
+      continue;
+    }
     if (arg.startsWith("--")) fail(`Unknown option: ${arg}`);
     ids.push(arg);
   }
 
   if (catalog && ids.length > 0) fail("--catalog cannot be combined with rule IDs");
+  if (optionalSource && !catalog) fail("--optional-source requires --catalog");
+  if (optionalSource && commit !== null) fail("--optional-source only supports workspace catalogs");
   if (!catalog && ids.length === 0) {
-    fail("Usage: get-rules.mjs [--root <path>] [--commit <FULL-OID>] <RULE-ID>...\n       get-rules.mjs [--root <path>] --catalog [--commit <FULL-OID>]");
+    fail("Usage: get-rules.mjs [--root <path>] [--commit <FULL-OID>] <RULE-ID>...\n       get-rules.mjs [--root <path>] --catalog [--commit <FULL-OID>]\n       get-rules.mjs --root <path> --catalog --optional-source");
   }
 
-  return { root, commit, catalog, ids };
+  return { root, commit, catalog, optionalSource, ids };
 }
 
 function git(root, args, options = {}) {
@@ -121,6 +129,32 @@ function createReader(root, requestedCommit) {
       }
     },
   };
+}
+
+function isWorkspaceRuleSourceAbsent(root) {
+  if (!existsSync(root) || !statSync(root).isDirectory()) fail(`Invalid repository root: ${root}`);
+  if (existsSync(path.join(root, ".agents/rules"))) return false;
+  try {
+    git(root, ["rev-parse", "--is-inside-work-tree"]);
+  } catch {
+    if (existsSync(path.join(root, ".git"))) fail(`Cannot inspect Git repository: ${root}`);
+    return true;
+  }
+  try {
+    if (git(root, ["ls-files", "--", ".agents/rules"]).trim()) return false;
+  } catch {
+    fail(`Cannot inspect Git index: ${root}`);
+  }
+  try {
+    return !git(root, ["ls-tree", "-r", "--name-only", "HEAD", "--", ".agents/rules"]).trim();
+  } catch {
+    try {
+      git(root, ["status", "--porcelain"]);
+      return true;
+    } catch {
+      fail(`Cannot inspect Git HEAD: ${root}`);
+    }
+  }
 }
 
 function stripTicks(value) {
@@ -368,9 +402,14 @@ function contentHash(content) {
   return `sha256:${crypto.createHash("sha256").update(content).digest("hex")}`;
 }
 
-const { root, commit, catalog, ids } = parseArgs(process.argv.slice(2));
+const { root, commit, catalog, optionalSource, ids } = parseArgs(process.argv.slice(2));
 const duplicate = ids.find((id, index) => ids.indexOf(id) !== index);
 if (duplicate) fail(`Duplicate requested rule ID: ${duplicate}`);
+
+if (optionalSource && isWorkspaceRuleSourceAbsent(root)) {
+  process.stdout.write(`${JSON.stringify({ source: { kind: "absent" }, rules: [] }, null, 2)}\n`);
+  process.exit(0);
+}
 
 const reader = createReader(root, commit);
 const { content: indexContent, namespaces } = await parseIndex(reader);
