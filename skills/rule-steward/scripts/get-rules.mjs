@@ -20,6 +20,12 @@ function fail(message) {
   process.exit(1);
 }
 
+function writeStdout(output) {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(output, (error) => error ? reject(error) : resolve());
+  });
+}
+
 function parseArgs(argv) {
   let root = process.cwd();
   let commit = null;
@@ -407,7 +413,7 @@ const duplicate = ids.find((id, index) => ids.indexOf(id) !== index);
 if (duplicate) fail(`Duplicate requested rule ID: ${duplicate}`);
 
 if (optionalSource && isWorkspaceRuleSourceAbsent(root)) {
-  process.stdout.write(`${JSON.stringify({ source: { kind: "absent" }, rules: [] }, null, 2)}\n`);
+  await writeStdout(`${JSON.stringify({ source: { kind: "absent" }, rules: [] }, null, 2)}\n`);
   process.exit(0);
 }
 
@@ -439,7 +445,7 @@ if (catalog) {
         sourceFile: rule.sourceFile,
       })),
   };
-  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  await writeStdout(`${JSON.stringify(output, null, 2)}\n`);
   process.exit(0);
 }
 

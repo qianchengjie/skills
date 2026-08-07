@@ -385,6 +385,45 @@ assert.deepEqual(workspaceCatalog, {
     },
   ],
 });
+
+const largeCatalogRoot = await mkdtemp(path.join(os.tmpdir(), "rule-steward-large-catalog-"));
+const largeCatalogRuleCount = 300;
+const largeCatalogRules = Array.from({ length: largeCatalogRuleCount }, (_, index) => `### CORE-${String(index + 1).padStart(3, "0")} ${"大型目录中文标题".repeat(16)}
+
+- 级别：MUST
+- 生效条件：读取大型规则目录时
+- 规则：完整输出目录 JSON。
+- 通过条件：
+  - stdout 可被完整解析。
+- 证据要求：
+  - 最后一条规则存在。
+- 失败条件：
+  - stdout 被截断。
+- 无法验证条件：
+  - 无法执行脚本。
+`).join("\n");
+await mkdir(path.join(largeCatalogRoot, ".agents/rules/always"), { recursive: true });
+await writeFile(path.join(largeCatalogRoot, ".agents/rules/index.md"), `# Rules Index
+
+## Namespaces
+
+| Namespace | 状态 | 文件 | 触发条件 |
+| --- | --- | --- | --- |
+| \`CORE\` | active | \`always/constraints.md\` | 每次任务必读 |
+`);
+await writeFile(
+  path.join(largeCatalogRoot, ".agents/rules/always/constraints.md"),
+  `# Constraints\n\n${largeCatalogRules}`,
+);
+const largeCatalog = JSON.parse((await runNode([
+  getScript,
+  "--root",
+  largeCatalogRoot,
+  "--catalog",
+])).stdout);
+assert.equal(largeCatalog.rules.length, largeCatalogRuleCount);
+assert.equal(largeCatalog.rules.at(-1).ruleRef, "CORE-300");
+
 await assertFails(
   [getScript, "--root", catalogRoot, "--catalog", "CORE-001"],
   /--catalog cannot be combined with rule IDs/,
