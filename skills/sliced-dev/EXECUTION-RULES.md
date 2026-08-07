@@ -67,8 +67,8 @@ REPORT_AND_NEXT
 
 每个状态只允许做对应动作：
 
-- `PREFLIGHT_TASK`：只产出或更新 `#### 上下文预检`，不得修改业务代码。
-- `READ_CONTEXT`：只读取必读上下文；若上下文不足，写 `上下文预检：blocked` 并停止。
+- `PREFLIGHT_TASK`：只产出或更新 `#### 上下文预检`，不得修改业务代码。路径、变更范围和 catalog 在此阶段只能形成候选规则分类，不得固定最终 `selectedRuleIds` / `notApplicable`。
+- `READ_CONTEXT`：读取必读代码，并针对候选规则的触发条件做 focused search；读取后重新校准最终 `selectedRuleIds` / `notApplicable`，无法用代码证据明确排除的候选归入 selected。若上下文不足，写 `上下文预检：blocked` 并停止。
 - `PREPARE_CLAIMS`：创建或细化 `claims/<S-id>.json`；claims 是本片可验证执行声明，不写完整 Markdown 表格，不把 claims 状态双写进 `plan.md`。
 - `WRITE_TASK_BRIEF`：每轮派发前生成或刷新当前片 `task-briefs/<S-id>.md`，作为 implementer 的窄上下文入口；brief 的 `项目规则审查` 只投影 `selectedRuleIds` 与 `规则获取`，并渲染当前片 claims，以及已写回并关联的失败门禁、当前 General Review A* / open G* 或 `用户验收：issues（<原因>）` 修复依据；`项目规则审查：blocked` 时不得生成；需确认片必须先生成 brief，再发执行预告。
 - `CONFIRM_TASK`：仅需确认片使用；执行预告引用 task brief 路径和摘要，等待用户确认，不修改业务代码。用户确认后必须在同一连续流程内派发 implementer subagent；若确认后未派发即中断，续跑时重新预告并重新确认。
@@ -143,7 +143,7 @@ REPORT_AND_NEXT
 - `执行：自动/需确认/待判定`
 - `上下文预检：ready/blocked/skipped`
 
-`项目规则审查` 的 `selectedRuleIds` 与 `notApplicable` 在任何状态都必须存在且结构可解析；每项写 `<RULE-ID>：<reason>`，空类写 `无`。`pending` / `blocked` 允许 well-formed but incomplete。写 `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不得仍是占位内容；`项目规则审查` 必须显式存在且状态不是 `blocked`，`禁止修改` 必须显式存在，可写 `无`。两类规则必须无内部重复、互斥、无 unknown、完整覆盖 actual catalog，reason 非空且非占位；有 selected 规则但 `rules-review` 不可用时写 `blocked`，并把切片头部 `上下文预检` 同步写为 `blocked` 后停止。
+`项目规则审查` 的 `selectedRuleIds` 与 `notApplicable` 在任何状态都必须存在且结构可解析；`selectedRuleIds` 每项写 `<RULE-ID>：<reason>`，`notApplicable` 每项写 `<RULE-ID>[, <RULE-ID>...]：<共同 reason>`，空类写 `无`。路径、变更范围和 catalog 只能产生候选分类；完成本片必读代码与针对规则触发条件的 focused search 后，才能重新校准最终分类，无法用代码证据明确排除的候选归入 selected。`pending` / `blocked` 允许 well-formed but incomplete。写 `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不得仍是占位内容；`项目规则审查` 必须显式存在且状态不是 `blocked`，`禁止修改` 必须显式存在，可写 `无`。两类规则必须无内部重复、互斥、无 unknown、完整覆盖 actual catalog，reason 非空且非占位；有 selected 规则但 `rules-review` 不可用时写 `blocked`，并把切片头部 `上下文预检` 同步写为 `blocked` 后停止。
 
 结构闭包通过后，控制器仍须按 `规则获取` 读取 selected 规则，并把每条可执行义务映射到当前已有的执行契约字段（`允许修改` / `禁止修改`、验证、claims、停止条件或门禁记录）。义务未写入、冲突未解决时保持 `pending` / `blocked`，不得生成 task brief 或写 `ready`；不在 plan 中复制规则正文。validator 只检查显式结构和集合闭包，不判断分类 reason 是否真实，也不判断义务映射是否充分。
 

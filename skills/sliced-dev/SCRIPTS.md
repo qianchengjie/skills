@@ -411,8 +411,8 @@ get-rules.mjs --root <repo> --catalog --optional-source
 - `AI Review` 只允许 `pending` / `passed` / `issues` / `blocked` / `skipped` 开头。
 - 写入 `用户验收` 时只允许 `pending` / `passed` / `issues` / `skipped` 开头；`issues` 必须写明用户拒收原因，`skipped` 必须写明用户明确跳过原因。
 - `修复次数` 必须是 `当前次数/最大次数`，最大次数只允许 `2` / `4`，当前次数不能超过最大次数；默认使用 `/4`。
-- `上下文预检` 必须包含 `需理解`、`必读上下文`、`项目规则审查`、`允许修改`、`禁止修改`、`非目标`、`停止条件`；`项目规则审查` 的 `状态` 只允许 `required` / `not-applicable` / `blocked`，任何状态都必须存在结构可解析的 `selectedRuleIds` 与 `notApplicable`。旧 `适用规则` 字段不兼容。
-- `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不能是 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规则审查` 必须写明确状态，`禁止修改` 可显式写 `无`。`selectedRuleIds` 与 `notApplicable` 必须各自无重复、互斥、无 unknown、完整覆盖 actual catalog，且每条 reason 非空、非占位。
+- `上下文预检` 必须包含 `需理解`、`必读上下文`、`项目规则审查`、`允许修改`、`禁止修改`、`非目标`、`停止条件`；`项目规则审查` 的 `状态` 只允许 `required` / `not-applicable` / `blocked`，任何状态都必须存在结构可解析的 `selectedRuleIds` 与 `notApplicable`。`selectedRuleIds` 每项只接受一个 ID；`notApplicable` 每项可用逗号分隔多个 ID 共用一个 reason，parser 展平后参与闭包。旧 `适用规则` 字段不兼容。
+- `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不能是 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规则审查` 必须写明确状态，`禁止修改` 可显式写 `无`。展平后的 `selectedRuleIds` 与 `notApplicable` 必须各自无重复、互斥、无 unknown、完整覆盖 actual catalog，且每条 reason 非空、非占位。
 - 若切片存在 `#### 切片交接`，必须包含 `输入`、`输出`，且每项必须显式写 `无` 或至少一条非占位内容；`无` 不得和真实条目混写。
 - `依赖` 不能声明当前切片自身；普通 `依赖：S*` 不强制触发 `#### 切片交接`。
 - 只要切片头部写 `AI Review：passed`，就必须有 `#### AI Review 结论`，且包含 [PLAN-FILE.md 的「AI Review 结论」](PLAN-FILE.md#ai-review-结论)定义的完整四 verdict。

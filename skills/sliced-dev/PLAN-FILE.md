@@ -202,7 +202,7 @@ dev-plans/
 
 - `需理解`：本片必须理解的业务、调用链、项目风格或旧行为。
 - `必读上下文`：执行前必须读取的文件、搜索关键词或证据；只列必要上下文，不复述全项目。
-- `项目规则审查`：本片是否需要独立 rule-reviewer。`状态` 只允许 `required` / `not-applicable` / `blocked`；同时记录 `rules-review` 可用性、resolved `规则获取` 命令、`规则校验` 结果，以及 `selectedRuleIds` / `notApplicable` 两个显式分类。两类字段在任何状态都必须存在且结构可解析；条目写成 `<RULE-ID>：<reason>`，空类写 `无`。`pending` / `blocked` 阶段允许分类尚未覆盖完整 catalog。无 selected 规则时写 `not-applicable`；有 selected 规则且 `rules-review` 可用、规则校验通过时写 `required`；有 selected 规则但 `rules-review` 不可用时写 `状态：blocked`、`rules-review：unavailable`，保留 `selectedRuleIds` 与 `规则获取` 命令，`规则校验` 写 `skipped`，并把切片头部 `上下文预检` 同步写为 `blocked` 后停止。
+- `项目规则审查`：本片是否需要独立 rule-reviewer。`状态` 只允许 `required` / `not-applicable` / `blocked`；同时记录 `rules-review` 可用性、resolved `规则获取` 命令、`规则校验` 结果，以及 `selectedRuleIds` / `notApplicable` 两个显式分类。两类字段在任何状态都必须存在且结构可解析；`selectedRuleIds` 条目写成 `<RULE-ID>：<reason>`，`notApplicable` 条目写成 `<RULE-ID>[, <RULE-ID>...]：<共同 reason>`，空类写 `无`。路径、变更范围和 catalog 只能产生候选分类；完成本片必读代码与针对规则触发条件的 focused search 后，才能确定最终分类，此前写入的分类必须重新校准，无法用代码证据明确排除的候选归入 selected。`pending` / `blocked` 阶段允许分类尚未覆盖完整 catalog。无 selected 规则时写 `not-applicable`；有 selected 规则且 `rules-review` 可用、规则校验通过时写 `required`；有 selected 规则但 `rules-review` 不可用时写 `状态：blocked`、`rules-review：unavailable`，保留 `selectedRuleIds` 与 `规则获取` 命令，`规则校验` 写 `skipped`，并把切片头部 `上下文预检` 同步写为 `blocked` 后停止。
 - `允许修改`：控制器维护的可审计执行清单，列出本片当前允许改动的文件、目录或 glob；它不是用户授权范围，`diff-check` 会读取更新后的列表。
 - `禁止修改`：本片不可自动进入的硬边界，列出禁止改动的文件、目录或 glob；`diff-check` 会读取该列表。命中时必须停止确认，不能通过更新 `允许修改` 绕开。
 - `禁止词`：可选的禁止新增词 / 命名同义词 / 高风险模式；无则写 `无`。

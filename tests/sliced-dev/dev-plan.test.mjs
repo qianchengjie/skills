@@ -3399,6 +3399,28 @@ test('validate closes ready rule partitions against the actual catalog', async (
   });
 });
 
+test('validate expands grouped notApplicable reasons before ready closure', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-project-rule-partition-grouped');
+    await writeValidExecutingPlan(planDir);
+    await writeRuleCatalogFixture();
+    const planPath = path.join(planDir, 'plan.md');
+    const original = await fs.readFile(planPath, 'utf8');
+    const plan = withRequiredProjectRuleReview(withFilledContextPreflight(original), {
+      ruleIds: ['CORE-001'],
+      notApplicableRuleIds: ['TYPE-001', 'UI-001'],
+    })
+      .replace(
+        '    - TYPE-001：当前切片不涉及该规则约束的对象。\n    - UI-001：当前切片不涉及该规则约束的对象。',
+        '    - TYPE-001, UI-001：共同排除原因。',
+      )
+      .replace('- 上下文预检：pending', '- 上下文预检：ready');
+    await fs.writeFile(planPath, plan, 'utf8');
+
+    assert.deepEqual(await validatePlan(planDir), []);
+  });
+});
+
 test('validate does not accept the legacy 适用规则 field', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-project-rule-legacy-field');

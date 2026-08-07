@@ -935,12 +935,15 @@ function parseRulePartition(section, label) {
 
   const entries = [];
   for (const value of values) {
-    const match = /^([A-Z][A-Z0-9]*-[0-9]{3})[：:](.*)$/.exec(value);
-    if (!match || !RULE_REF_RE.test(match[1])) {
+    const match = /^(.+?)[：:](.*)$/.exec(value);
+    const ruleRefs = match
+      ? (label === 'notApplicable' ? match[1].split(/\s*[,，]\s*/) : [match[1]])
+      : [];
+    if (!match || ruleRefs.length === 0 || ruleRefs.some((ruleRef) => !RULE_REF_RE.test(ruleRef))) {
       errors.push(`malformed ${label} entry: ${value}`);
       continue;
     }
-    entries.push({ ruleRef: match[1], reason: match[2].trim() });
+    entries.push(...ruleRefs.map((ruleRef) => ({ ruleRef, reason: match[2].trim() })));
   }
   return { present: true, entries, errors };
 }
