@@ -21,6 +21,14 @@ controller 只把用户语法解析为固定的 BASE commit 与 TARGET commit，
 
 BASE、TARGET 或目标解释不唯一时立即 blocked，不任选一种解释。用户要求审查 current、staged、worktree、branch 或裸 tree 时，停止并要求先形成目标 commit；不要把这些入口静默降级为 commit 审查。
 
+创建 construction input 前，controller 必须为本轮生成新的 `runId`：
+
+```text
+<YYYYMMDDTHHmmssZ>-rr-<8 位小写十六进制随机串>
+```
+
+时间使用生成时的 UTC，例：`20260810T073012Z-rr-a1b2c3d4`。每个 fresh run 都重新生成，目录已存在时重新生成，不复用旧值。日期用于排序和辨认，随机后缀用于降低碰撞；不得在 `runId` 中编码 TARGET、branch、schemaVersion 或审查结论，这些事实只读取正式字段。
+
 controller 完成规则分区、targets、适用性决定和 batch 分组后，只写
 `kind = "rules-review-dispatch-construction-input"`、`schemaVersion = 2`
 的紧凑 dispatch 语义输入，再使用官方构造入口：
@@ -343,6 +351,7 @@ node scripts/validate.js --mode render-handoff --dir .rules-review-tmp/<run-id>
 validator 检查：
 
 - schemaVersion、固定字段、路径与 strict JSON。
+- `runId` 符合 `YYYYMMDDTHHmmssZ-rr-xxxxxxxx`，并在当前工件链中保持一致。
 - commit/tree/blob 存在，baseCommit/tree、boundCommit/tree 身份一致，且 `excludedFiles = []`。
 - 完整 commit 文件范围和规则声明分区闭合。
 - input snapshot 的 mode、hash、内容与 `targetTree` 一致。
@@ -354,6 +363,7 @@ validator 检查：
 
 validator 明确不检查：
 
+- `runId` 时间戳是否来自可信时钟、随机后缀是否具有声明的熵；也不从名称推断 TARGET、版本或结论。
 - BASE 选择是否符合业务意图。
 - catalog 字段、规则正文、通过条件和规则投影的语义是否正确，或通过条件是否完整、忠实且未扩大适用范围；适用性结论和 finding 是否正确。
 - 多个 finding results 是否确属同一根因，以及 `rootCause` 表述是否准确。

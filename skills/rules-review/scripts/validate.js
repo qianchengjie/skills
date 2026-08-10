@@ -39,7 +39,8 @@ const TARGET_RE = /^T\d{3,}$/;
 const FINDING_RE = /^F\d{3,}$/;
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
 const GIT_OID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const RUN_ID_RE = /^[0-9]{8}T[0-9]{6}Z-rr-[0-9a-f]{8}$/;
+const SAFE_TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 const LABELS = {
   passed: '协议通过',
@@ -314,7 +315,7 @@ function loadCurrentRepository() {
 }
 
 function resolveConstructionOutput(root, output, runId) {
-  if (!isSafeToken(runId)) throw new Error('construction input runId must be a safe token');
+  if (!isRunId(runId)) throw new Error('construction input runId must match YYYYMMDDTHHmmssZ-rr-xxxxxxxx');
   if (!isNonEmptyString(output)) throw new Error('construct-dispatch requires --output <relative-path>');
   assertSafeRepoRelativePath(output);
   const expected = `.rules-review-tmp/${runId}/dispatch.json`;
@@ -1441,7 +1442,7 @@ function validateDispatch(dispatch, artifact, result, currentInputPath = artifac
   const requiredFields = ['kind', 'schemaVersion', 'runId', 'reviewRange', 'ruleInputSource', 'ruleSnapshot', 'inputSnapshot', 'ruleSet', 'targets', 'applicabilityMatrix', 'reviewItems', 'reviewBatches'];
   requireFields(dispatch, artifact, result, 'D004', '', requiredFields);
   rejectUnsupportedFields(dispatch, artifact, result, 'D006', '', requiredFields, 'dispatch');
-  if (!isSafeToken(dispatch && dispatch.runId)) addViolation(result, 'D005', artifact, '/runId', 'runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', dispatch && dispatch.runId);
+  if (!isRunId(dispatch && dispatch.runId)) addViolation(result, 'D005', artifact, '/runId', 'runId must match YYYYMMDDTHHmmssZ-rr-xxxxxxxx', 'UTC timestamp + rr + 8 lowercase hex characters', dispatch && dispatch.runId);
   validateRuleInputSource(dispatch && dispatch.ruleInputSource, artifact, result, 'D246');
 
   const ruleSet = validateRuleSet(dispatch.ruleSet, artifact, result);
@@ -1794,7 +1795,7 @@ function validateTask(task, artifact, result, currentInputPath = artifact) {
   const requiredFields = ['kind', 'schemaVersion', 'runId', 'reviewBatchId', 'taskHash', 'ruleSetId', 'reviewRange', 'ruleInputSource', 'ruleSnapshot', 'inputSnapshot', 'reviewItems', 'rules', 'targets', 'applicabilityMatrix', 'outputContract'];
   requireFields(task, artifact, result, 'T004', '', requiredFields);
   rejectUnsupportedFields(task, artifact, result, 'T042', '', requiredFields, 'task');
-  if (!isSafeToken(task && task.runId)) addViolation(result, 'T022', artifact, '/runId', 'task runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', task && task.runId);
+  if (!isRunId(task && task.runId)) addViolation(result, 'T022', artifact, '/runId', 'task runId must match YYYYMMDDTHHmmssZ-rr-xxxxxxxx', 'UTC timestamp + rr + 8 lowercase hex characters', task && task.runId);
   if (!isSafeToken(task && task.reviewBatchId)) addViolation(result, 'T025', artifact, '/reviewBatchId', 'task reviewBatchId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', task && task.reviewBatchId);
   const expectedTaskHash = calculateTaskHash(task);
   if (!SHA256_RE.test((task && task.taskHash) || '')) {
@@ -1930,7 +1931,7 @@ function validateShard(shard, task, artifact, result) {
   expectKind(shard, artifact, result, 'S002', 'rules-review-shard');
   validateSchemaVersion(shard, artifact, result, 'S003');
   requireFields(shard, artifact, result, 'S004', '', ['kind', 'schemaVersion', 'runId', 'reviewBatchId', 'targetTree', 'taskHash', 'results']);
-  if (!isSafeToken(shard && shard.runId)) addViolation(result, 'S023', artifact, '/runId', 'shard runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', shard && shard.runId);
+  if (!isRunId(shard && shard.runId)) addViolation(result, 'S023', artifact, '/runId', 'shard runId must match YYYYMMDDTHHmmssZ-rr-xxxxxxxx', 'UTC timestamp + rr + 8 lowercase hex characters', shard && shard.runId);
   if (!isSafeToken(shard && shard.reviewBatchId)) addViolation(result, 'S024', artifact, '/reviewBatchId', 'shard reviewBatchId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', shard && shard.reviewBatchId);
   if (!GIT_OID_RE.test((shard && shard.targetTree) || '')) addViolation(result, 'S025', artifact, '/targetTree', 'shard targetTree must be a normalized Git object ID', '40 or 64 lowercase hex', shard && shard.targetTree);
   if (!SHA256_RE.test((shard && shard.taskHash) || '')) addViolation(result, 'S027', artifact, '/taskHash', 'shard taskHash must use sha256:<64hex>', 'sha256:<64hex>', shard && shard.taskHash);
@@ -2815,7 +2816,7 @@ function validateFinalReviewShape(finalReview, artifact, result) {
   ];
   requireFields(finalReview, artifact, result, 'FR004', '', requiredFields);
   rejectUnsupportedFields(finalReview, artifact, result, 'FR078', '', [...requiredFields, 'cannotVerifyItems', 'otherConcerns', 'summary'], 'finalReview');
-  if (!isSafeToken(finalReview && finalReview.runId)) addViolation(result, 'FR075', artifact, '/runId', 'finalReview runId must be a safe token', '^[A-Za-z0-9][A-Za-z0-9_-]*$', finalReview && finalReview.runId);
+  if (!isRunId(finalReview && finalReview.runId)) addViolation(result, 'FR075', artifact, '/runId', 'finalReview runId must match YYYYMMDDTHHmmssZ-rr-xxxxxxxx', 'UTC timestamp + rr + 8 lowercase hex characters', finalReview && finalReview.runId);
   if (!PROTOCOL_GATES.includes(finalReview.protocolGate)) addViolation(result, 'FR005', artifact, '/protocolGate', 'protocolGate must be valid', PROTOCOL_GATES, finalReview.protocolGate);
   if (!SCOPE_MODES.includes(finalReview.scopeMode)) addViolation(result, 'FR006', artifact, '/scopeMode', 'scopeMode must be valid', SCOPE_MODES, finalReview.scopeMode);
   if (!COVERAGE_CLAIMS.includes(finalReview.coverageClaim)) addViolation(result, 'FR007', artifact, '/coverageClaim', 'coverageClaim must be valid', COVERAGE_CLAIMS, finalReview.coverageClaim);
@@ -3619,6 +3620,10 @@ function isNonEmptyString(value) {
 }
 
 function isSafeToken(value) {
+  return typeof value === 'string' && SAFE_TOKEN_RE.test(value);
+}
+
+function isRunId(value) {
   return typeof value === 'string' && RUN_ID_RE.test(value);
 }
 

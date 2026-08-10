@@ -54,6 +54,11 @@ function contentHash(content) {
   return `sha256:${crypto.createHash("sha256").update(content).digest("hex")}`;
 }
 
+function testRunId(label) {
+  const suffix = crypto.createHash("sha256").update(label).digest("hex").slice(0, 8);
+  return `20260810T000000Z-rr-${suffix}`;
+}
+
 async function run(args, cwd = repoRoot) {
   return execFileAsync(process.execPath, [validator, ...args], { cwd });
 }
@@ -155,6 +160,7 @@ function createConstructionCase(t, {
   indexContent,
   mutateInput,
 } = {}) {
+  const resolvedRunId = testRunId(runId);
   const resolvedIndexContent = indexContent || [
     "# Rules Index",
     "",
@@ -223,7 +229,7 @@ function createConstructionCase(t, {
       ? "rules-review-dispatch-construction-input"
       : "rules-review-dispatch-construction-eval-input",
     schemaVersion: 2,
-    runId,
+    runId: resolvedRunId,
     repository: productionInput
       ? {
         baseCommit,
@@ -320,7 +326,7 @@ function createConstructionCase(t, {
   };
   if (mutateInput) mutateInput(input);
   const inputPath = path.join(inputRoot, "dispatch-input.json");
-  const output = `.rules-review-tmp/${runId}/dispatch.json`;
+  const output = `.rules-review-tmp/${resolvedRunId}/dispatch.json`;
   writeJson(inputPath, input);
   return {
     root,
@@ -336,7 +342,7 @@ function createConstructionCase(t, {
 }
 
 function draft({
-  runId = "run-v8",
+  runId = testRunId("run-v8"),
   inputRefs = ["src/main.js"],
   excludedFiles = [],
   candidateRuleRefs = ["CORE-001"],
@@ -408,8 +414,9 @@ function createDraft(root, options = {}) {
   if (options.candidateRuleRefs?.includes("AUX-001")) {
     writeTestRuleStore(root, options.candidateRuleRefs);
   }
-  const file = path.join(root, ".rules-review-tmp", options.runId || "run-v8", "dispatch.json");
-  writeJson(file, draft(options));
+  const runId = testRunId(options.runId || "run-v8");
+  const file = path.join(root, ".rules-review-tmp", runId, "dispatch.json");
+  writeJson(file, draft({ ...options, runId }));
   return file;
 }
 
@@ -2013,6 +2020,33 @@ test("boundCommit 是必填的规范 commit，且其 tree 必须等于 targetTre
   dispatch.reviewRange.boundCommit = dispatch.reviewRange.baseCommit;
   writeJson(file, dispatch);
   await expectFailure(["--mode", "dispatch", "--input", file], /boundCommit tree does not match targetTree/);
+});
+
+test("runId 只接受 UTC 时间、rr 标记和 8 位小写十六进制随机后缀", async (t) => {
+  const root = createRepository();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "src/main.js"), "export const main = 2;\n");
+  const file = createDraft(root, { runId: "20260810T073012Z-rr-a1b2c3d4" });
+  const dispatch = await seal(file);
+
+  dispatch.runId = "run-v8";
+  writeJson(file, dispatch);
+  await expectFailure(
+    ["--mode", "dispatch", "--input", file],
+    /runId must match YYYYMMDDTHHmmssZ-rr-xxxxxxxx/,
+  );
+
+  for (const schemaFile of [
+    "dispatch.schema.json",
+    "task.schema.json",
+    "shard.schema.json",
+    "final-review.schema.json",
+  ]) {
+    const schema = readJson(path.join(repoRoot, "skills/rules-review/schemas", schemaFile));
+    const pattern = new RegExp(schema.properties.runId.pattern);
+    assert.equal(pattern.test("20260810T073012Z-rr-a1b2c3d4"), true, schemaFile);
+    assert.equal(pattern.test("run-v8"), false, schemaFile);
+  }
 });
 
 test("v7 工件与旧 incremental 字段明确拒绝，v8 工件通过", async (t) => {

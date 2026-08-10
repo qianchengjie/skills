@@ -1277,7 +1277,7 @@ async function writeRuleCatalogFixture() {
 
 async function materializeRulesReviewV8RunFixture({
   hasCodeChange = true,
-  runId = 'run-pass-full-clean',
+  runId = '20260810T000000Z-rr-00000001',
 } = {}) {
   await prepareReviewableSliceDiffFixture();
   await fs.writeFile('src/example.ts', 'export const value = 1;\n', 'utf8');
@@ -1419,7 +1419,7 @@ async function materializeRulesReviewV8RunFixture({
 }
 
 async function prepareRulesReviewRunFixture({
-  runId = 'run-pass-full-clean',
+  runId = '20260810T000000Z-rr-00000001',
   shouldFix = false,
   multipleShouldFix = false,
   mustFix = false,
@@ -5142,7 +5142,7 @@ test('rule-review-package 对 repair 仍提交累计 baseCommit..headCommit', as
     await writeValidExecutingPlan(planDir);
     const planPath = path.join(planDir, 'plan.md');
     await fs.writeFile(planPath, withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')), 'utf8');
-    const initialRulesReview = await prepareRulesReviewRunFixture({ runId: 'run-initial-target' });
+    const initialRulesReview = await prepareRulesReviewRunFixture({ runId: '20260810T000001Z-rr-00000002' });
     await setSliceBaseCommit(planDir, 'S1', gitOid(['rev-parse', 'HEAD']));
     await writeReadyTaskHandoff(planDir, 'S1');
     await prepareReviewableSliceDiffFixture();

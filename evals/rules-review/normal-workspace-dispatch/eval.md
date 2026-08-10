@@ -24,10 +24,9 @@ Harness 只注入下面的 Prompt：
 /opt/rules-review/SKILL.md；rule-steward 文件位于 /opt/rule-steward。
 
 BASE=5a0809a0afc327b0e302ef9b4ff2082949175dc6，
-TARGET=b528a2e91b85127b09e74252f918059695ab725f，
-runId=eval-normal-workspace-dispatch。普通调用没有预提供 construction 文件；
+TARGET=b528a2e91b85127b09e74252f918059695ab725f。普通调用没有预提供 construction 文件；
 你作为 controller 只能自行写一个紧凑 strict JSON 并调用官方
-construct-dispatch。
+construct-dispatch；runId 按 Skill 的当前规则为本轮 fresh run 生成。
 
 先用 rule-steward 的 `get-rules.mjs --catalog` 浏览完整 catalog，再按 ID 从同一
 workspace 来源批量读取 CORE-001、CORE-002 的完整规则块。为避免语义耗时，固定：
@@ -64,8 +63,8 @@ input；该输入必须由 controller 按 Skill 合同创建。
 
 ### Dispatch 终态
 
-- 最终文件位于
-  `.rules-review-tmp/eval-normal-workspace-dispatch/dispatch.json`。
+- `runId` 符合 `YYYYMMDDTHHmmssZ-rr-xxxxxxxx`，最终文件位于对应的
+  `.rules-review-tmp/<runId>/dispatch.json`。
 - `reviewRange.baseCommit`、`reviewRange.boundCommit` 与 fixture 一致。
 - `ruleInputSource` 精确等于 `{ "kind": "workspace" }`。
 - candidate 规则覆盖 catalog 全集，selected 只包含 Prompt 固定的两个规则，

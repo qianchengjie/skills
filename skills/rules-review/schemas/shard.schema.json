@@ -7,7 +7,7 @@
   "properties": {
     "kind": { "const": "rules-review-shard" },
     "schemaVersion": { "const": 8 },
-    "runId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+    "runId": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-rr-[0-9a-f]{8}$" },
     "reviewBatchId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
     "targetTree": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
     "taskHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
