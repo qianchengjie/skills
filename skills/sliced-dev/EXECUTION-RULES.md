@@ -399,7 +399,7 @@ AI Review 通过后，按执行模式处理用户验收；字段枚举、合法�
 - 每个切片从 `修复次数：0/4` 开始。
 - 只有为解决失败门禁 / review issue 而实际修改任务范围内文件时才增加当前次数。单纯重跑 reviewer、重生成 package、补测试运行证据或修复 review 协议工件不计次；没有新增证据或工件变化时不得原样重跑 reviewer。
 - 每次修复前只针对失败门禁 / review issues 改，不顺手扩展需求。
-- 每次派发返修前，先把失败硬门禁、当前 General Review A* / open G*、`用户验收：issues（<原因>）`，或当前项目规则审查 A* / `rulesReviewReport` 修复依据写回并关联，重新生成 task brief，再重置 task report；随后优先 `followup_task` 原 implementer，并明确要求最新 brief 覆盖旧上下文。只有 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 明示的不安全复用条件才 fresh fallback；既有授权内扩展执行 allowlist 仍复用原 implementer。
+- 每次派发返修前，先把失败硬门禁、当前 General Review A* / open G*、`用户验收：issues（<原因>）`，或当前项目规则审查 A* / `rulesReviewReport` 修复依据写回并关联，重新生成 task brief，再重置 task report；随后优先 `followup_task` 原 implementer。`followup_task.message` 完整使用固定任务包，只替换当前切片和最新 Task brief 路径；返修依据只通过最新 task brief 进入 follow-up 消息，新增或变化的业务口径、实现取舍、文件保留 / 删除及修复终点必须先写回适用真源并重新生成 brief。只有 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 明示的不安全复用条件才 fresh fallback；既有授权内扩展执行 allowlist 仍复用原 implementer。
 - 修复后重跑失败门禁，执行 `pre-commit-check`，由 controller 追加普通单父 commit 并运行 `record-commit`。若直接前序有 open finding，生成 `repair` package，只复核旧 `openFindings` 和本轮 fix diff；开放 finding 清零后必须对同一最终 commit 生成累计 `full` package。若直接前序是用户拒收前的 clean full，则跳过 finding-focused repair，生成带 `reviewTrigger：user-acceptance-issues（<原因>）` 的新累计 `full`。所有阶段都新建 general reviewer。
 - 修复次数用尽后任一门禁仍失败，停止并报告剩余问题，不继续自动修。
 - 修复需要超出当前 `允许修改` 时按授权边界规则先重跑受影响的上下文预检并更新执行清单；命中 `禁止修改`、改变用户授权边界、风险升为 C、新增命中「需确认」面或需要新的执行确认时立即停止。

@@ -28,6 +28,9 @@ test('subagent 文档使用当前共享工作区契约', async () => {
   assert.match(implementer, /用户授权边界、任务目标、Claims 契约发生实质变化/);
   assert.match(implementer, /执行 allowlist 在既有授权边界内扩展，不单独触发新建 implementer/);
   assert.match(implementer, /最新 task brief 覆盖旧上下文和此前读取内容/);
+  assert.match(implementer, /返修依据只通过最新 task brief 进入消息/);
+  assert.match(implementer, /消息不承担第二份返修说明/);
+  assert.match(executionRules, /返修依据只通过最新 task brief 进入 follow-up 消息/);
   assert.match(implementer, /subagent 记忆不是真源/);
   assert.match(implementer, /task-brief[\s\S]*task-report-template[\s\S]*派发 subagent/);
   assert.match(implementer, /同一工作区同一时间只允许一个 implementer/);

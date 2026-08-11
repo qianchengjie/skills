@@ -47,11 +47,13 @@
 ```json
 {
   "target": "implement_s1_a1",
-  "message": "<使用下方任务包模板；要求重新读取最新 task brief，并以其内容覆盖旧上下文>"
+  "message": "<完整使用下方任务包模板；仅替换当前切片和最新 Task brief 路径>"
 }
 ```
 
 只有原 implementer 不可用或运行时拒绝 follow-up、接收门禁已确认原 implementer 写入越界文件或其输出与实际 diff 冲突，或用户授权边界、任务目标、Claims 契约发生实质变化时，才能 fresh fallback：使用 `spawn_agent(fork_turns: "none")` 新建 implementer。执行 allowlist 在既有授权边界内扩展，不单独触发新建 implementer。
+
+`followup_task.message` 仍完整使用下方「任务包模板」，只替换当前切片和 Task brief 路径。返修依据只通过最新 task brief 进入消息：新增或变化的业务口径、实现取舍、文件保留 / 删除及修复终点，先写回现有 plan / claims / A* 等适用真源并重新生成 task brief，再派发。消息不承担第二份返修说明。
 
 follow-up 和 fresh fallback 必须消费同一份最新 task brief；fresh fallback 仍使用首轮任务包和固定参数。subagent 记忆不是真源，最新 task brief 覆盖旧上下文和此前读取内容。修复次数、单写者、越界归属确认和需确认片重新确认边界保持不变。
 
