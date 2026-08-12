@@ -1711,15 +1711,18 @@ async function writeRuleRepairVerificationFixture(planDir, sliceId = 'S1', {
   scopeVerdict = 'bounded',
   dispositionStatus = 'addressed',
   newFindings = [],
+  applicabilityVerdict = 'unchanged',
 } = {}) {
   const taskPath = path.join(planDir, 'review-packages', `${sliceId}-rule-repair-task.json`);
   const verificationPath = path.join(planDir, 'review-packages', `${sliceId}-rule-repair-verification.json`);
   const task = JSON.parse(await fs.readFile(taskPath, 'utf8'));
-  const cannotVerify = scopeVerdict === 'scope_unbounded' || dispositionStatus === 'cannot_verify';
+  const cannotVerify = scopeVerdict === 'scope_unbounded'
+    || dispositionStatus === 'cannot_verify'
+    || applicabilityVerdict !== 'unchanged';
   const hasFinding = dispositionStatus === 'not_addressed' || newFindings.length > 0;
   const verification = {
     kind: 'sliced-dev-rule-repair-verification',
-    schemaVersion: 'sliced-dev.ruleRepairVerification.v1',
+    schemaVersion: 'sliced-dev.ruleRepairVerification.v2',
     sliceId,
     taskHash: task.taskHash,
     previousFullRunId: task.previousFullRunId,
@@ -1728,6 +1731,10 @@ async function writeRuleRepairVerificationFixture(planDir, sliceId = 'S1', {
     scopeVerdict,
     ...(scopeVerdict === 'scope_unbounded' ? { scopeReason: '无法可靠界定修复对动态消费者的影响范围。' } : {}),
     reviewedDeltaFiles: task.repairRange.changedFiles,
+    applicabilityCheck: {
+      verdict: applicabilityVerdict,
+      evidence: [{ loc: 'src/example.ts:1', summary: '已检查前序不适用规则的适用性分区。' }],
+    },
     issueDispositions: task.previousIssues.map((issue) => ({
       issueId: issue.issueId,
       status: dispositionStatus,
@@ -6385,6 +6392,8 @@ test('sliced-dev repair verification closes a direct rules finding repair and fa
     const previous = await prepareRulesReviewRunFixture({
       runId: '20260812T000000Z-rr-00000001',
       mustFix: true,
+      selectedRuleRefs: ['CORE-001'],
+      globallyNotApplicableRuleRefs: ['TYPE-001', 'UI-001'],
     });
     const planPath = path.join(planDir, 'plan.md');
     await fs.writeFile(
@@ -6448,11 +6457,21 @@ test('sliced-dev repair verification closes a direct rules finding repair and fa
     assert.doesNotMatch(JSON.stringify(task), /"status":"passed"|"observations"/);
     assert(task.reviewRequirements.includes('inspect_statically_discoverable_consumers'));
     assert(task.reviewRequirements.includes('reject_unrelated_changes'));
+    assert.deepEqual(task.ruleScope.globallyNotApplicableRuleRefs, ['TYPE-001', 'UI-001']);
+    assert.deepEqual(task.ruleSources.map((rule) => rule.ruleRef), ['CORE-001', 'TYPE-001', 'UI-001']);
+    assert.deepEqual(task.contextRead, {
+      commit: range.headCommit,
+      tree: task.repairRange.targetTree,
+      mode: 'git_tree_blob_only',
+    });
     let rulePackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1-rules.md'), 'utf8');
     assert.match(rulePackage, /runMode：repair_verification/);
     assert.match(rulePackage, /不得继承任何 passed \/ observation/);
     assert.match(rulePackage, /所有可静态发现的调用方 \/ consumer/);
     assert.match(rulePackage, /非前序失败项返修所需的功能改动/);
+    assert.match(rulePackage, /applicability partition/);
+    assert.match(rulePackage, /currentTargetCommit.*Git tree\/blob/);
+    assert.match(rulePackage, /不得读取工作区、index 或当前 HEAD/);
     assert.match(rulePackage, /scope_unbounded/);
 
     result = runDevPlanCli(['rule-repair-check', planDir, 'S1']);
@@ -6481,7 +6500,43 @@ test('sliced-dev repair verification closes a direct rules finding repair and fa
     result = runDevPlanCli(['rule-review-package', planDir, 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
 
-    const repair = await writeRuleRepairVerificationFixture(planDir);
+    const legacyRepair = await writeRuleRepairVerificationFixture(planDir);
+    delete legacyRepair.verification.applicabilityCheck;
+    await fs.writeFile(
+      legacyRepair.verificationPath,
+      `${JSON.stringify(legacyRepair.verification, null, 2)}\n`,
+      'utf8',
+    );
+    result = runDevPlanCli(['rule-repair-check', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /applicabilityCheck/);
+
+    const changedApplicability = await writeRuleRepairVerificationFixture(planDir, 'S1', {
+      applicabilityVerdict: 'changed',
+    });
+    result = runDevPlanCli(['rule-repair-check', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.deepEqual(JSON.parse(result.stdout.toString()), {
+      ok: false,
+      verdict: 'cannot_verify',
+      nextAction: 'fresh_full',
+    });
+    assert.match(result.stderr.toString(), /explicitly request fresh full/);
+
+    await writeRuleRepairVerificationFixture(planDir, 'S1', {
+      applicabilityVerdict: 'cannot_verify',
+    });
+    result = runDevPlanCli(['rule-repair-check', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.deepEqual(JSON.parse(result.stdout.toString()), {
+      ok: false,
+      verdict: 'cannot_verify',
+      nextAction: 'fresh_full',
+    });
+
+    const repair = await writeRuleRepairVerificationFixture(planDir, 'S1', {
+      applicabilityVerdict: 'unchanged',
+    });
     result = runDevPlanCli(['rule-repair-check', planDir, 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
     assert.deepEqual(JSON.parse(result.stdout.toString()), {

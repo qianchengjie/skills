@@ -173,8 +173,8 @@ const SHOULD_ACCEPTANCE_NOTE = '用户接受当前 run 全部剩余 SHOULD';
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
 const GIT_OID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const REVIEW_RANGE_SCHEMA_VERSION = 'sliced-dev.reviewRange.v2';
-const RULE_REPAIR_TASK_SCHEMA_VERSION = 'sliced-dev.ruleRepairTask.v1';
-const RULE_REPAIR_VERIFICATION_SCHEMA_VERSION = 'sliced-dev.ruleRepairVerification.v1';
+const RULE_REPAIR_TASK_SCHEMA_VERSION = 'sliced-dev.ruleRepairTask.v2';
+const RULE_REPAIR_VERIFICATION_SCHEMA_VERSION = 'sliced-dev.ruleRepairVerification.v2';
 const WHOLE_REVIEW_VERDICTS = [
   '全局约束符合性',
   '跨切片交接一致性',
@@ -4752,6 +4752,10 @@ async function constructRuleRepairTask(planDir, sliceId, context) {
     repoRoot,
     path.resolve(getRuleRepairVerificationPath(planDir, sliceId)),
   ));
+  const repairRuleRefs = new Set([
+    ...basis.selectedRuleRefs,
+    ...basis.globallyNotApplicableRuleRefs,
+  ]);
   const task = {
     kind: 'sliced-dev-rule-repair-task',
     schemaVersion: RULE_REPAIR_TASK_SCHEMA_VERSION,
@@ -4764,7 +4768,7 @@ async function constructRuleRepairTask(planDir, sliceId, context) {
       selectedRuleRefs: basis.selectedRuleRefs,
       globallyNotApplicableRuleRefs: basis.globallyNotApplicableRuleRefs,
     },
-    ruleSources: dispatch.ruleSet.ruleSources.filter((rule) => basis.selectedRuleRefs.includes(rule.ruleRef)),
+    ruleSources: dispatch.ruleSet.ruleSources.filter((rule) => repairRuleRefs.has(rule.ruleRef)),
     ruleSnapshot: dispatch.ruleSnapshot,
     previousIssues,
     repairRange: {
@@ -4774,10 +4778,16 @@ async function constructRuleRepairTask(planDir, sliceId, context) {
       targetTree,
       changedFiles,
     },
+    contextRead: {
+      commit: currentTargetCommit,
+      tree: targetTree,
+      mode: 'git_tree_blob_only',
+    },
     inputSnapshot: { files: snapshotTreeFiles(repoRoot, baseTree, targetTree) },
     reviewRequirements: [
       'verify_previous_issues',
       'review_complete_repair_delta',
+      'check_previous_not_applicable_rules',
       'expand_semantic_impact',
       'inspect_statically_discoverable_consumers',
       'reject_unrelated_changes',
@@ -4808,7 +4818,7 @@ function validateRuleRepairVerification(verification, task) {
   const required = [
     'kind', 'schemaVersion', 'sliceId', 'taskHash', 'previousFullRunId',
     'previousTargetCommit', 'currentTargetCommit', 'scopeVerdict', 'reviewedDeltaFiles',
-    'issueDispositions', 'newFindings', 'impactSummary', 'verdict', 'nextAction',
+    'applicabilityCheck', 'issueDispositions', 'newFindings', 'impactSummary', 'verdict', 'nextAction',
   ];
   assertExactObject(verification, required, ['scopeReason'], 'repair verification');
   if (verification.kind !== 'sliced-dev-rule-repair-verification') throw gateError('repair verification kind is invalid');
@@ -4831,6 +4841,11 @@ function validateRuleRepairVerification(verification, task) {
   ) {
     throw gateError('repair verification reviewedDeltaFiles must cover the complete repair delta exactly');
   }
+  assertExactObject(verification.applicabilityCheck, ['verdict', 'evidence'], [], 'repair verification applicabilityCheck');
+  if (!['unchanged', 'changed', 'cannot_verify'].includes(verification.applicabilityCheck.verdict)) {
+    throw gateError('repair verification applicabilityCheck.verdict is invalid');
+  }
+  validateRuleRepairEvidence(verification.applicabilityCheck.evidence, 'repair verification applicabilityCheck.evidence');
   if (!Array.isArray(verification.issueDispositions)) throw gateError('repair verification issueDispositions must be an array');
   const expectedIssueIds = task.previousIssues.map((issue) => issue.issueId);
   const actualIssueIds = verification.issueDispositions.map((item) => item?.issueId);
@@ -4856,7 +4871,8 @@ function validateRuleRepairVerification(verification, task) {
     validateRuleRepairEvidence(finding.evidence, `repair verification newFindings[${index}].evidence`);
   });
   assertNonEmptyString(verification.impactSummary, 'repair verification impactSummary');
-  const cannotVerify = verification.scopeVerdict === 'scope_unbounded'
+  const cannotVerify = verification.applicabilityCheck.verdict !== 'unchanged'
+    || verification.scopeVerdict === 'scope_unbounded'
     || verification.issueDispositions.some((item) => item.status === 'cannot_verify');
   const hasFinding = verification.issueDispositions.some((item) => item.status === 'not_addressed')
     || verification.newFindings.length > 0;
@@ -6060,7 +6076,9 @@ async function buildRuleReviewPackage(planDir, sliceId, { taskBrief, taskReport 
   const repairVerificationRef = repair?.task.outputContract.verificationPath;
   const reviewerInstructions = repair
     ? `本包用于 sliced-dev 内部 repair verification，不创建或修改 rules-review run，也不生成 finalReview。
-读取 ${repairTaskRef}，只证明前序问题在当前 TARGET 的 disposition，并按 selected rules 审查完整 repair delta 及其语义影响；必要时主动展开未修改调用方、共享类型或其它上下文。
+读取 ${repairTaskRef}，只证明前序问题在当前 TARGET 的 disposition，并按 selected rules 审查完整 repair delta 及其语义影响；同时用前序 globallyNotApplicable rule sources 检查 repair delta 是否改变 applicability partition。
+applicabilityCheck 只允许 unchanged / changed / cannot_verify；只有 unchanged 才继续局部复验，changed / cannot_verify 一律返回 cannot_verify / fresh_full，不在 repair verification 内审查新变得 applicable 的规则。
+必要时主动展开未修改调用方、共享类型或其它上下文；所有未修改上下文只能从 task.contextRead.commit（即 currentTargetCommit）对应的 Git tree/blob 读取，不得读取工作区、index 或当前 HEAD。
 共享 helper / type 改动必须检查所有可静态发现的调用方 / consumer；无法证明静态影响范围闭合时，写 scope_unbounded / cannot_verify / fresh_full。
 不得继承任何 passed / observation 结果，也不得把未修改文件自动视为通过。若 delta 含非前序失败项返修所需的功能改动，或无法可靠界定影响范围，写 scope_unbounded / cannot_verify / fresh_full；只有范围可界定时才写 bounded。
 把 strict JSON 结果写入 ${repairVerificationRef}；随后由 sliced-dev 的 rule-repair-check 机械校验。`
@@ -6078,6 +6096,10 @@ rules-review 必须使用 \`--base ${recorded.range.baseCommit} --target-commit 
       currentTargetCommit: repair.task.repairRange.targetCommit,
       scopeVerdict: 'bounded',
       reviewedDeltaFiles: repair.task.repairRange.changedFiles,
+      applicabilityCheck: {
+        verdict: 'unchanged',
+        evidence: [{ loc: '<repo-relative-path:line>', summary: '<applicability evidence>' }],
+      },
       issueDispositions: repair.task.previousIssues.map((issue) => ({
         issueId: issue.issueId,
         status: 'addressed',
