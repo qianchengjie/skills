@@ -313,7 +313,9 @@ done slice 的 `#### 门禁记录` 必须保留 diff-check 的结构化证据；
 
 general reviewer 以 `review-packages/<S-id>.md` 为主输入，只输出当前阶段允许的结果；普通包不包含 `项目规则审查` 信息。每轮 general review 都使用 `spawn_agent(fork_turns: "none")` 新建 reviewer，禁止用 `followup_task` 复用原 reviewer。首次 `full` 完整审查 `baseCommit..headCommit` 并输出前三个 verdict 和完整 `openFindings`；`repair` 只审查 `previousHeadCommit..headCommit`，逐一裁决上一轮 finding 并报告 fix diff 新 finding，不输出或继承前三个 verdict；发生过 repair 后必须对同一最终 `headCommit` 再执行累计 `full`。clean full 后的用户拒收以 `reviewTrigger：user-acceptance-issues（...）`，项目规则 finding 修复产生的新 TARGET 以 `reviewTrigger：project-rule-review-issues（A*）`，直接重新执行累计 `full`，都不伪造 General finding。新 reviewer 只消费本轮 package 和其中显式引用的直接上一轮 A*，不继承上一 reviewer 的会话记忆。
 
-`项目规则审查：required` 时，只有当前 TARGET 的最终累计 General full clean，且适用的用户验收为 `passed / skipped` 后，才生成 `review-packages/<S-id>-rules.md` 并派发 fresh rule-reviewer。规则包复制当前 Review Range、累计文件快照和 `baseCommit..headCommit` diff，但完全不包含 execution-time `项目规则审查` 块、`selectedRuleIds`、`notApplicable`、`规则获取` 或嵌有这些字段的 task brief。每个新 TARGET 创建全新 run；rule-reviewer 基于最终 TARGET 和完整 active catalog 独立分类，以 `--base <baseCommit> --target-commit <headCommit>` 和 `excludedFiles: []` 审查全部最终 `reviewItems`，保持 `excludedRuleRefs = []`，不传 `--rules-commit`，不携带旧 run、旧规则审查 A* 或旧 SHOULD 接受 D*，也不继承旧结果。`dispatch.ruleSet.selectedRuleRefs` 是最终审查范围，shards / `finalReview` 才是结果；非空 catalog 即使最终 selected 为空也要完成真实 zero-item run。active catalog 真实为空时才跳过 run。同一 TARGET 的规则协议或输入工件修正只重做 rules-review，仍绑定该 TARGET 的 General 和用户验收继续有效。controller 最后写第四 verdict 和唯一安全的当前 `项目规则审查 runId`；非 `ready_for_merge` 时 A* 必须记录 `.rules-review-tmp/<runId>/response.md`。
+`项目规则审查：required` 时，只有当前 TARGET 的最终累计 General full clean，且适用的用户验收为 `passed / skipped` 后，才生成 `review-packages/<S-id>-rules.md`。默认 `runMode=fresh_full`：rule-reviewer 基于最终 TARGET 和完整 active catalog 独立分类，以 `--base <baseCommit> --target-commit <headCommit>` 和 `excludedFiles: []` 审查全部最终 `reviewItems`，保持 `excludedRuleRefs = []`，不传 `--rules-commit`，不携带旧 run、旧规则审查 A* 或旧 SHOULD 接受 D*，也不继承旧结果。`dispatch.ruleSet.selectedRuleRefs` 是最终审查范围，shards / `finalReview` 才是结果；非空 catalog 即使最终 selected 为空也要完成真实 zero-item run。active catalog 真实为空时才跳过 run。同一 TARGET 的规则协议或输入工件修正只重做 rules-review，仍绑定该 TARGET 的 General 和用户验收继续有效。
+
+当前 TARGET 符合 [SKILL.md 的「规则返修复验」](SKILL.md#第一原则)时，`runMode=repair_verification` 是唯一例外：rule-repair reviewer 执行 sliced-dev v3 repair task，不创建 rules-review run / `finalReview`。协议语义以 SKILL.md 为准；本文件只定义 controller 的进入和结果推进。当前使用 fresh reviewer 是编排策略，不改变“只能以当前 package / task 和允许的 TARGET Git 对象为证据”的输入隔离要求。
 
 结构合法的正负结果都是有效审查结果，负结论不得通过重派洗掉。只有 reviewer 未返回、越界写文件或 final summary 无法归属本轮 package / run 时，才允许对同一输入最多 fresh 重派一次，禁止对 reviewer 使用 `followup_task`；仍失败则写 `AI Review：blocked（<原因>）` 并停止。`close-check` 会要求 general / rule package、当前 A*、rules-review dispatch 和 Review Range v2 的 commit 三元组、累计文件集合及精确绑定一致。
 
@@ -366,9 +368,9 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs review-prompt dev-plans/<date-s
 
 reviewer subagent 调用模板和权限边界见 [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md)。
 
-general reviewer 输出 [PLAN-FILE.md 的「AI Review 结论」](PLAN-FILE.md#ai-review-结论)定义的前三项 verdict，controller 先写当前 General selector 与这三项并保持 `AI Review：pending`；用户验收满足后，controller 才按 fresh rules-review 结果写第四项 `项目规则审查`，随后写 `AI Review：passed`。`required` 时同节还要有唯一 `- 项目规则审查 runId：<runId>`。脚本接受 General 前无表、General 后三项、最终四项三种阶段，并在 close-check 回源重验当前 TARGET 的真实 run。
+general reviewer 输出 [PLAN-FILE.md 的「AI Review 结论」](PLAN-FILE.md#ai-review-结论)定义的前三项 verdict，controller 先写当前 General selector 与这三项并保持 `AI Review：pending`；用户验收满足后，controller 才按 fresh rules-review 或合法 repair verification 结果写第四项 `项目规则审查`，随后写 `AI Review：passed`。`required` 时同节还要有唯一 `- 项目规则审查 runId：<runId>`。脚本接受 General 前无表、General 后三项、最终四项三种阶段，并在 close-check 回源重验对应的 fresh run 或“前序 full + repair verification”组合证据。
 
-项目规则语义审查必须在代码 commit、最终 General clean 和适用的用户验收后执行。首轮 `pre-commit-check` 要求 `HEAD == baseCommit`，返修轮要求 `HEAD == previousHeadCommit`；controller 创建普通单父 commit 后用 `record-commit` 固定范围，再以 rules-review `--target-commit <headCommit>` 自动精确绑定，不做后置绑定。无代码轮不创建空 commit，Review Range 保持 `previousHeadCommit == headCommit`。
+项目规则语义审查必须在代码 commit、最终 General clean 和适用的用户验收后执行。首轮 `pre-commit-check` 要求 `HEAD == baseCommit`，返修轮要求 `HEAD == previousHeadCommit`；controller 创建普通单父 commit 后用 `record-commit` 固定范围。fresh full 以 rules-review `--target-commit <headCommit>` 精确绑定；repair verification 只消费已封印的 v3 task 和其中允许的 TARGET Git 对象。无代码轮不创建空 commit，Review Range 保持 `previousHeadCommit == headCommit`。
 
 `cannot-verify-from-package` 必须由 controller 补证：补测试结果、代码证据、调用链、D/A 引用或重新生成 package；不能靠口头解释改成 passed。补证后仍无法判断时，写 `AI Review：blocked（原因）` 或转 `D* open`。
 
@@ -401,6 +403,7 @@ repair 中的新 finding 只能来自本轮 fix diff，统一写 `Origin=repair-
 - 只有为解决失败门禁 / review issue 而实际修改任务范围内文件时才增加当前次数。单纯重跑 reviewer、重生成 package、补测试运行证据或修复 review 协议工件不计次；没有新增证据或工件变化时不得原样重跑 reviewer。
 - 每次修复前只针对失败门禁 / review issues 改，不顺手扩展需求。
 - 每次派发返修前，先把失败硬门禁、当前 General Review A* / open G*、`用户验收：issues（<原因>）`，或当前项目规则审查 A* / `rulesReviewReport` 修复依据写回并关联，重新生成 task brief，再重置 task report；随后优先 `followup_task` 原 implementer。规则 finding 只作为向前返修依据，不回写历史 preflight 的 execution-time `selectedRuleIds` / `notApplicable`。`followup_task.message` 完整使用固定任务包，只替换当前切片和最新 Task brief 路径；返修依据只通过最新 task brief 进入 follow-up 消息，新增或变化的业务口径、实现取舍、文件保留 / 删除及修复终点必须先写回适用真源并重新生成 brief。只有 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 明示的不安全复用条件才 fresh fallback；既有授权内扩展执行 allowlist 仍复用原 implementer。
+- `rule-repair-check` 派生为 `finding / repair` 时，controller 把 verification 的 `issueDispositions.status=not_addressed` 与 `newFindings` 逐项写入当前 A* 的审计 / 返修依据并关联当前切片，再重新生成 task brief 交给 implementer。修复形成新 TARGET 后不再复用该 verification，直接显式执行 fresh full rules-review。
 - 修复后重跑失败门禁，执行 `pre-commit-check`，由 controller 追加普通单父 commit 并运行 `record-commit`。若直接前序有 open finding，生成 `repair` package，只复核旧 `openFindings` 和本轮 fix diff；开放 finding 清零后必须对同一最终 commit 生成累计 `full` package。若直接前序是用户拒收前的 clean full，则用 `user-acceptance-issues`；若修复直接前序 TARGET 的规则 finding，则用唯一的 `project-rule-review-issues（A*）`，两者都跳过 finding-focused repair并生成新累计 `full`。所有阶段都新建 general reviewer。
 - 修复次数用尽后任一门禁仍失败，停止并报告剩余问题，不继续自动修。
 - 修复需要超出当前 `允许修改` 时按授权边界规则先重跑受影响的上下文预检并更新执行清单；命中 `禁止修改`、改变用户授权边界、风险升为 C、新增命中「需确认」面或需要新的执行确认时立即停止。

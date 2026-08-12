@@ -4,8 +4,8 @@
 
 ## 派发原则
 
-- 每轮 general reviewer 和 rule-reviewer 都使用 fresh `spawn_agent(fork_turns: "none")`。
-- 禁止对 reviewer 使用 `followup_task`；每轮只消费本轮 package，subagent 记忆不是真源。
+- 每轮 general reviewer 和 rule-reviewer 都使用 fresh `spawn_agent(fork_turns: "none")`；这是当前编排的 reviewer 生命周期策略，不是 Rule Repair Verification 的证明条件。
+- 禁止对 reviewer 使用 `followup_task`；这是当前编排策略。无论生命周期策略如何，每轮只消费本轮 package / task 和其中允许读取的 Git 对象，未写入工件的 subagent 记忆不是真源或证据。
 - 结构合法的负结论进入修复或阻塞，不得通过重派 reviewer 洗掉。
 - 只有未返回、越界写文件或 final summary 无法绑定本轮 package/run 时，才允许同一输入 fresh 重派一次；仍失败则写 `AI Review：blocked（<原因>）`。
 
@@ -117,7 +117,11 @@ repair 的结果表：
 
 ## Rule Reviewer
 
-仅当 `项目规则审查：required`、当前 TARGET 的最终累计 General full 已通过，且适用的用户验收为 `passed / skipped` 时派发。active catalog 真实为空时跳过 rules-review；非空时即使 execution-time `selectedRuleIds` 为空也必须派发。rule package 复制累计 `baseCommit → headCommit` 的文件快照和 diff，完全不包含 preflight 的 `项目规则审查`、`selectedRuleIds`、`notApplicable`、`规则获取` 或嵌有这些字段的 task brief；不得在 General repair 或用户验收 pending / issues 时提前派发。
+仅当 `项目规则审查：required`、当前 TARGET 的最终累计 General full 已通过，且适用的用户验收为 `passed / skipped` 时派发。active catalog 真实为空时跳过；非空时即使 execution-time `selectedRuleIds` 为空也必须派发。先读取 rule package 的 `runMode`：`fresh_full` 执行 rules-review，`repair_verification` 执行 sliced-dev 内部规则返修复验；不得在 General repair 或用户验收 pending / issues 时提前派发。
+
+### fresh_full
+
+fresh full rule package 复制累计 `baseCommit → headCommit` 的文件快照和 diff，完全不包含 preflight 的 `项目规则审查`、`selectedRuleIds`、`notApplicable`、`规则获取` 或嵌有这些字段的 task brief。
 
 ```text
 你是 sliced-dev rule-reviewer。
@@ -170,6 +174,12 @@ fixed summary：
 每个 `ruleRefs` 分组必须机械闭合到 `dispatch.ruleSet.globallyNotApplicableRuleRefs`；`reason` / `evidence` 必须由 rule-reviewer 独立分类时显式给出。sliced-dev 只检查它们存在且非空，不判断语义是否正确。
 
 规则语义审查在代码提交后完成。`--target-commit` 封印时直接固定 `targetTree = headCommit^{tree}` 与 `boundCommit = headCommit`。
+
+### repair_verification
+
+repair verification 由 sliced-dev 的 rule-repair reviewer 执行，不调用 rules-review skill / protocol，不创建 rules-review run 或 `finalReview`。reviewer 只读取当前 `<S-id>-rules.md` 引用的 v3 repair task，以及 task 允许从 `currentTargetCommit` Git tree / blob 展开的上下文；不得读取工作区、index、当前 HEAD，也不得把未写入工件的会话记忆当作证据。
+
+reviewer 按 [SKILL.md 的「规则返修复验」](SKILL.md#第一原则)完成三项证明义务，并严格按 task 的 `outputContract` 把 JSON 写入 `review-packages/<S-id>-rule-repair-verification.json`。它不输出 fresh full 的 fixed summary，也不自行决定或执行后续 fallback；controller 以 `rule-repair-check` 的派生结果推进。
 
 ## 机器校验边界
 

@@ -223,22 +223,33 @@ package 固定包含 `Review Range`、`General Review 阶段`、`General Review 
 从仓库根目录执行：
 
 ```bash
-node <sliced-dev-skill-dir>/scripts/dev-plan.mjs rule-review-package dev-plans/YYYY-MM-DD-<slug> <S-id>
+node <sliced-dev-skill-dir>/scripts/dev-plan.mjs rule-review-package dev-plans/YYYY-MM-DD-<slug> <S-id> [--fresh-full-reason "<reason>"]
 ```
 
-作用：当当前切片 `项目规则审查` 状态为 `required` 时，生成 `dev-plans/YYYY-MM-DD-<slug>/review-packages/<S-id>-rules.md`，作为 rule-reviewer 的规则审查包。除 `validate`、task brief / report 和 claims 前置 gate 外，还要求当前 TARGET 已有最终 clean 累计 General full，且适用的用户验收为 `passed / skipped`；自动且未启用逐片验收时可缺席该字段。General repair、用户验收 `pending / issues` 或旧 TARGET 的 General proof 都会阻塞。
+作用：当当前切片 `项目规则审查` 状态为 `required` 时，生成 `dev-plans/YYYY-MM-DD-<slug>/review-packages/<S-id>-rules.md`。除 `validate`、task brief / report 和 claims 前置 gate 外，还要求当前 TARGET 已有最终 clean 累计 General full，且适用的用户验收为 `passed / skipped`；自动且未启用逐片验收时可缺席该字段。General repair、用户验收 `pending / issues` 或旧 TARGET 的 General proof 都会阻塞。
 
-- `required`：生成 `<S-id>-rules.md`。
+- `required`：生成带明确 `runMode` 的 `<S-id>-rules.md`。
 - `not-applicable`：退出 0，提示 not-applicable，不生成文件。
 - `blocked`：退出 1，不生成文件。
 
-规则包复制当前 Review Range、累计文件快照和 `baseCommit..headCommit` diff，但完全不包含 execution-time `项目规则审查` 块、`selectedRuleIds`、`notApplicable`、`规则获取` 或嵌有这些字段的 task brief。每个新 TARGET 使用 fresh run；同一 TARGET 仅修正 rules-review 协议或输入工件时可重新生成并重跑，当前 General 与用户验收不失效。
+`runMode` 只有两种：
 
-每个新的 TARGET 都创建独立 rules-review v8 run；rule-reviewer 基于最终 TARGET 和完整 active catalog 独立分类，不得携带 `baseRunId`、continuation、旧 result 或旧 package 协议。sliced-dev 始终传 `--base <baseCommit> --target-commit <headCommit>` 并保持 `excludedFiles: []`、`excludedRuleRefs = []`，不传 `--rules-commit`；代码 commit 输入和 snapshot 必须来自规则包，不从当前文件或 index 重建，规则使用封印时的当前工作区。active catalog 真实为空时跳过；非空 catalog 即使最终 `selectedRuleRefs` 为空，也完成真实 zero-item run。
+- `fresh_full`：普通 TARGET 的默认模式。规则包复制当前 Review Range、累计文件快照和 `baseCommit..headCommit` diff，但完全不包含 execution-time `项目规则审查` 块、`selectedRuleIds`、`notApplicable`、`规则获取` 或嵌有这些字段的 task brief；rule-reviewer 创建独立 rules-review v8 run。同一 TARGET 仅修正 rules-review 协议或输入工件时可重新生成并重跑，当前 General 与用户验收不失效。
+- `repair_verification`：仅对符合 [SKILL.md 的「规则返修复验」](SKILL.md#第一原则)的直接规则返修 TARGET 构造，同时生成 `review-packages/<S-id>-rule-repair-task.json`；该包执行 sliced-dev 内部复验，不创建 rules-review run。构造失败会报错，controller 必须显式带 `--fresh-full-reason "<reason>"` 重新运行本命令，不会静默改成 `fresh_full`。
+
+`fresh_full` 下，rule-reviewer 基于最终 TARGET 和完整 active catalog 独立分类，不得携带 `baseRunId`、continuation、旧 result 或旧 package 协议。sliced-dev 始终传 `--base <baseCommit> --target-commit <headCommit>` 并保持 `excludedFiles: []`、`excludedRuleRefs = []`，不传 `--rules-commit`；代码 commit 输入和 snapshot 必须来自规则包，不从当前文件或 index 重建，规则使用封印时的当前工作区。active catalog 真实为空时跳过；非空 catalog 即使最终 `selectedRuleRefs` 为空，也完成真实 zero-item run。
 
 fixed summary 以 `reviewSelectedRuleRefs` 投影 `dispatch.ruleSet.selectedRuleRefs`，以 `reviewNotApplicable.ruleRefs` 机械闭合 `dispatch.ruleSet.globallyNotApplicableRuleRefs`，并投影当前新 run 的 `rulesReviewRunId`、recommendation、三个 issueSummary 计数和条件性 `shouldSetHash`；审查阶段不保留 `selectedRuleIds` 兼容别名。`reviewNotApplicable` 的 reason / evidence 由 rule-reviewer 独立分类时产生，sliced-dev 只检查显式非空。`--target-commit` 在封印时直接固定 `targetTree = headCommit^{tree}`、`boundCommit = headCommit` 和 `excludedFiles = []`，无需后置绑定。
 
 `close-check` 重跑受信任 rules-review validator，并核对 `reviewSelectedRuleRefs` / `reviewNotApplicable.ruleRefs` 与 dispatch、reviewRange、累计 changed units、input snapshot、文件 hash/mode 和精确 commit 绑定；不要求最终范围等于 execution-time `selectedRuleIds`。`dispatch.ruleSet.selectedRuleRefs` 是最终审查范围，shards / `finalReview` 才是结果。机器不判断规则是否真的适用、分类 reason / evidence 是否真实、finding 是否正确或证据是否充分。
+
+repair reviewer 写完 v3 verification 后，从仓库根目录执行：
+
+```bash
+node <sliced-dev-skill-dir>/scripts/dev-plan.mjs rule-repair-check dev-plans/YYYY-MM-DD-<slug> <S-id>
+```
+
+命令机械校验 repair task / verification 绑定和 v3 结果派生：仅 `repaired / complete` 退出 0；`finding / repair` 或 `cannot_verify / fresh_full` 退出 1，由 controller 按 [SKILL.md 的「规则返修复验」](SKILL.md#第一原则)显式流转。机器不判断返修语义、影响范围或 applicability expansion 结论是否正确。
 
 ## whole-review-package
 
