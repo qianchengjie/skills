@@ -1036,6 +1036,7 @@ async function appendProjectRuleReviewAudit(planDir, {
   cannotVerify = 0,
   shouldSetHash,
   rulesReviewReport,
+  repairVerification,
   summary = 'rules-review clean',
 } = {}) {
   const auditsPath = path.join(planDir, 'audits.md');
@@ -1055,6 +1056,7 @@ async function appendProjectRuleReviewAudit(planDir, {
       : ['  - 无']),
     `- rulesReviewRunId: ${runId}`,
   ];
+  if (repairVerification !== undefined) lines.push(`- repairVerification: ${repairVerification}`);
   if (validation !== null) lines.push(`- validation: ${validation}`);
   if (verdict !== null) lines.push(`- verdict: ${verdict}`);
   if (severity !== null) lines.push(`- severity: ${severity}`);
@@ -1703,6 +1705,41 @@ async function prepareNonPassingRulesReviewRunFixture(recommendation) {
     baseCommit,
     targetCommit,
   };
+}
+
+async function writeRuleRepairVerificationFixture(planDir, sliceId = 'S1', {
+  scopeVerdict = 'bounded',
+  dispositionStatus = 'addressed',
+  newFindings = [],
+} = {}) {
+  const taskPath = path.join(planDir, 'review-packages', `${sliceId}-rule-repair-task.json`);
+  const verificationPath = path.join(planDir, 'review-packages', `${sliceId}-rule-repair-verification.json`);
+  const task = JSON.parse(await fs.readFile(taskPath, 'utf8'));
+  const cannotVerify = scopeVerdict === 'scope_unbounded' || dispositionStatus === 'cannot_verify';
+  const hasFinding = dispositionStatus === 'not_addressed' || newFindings.length > 0;
+  const verification = {
+    kind: 'sliced-dev-rule-repair-verification',
+    schemaVersion: 'sliced-dev.ruleRepairVerification.v1',
+    sliceId,
+    taskHash: task.taskHash,
+    previousFullRunId: task.previousFullRunId,
+    previousTargetCommit: task.repairRange.baseCommit,
+    currentTargetCommit: task.repairRange.targetCommit,
+    scopeVerdict,
+    ...(scopeVerdict === 'scope_unbounded' ? { scopeReason: '无法可靠界定修复对动态消费者的影响范围。' } : {}),
+    reviewedDeltaFiles: task.repairRange.changedFiles,
+    issueDispositions: task.previousIssues.map((issue) => ({
+      issueId: issue.issueId,
+      status: dispositionStatus,
+      evidence: [{ loc: 'src/example.ts:1', summary: '已复验前序问题在当前 TARGET 中的状态。' }],
+    })),
+    newFindings,
+    impactSummary: '已审查完整修复 delta，并按需展开未修改上下文。',
+    verdict: cannotVerify ? 'cannot_verify' : hasFinding ? 'finding' : 'repaired',
+    nextAction: cannotVerify ? 'fresh_full' : hasFinding ? 'repair' : 'complete',
+  };
+  await fs.writeFile(verificationPath, `${JSON.stringify(verification, null, 2)}\n`, 'utf8');
+  return { task, verification, verificationPath };
 }
 
 test('init creates directory plan files', async () => {
@@ -6338,6 +6375,196 @@ test('CLI close-check requires project rule review A* evidence when required', a
     const extraHash = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-rule-review-required']);
     assert.equal(extraHash.status, 1, extraHash.stderr.toString());
     assert.match(extraHash.stderr.toString(), /must not include shouldSetHash/);
+  });
+});
+
+test('sliced-dev repair verification closes a direct rules finding repair and fails closed to explicit fresh full', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-rule-repair-verification');
+    await writeValidExecutingPlan(planDir);
+    const previous = await prepareRulesReviewRunFixture({
+      runId: '20260812T000000Z-rr-00000001',
+      mustFix: true,
+    });
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
+      'utf8',
+    );
+    await setSliceBaseCommit(planDir, 'S1', previous.baseCommit);
+    await writeReadyTaskHandoff(planDir, 'S1');
+    execFileSync('git', ['checkout', '--detach', previous.targetCommit]);
+    let result = runDevPlanCli(['record-commit', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    await writeGeneratedReviewPackageFixture(planDir, 'S1');
+    await selectGeneralReviewAudit(planDir, 'A9');
+    result = runDevPlanCli(['rule-review-package', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    await appendProjectRuleReviewAudit(planDir, { id: 'A2', ...previous });
+
+    let plan = await fs.readFile(planPath, 'utf8');
+    plan = plan
+      .replace('- AI Review：pending', '- AI Review：issues（项目规则 finding 待修复）')
+      .replace(
+        '\n\n#### 门禁记录',
+        '\n| 项目规则审查 | failed | minor | A2 | 当前规则 finding 待修复 |\n\n#### 门禁记录',
+      )
+      .replace('\n#### 门禁记录', `\n- 项目规则审查 runId：${previous.runId}\n\n#### 门禁记录`);
+    await fs.writeFile(planPath, plan, 'utf8');
+
+    await fs.writeFile('src/example.ts', 'export const value = 3;\n', 'utf8');
+    execFileSync('git', ['add', 'src/example.ts']);
+    execFileSync('git', ['commit', '-m', 'repair project rule finding']);
+    result = runDevPlanCli(['record-commit', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    const range = JSON.parse(await fs.readFile(path.join(planDir, 'review-packages', 'S1-range.json'), 'utf8'));
+
+    result = runDevPlanCli(['review-package', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    const prompt = runDevPlanCli(['review-prompt', planDir, 'S1']);
+    const reviewPackageHash = /- reviewPackageHash: (sha256:[0-9a-f]{64})/.exec(prompt.stdout.toString())?.[1];
+    assert.ok(reviewPackageHash);
+    await appendGeneralReviewV4Audit(planDir, {
+      id: 'A10',
+      range,
+      reviewPackageHash,
+      previousReview: 'A9',
+      reviewTrigger: 'project-rule-review-issues（A2）',
+    });
+    await selectGeneralReviewAudit(planDir, 'A10');
+
+    result = runDevPlanCli(['rule-review-package', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    const taskPath = path.join(planDir, 'review-packages', 'S1-rule-repair-task.json');
+    const task = JSON.parse(await fs.readFile(taskPath, 'utf8'));
+    assert.equal(task.kind, 'sliced-dev-rule-repair-task');
+    assert.equal(task.previousFullRunId, previous.runId);
+    assert.equal(task.repairRange.baseCommit, previous.targetCommit);
+    assert.equal(task.repairRange.targetCommit, range.headCommit);
+    assert.deepEqual(task.repairRange.changedFiles, range.iterationFiles);
+    assert(task.previousIssues.length > 0);
+    assert(task.previousIssues.every((issue) => ['finding', 'cannot_verify'].includes(issue.kind)));
+    assert.doesNotMatch(JSON.stringify(task), /"status":"passed"|"observations"/);
+    assert(task.reviewRequirements.includes('inspect_statically_discoverable_consumers'));
+    assert(task.reviewRequirements.includes('reject_unrelated_changes'));
+    let rulePackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1-rules.md'), 'utf8');
+    assert.match(rulePackage, /runMode：repair_verification/);
+    assert.match(rulePackage, /不得继承任何 passed \/ observation/);
+    assert.match(rulePackage, /所有可静态发现的调用方 \/ consumer/);
+    assert.match(rulePackage, /非前序失败项返修所需的功能改动/);
+    assert.match(rulePackage, /scope_unbounded/);
+
+    result = runDevPlanCli(['rule-repair-check', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /missing repair verification/);
+
+    const rulePath = path.join('.agents', 'rules', 'always', 'constraints.md');
+    const ruleBefore = await fs.readFile(rulePath, 'utf8');
+    await fs.writeFile(rulePath, `${ruleBefore}\n`, 'utf8');
+    result = runDevPlanCli(['rule-review-package', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /explicitly request fresh full/);
+    result = runDevPlanCli([
+      'rule-review-package',
+      planDir,
+      'S1',
+      '--fresh-full-reason',
+      '规则身份已变化',
+    ]);
+    assert.equal(result.status, 0, result.stderr.toString());
+    rulePackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1-rules.md'), 'utf8');
+    assert.match(rulePackage, /runMode：fresh_full/);
+    assert.match(rulePackage, /fallbackFrom：repair_verification/);
+    assert.match(rulePackage, /fallbackReason：规则身份已变化/);
+    await fs.writeFile(rulePath, ruleBefore, 'utf8');
+    result = runDevPlanCli(['rule-review-package', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+
+    const repair = await writeRuleRepairVerificationFixture(planDir);
+    result = runDevPlanCli(['rule-repair-check', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    assert.deepEqual(JSON.parse(result.stdout.toString()), {
+      ok: true,
+      verdict: 'repaired',
+      nextAction: 'complete',
+    });
+    const findingVerification = structuredClone(repair.verification);
+    findingVerification.issueDispositions[0].status = 'not_addressed';
+    findingVerification.verdict = 'finding';
+    findingVerification.nextAction = 'repair';
+    await fs.writeFile(repair.verificationPath, `${JSON.stringify(findingVerification, null, 2)}\n`, 'utf8');
+    result = runDevPlanCli(['rule-repair-check', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.deepEqual(JSON.parse(result.stdout.toString()), {
+      ok: false,
+      verdict: 'finding',
+      nextAction: 'repair',
+    });
+    assert.match(result.stderr.toString(), /return to repair/);
+    findingVerification.issueDispositions = [];
+    await fs.writeFile(repair.verificationPath, `${JSON.stringify(findingVerification, null, 2)}\n`, 'utf8');
+    result = runDevPlanCli(['rule-repair-check', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /dispose every previous issue exactly once/);
+    await fs.writeFile(repair.verificationPath, `${JSON.stringify(repair.verification, null, 2)}\n`, 'utf8');
+    const repairRef = path.join(planDir, 'review-packages', 'S1-rule-repair-verification.json');
+    await appendProjectRuleReviewAudit(planDir, {
+      id: 'A11',
+      ...previous,
+      validation: `node skills/sliced-dev/scripts/dev-plan.mjs rule-repair-check ${planDir} S1 => passed`,
+      verdict: 'passed',
+      severity: 'not-applicable',
+      recommendation: 'ready_for_merge',
+      mustFix: 0,
+      shouldFix: 0,
+      cannotVerify: 0,
+      repairVerification: repairRef,
+      rulesReviewReport: null,
+      summary: '前序 full + repair delta 已闭环',
+    });
+    plan = withPassedRequiredProjectRuleReviewVerdict(await fs.readFile(planPath, 'utf8'), {
+      runId: previous.runId,
+      evidence: 'A11',
+      note: '前序 full + repair delta 已闭环',
+    });
+    await fs.writeFile(planPath, plan, 'utf8');
+    await markSliceDone(planDir, 'S1');
+    await writeWholeReviewPackageFixture(planDir);
+
+    result = runDevPlanCli(['close-check', planDir]);
+    assert.equal(result.status, 0, result.stderr.toString());
+
+    const auditsPath = path.join(planDir, 'audits.md');
+    const closedAudits = await fs.readFile(auditsPath, 'utf8');
+    await fs.writeFile(
+      auditsPath,
+      closedAudits.replace(
+        `- repairVerification: ${repairRef}`,
+        `- repairVerification: ${repairRef}\n- rulesReviewReport: .rules-review-tmp/${previous.runId}/response.md`,
+      ),
+      'utf8',
+    );
+    result = runDevPlanCli(['close-check', planDir]);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /repair audit A11 must not include rulesReviewReport/);
+    await fs.writeFile(auditsPath, closedAudits, 'utf8');
+
+    repair.verification.scopeVerdict = 'scope_unbounded';
+    repair.verification.scopeReason = '动态消费者范围无法界定。';
+    repair.verification.issueDispositions = repair.verification.issueDispositions.map((item) => ({
+      ...item,
+      status: 'cannot_verify',
+    }));
+    repair.verification.verdict = 'cannot_verify';
+    repair.verification.nextAction = 'fresh_full';
+    await fs.writeFile(repair.verificationPath, `${JSON.stringify(repair.verification, null, 2)}\n`, 'utf8');
+    result = runDevPlanCli(['rule-repair-check', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /explicitly request fresh full/);
+    result = runDevPlanCli(['close-check', planDir]);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /explicitly request fresh full/);
   });
 });
 
