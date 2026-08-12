@@ -1207,6 +1207,15 @@ function validateReviewVerdicts(id, body, { status, aiReview }, errors) {
       errors.push(`plan.md:${id}: missing AI Review verdict ${verdict}`);
     }
   }
+  if (
+    GENERAL_REVIEW_VERDICTS.every((verdict) => seen.has(verdict))
+    && parseSingleTopLevelField(
+      getSubsection(body, SLICE_AI_REVIEW_VERDICTS_SECTION),
+      'General Review audit',
+    ).values.length === 0
+  ) {
+    errors.push(`plan.md:${id}: ${SLICE_AI_REVIEW_VERDICTS_SECTION} must select exactly one General Review audit A*`);
+  }
 
   const hasProjectRuleVerdict = seen.has(PROJECT_RULE_REVIEW_VERDICT);
   if ((status === 'done' || aiReviewStatus === 'passed') && !hasProjectRuleVerdict) {

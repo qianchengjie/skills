@@ -419,6 +419,8 @@ async function appendGeneralReviewV4Audit(planDir, {
   previousReview = '无',
   requirementStatus = 'passed',
   requirementSeverity = 'not-applicable',
+  codeQualityStatus = 'passed',
+  codeQualitySeverity = 'not-applicable',
   repairResults = [],
   openFindings = [],
   reviewTrigger,
@@ -431,7 +433,7 @@ async function appendGeneralReviewV4Audit(planDir, {
 | --- | --- | --- | --- | --- |
 | 需求符合性 | ${requirementStatus} | ${requirementSeverity} | review-package / Claims | 需求结论 |
 | 切片边界 / 交接一致性 | passed | not-applicable | review-package / 本轮修复索引 | 边界结论 |
-| 代码质量 / AI 污染检查 | passed | not-applicable | review-package / Git Diff | 质量结论 |
+| 代码质量 / AI 污染检查 | ${codeQualityStatus} | ${codeQualitySeverity} | review-package / Git Diff | 质量结论 |
 `
     : `
 #### Finding Results
@@ -469,6 +471,26 @@ ${openFindings.map((item) => `| ${item.id} | ${item.verdict} | ${item.severity} 
     plan.replace('| A1 | done |', `| A1 | done |\n| ${id} | done |`),
     'utf8',
   );
+}
+
+async function appendCurrentGeneralReviewFixture(planDir, {
+  id = 'A2',
+  requirementStatus = 'passed',
+  requirementSeverity = 'not-applicable',
+  codeQualityStatus = 'passed',
+  codeQualitySeverity = 'not-applicable',
+} = {}) {
+  const headCommit = gitOid(['rev-parse', 'HEAD']);
+  await appendGeneralReviewV4Audit(planDir, {
+    id,
+    range: { baseCommit: headCommit, previousHeadCommit: headCommit, headCommit },
+    reviewPackageHash: `sha256:${'0'.repeat(64)}`,
+    requirementStatus,
+    requirementSeverity,
+    codeQualityStatus,
+    codeQualitySeverity,
+  });
+  await selectGeneralReviewAudit(planDir, id);
 }
 
 async function selectGeneralReviewAudit(planDir, auditId, { issues = false } = {}) {
@@ -2946,6 +2968,7 @@ test('validate accepts automatic done slice without user acceptance', async () =
         .replace('- 验证：pending', '- 验证：passed（标准流程）'),
       'utf8',
     );
+    await appendCurrentGeneralReviewFixture(planDir);
 
     assert.deepEqual(await validatePlan(planDir), []);
   });
@@ -3627,6 +3650,7 @@ test('validate accepts AI Review passed with fourth 项目规则审查 verdict',
     const plan = withPassedReviewVerdicts(await fs.readFile(planPath, 'utf8'))
       .replace('- AI Review：pending', '- AI Review：passed');
     await fs.writeFile(planPath, plan, 'utf8');
+    await appendCurrentGeneralReviewFixture(planDir);
 
     assert.deepEqual(await validatePlan(planDir), []);
   });
@@ -3646,10 +3670,14 @@ test('validate accepts non-passed code quality verdict evidence', async () => {
       const plan = withPassedReviewVerdicts(await fs.readFile(planPath, 'utf8'))
         .replace('- AI Review：pending', `- ${aiReview}`)
         .replace(
-          `| 代码质量 / AI 污染检查 | passed | not-applicable | ${getSliceFixturePackageRef('S1')} | 代码质量可接受 |`,
-          `| 代码质量 / AI 污染检查 | ${status} | ${severity} | ${getSliceFixturePackageRef('S1')} | package 内证据不足，需修复。 |`,
+          `| 代码质量 / AI 污染检查 | passed | not-applicable | A1 / ${getSliceFixturePackageRef('S1')} | 代码质量可接受 |`,
+          `| 代码质量 / AI 污染检查 | ${status} | ${severity} | A1 / ${getSliceFixturePackageRef('S1')} | package 内证据不足，需修复。 |`,
         );
       await fs.writeFile(planPath, plan, 'utf8');
+      await appendCurrentGeneralReviewFixture(planDir, {
+        codeQualityStatus: status,
+        codeQualitySeverity: severity,
+      });
 
       assert.deepEqual(await validatePlan(planDir), []);
     });
@@ -3741,6 +3769,10 @@ test('validate accepts AI Review issues with verdict note when header has no rea
       .replace('- AI Review：pending', '- AI Review：issues')
       .replace('| 需求符合性 | passed | not-applicable |', '| 需求符合性 | failed | major |');
     await fs.writeFile(planPath, plan, 'utf8');
+    await appendCurrentGeneralReviewFixture(planDir, {
+      requirementStatus: 'failed',
+      requirementSeverity: 'major',
+    });
 
     assert.deepEqual(await validatePlan(planDir), []);
   });
@@ -3754,6 +3786,7 @@ test('validate accepts Chinese code quality verdict', async () => {
     const plan = withPassedReviewVerdicts(await fs.readFile(planPath, 'utf8'))
       .replace('- AI Review：pending', '- AI Review：passed');
     await fs.writeFile(planPath, plan, 'utf8');
+    await appendCurrentGeneralReviewFixture(planDir);
 
     assert.deepEqual(await validatePlan(planDir), []);
   });
@@ -4292,6 +4325,7 @@ test('CLI task-brief binds project rule review report into repair input', async 
       .replace('\n#### 门禁记录', `\n- 项目规则审查 runId：${rulesReview.runId}\n\n#### 门禁记录`);
     await fs.writeFile(planPath, plan, 'utf8');
     await appendProjectRuleReviewAudit(planDir, rulesReview);
+    await appendCurrentGeneralReviewFixture(planDir, { id: 'A3' });
     await writeVerifiedClaimsFixture(planDir, 'S1');
     await setSliceBaseCommit(planDir, 'S1', gitOid(['rev-parse', 'HEAD']));
 
@@ -4912,6 +4946,17 @@ test('validate 支持 General 前无 verdict、General 后三 verdict、最终�
 
     await fs.writeFile(
       planPath,
+      threeVerdicts.replace(/^- General Review audit：A\d+\n\n/m, ''),
+      'utf8',
+    );
+    errors = await validatePlan(planDir);
+    assert(
+      errors.some((error) => error.includes('must select exactly one General Review audit A*')),
+      errors.join('\n'),
+    );
+
+    await fs.writeFile(
+      planPath,
       fourVerdicts.replace('- AI Review：pending', '- AI Review：passed'),
       'utf8',
     );
@@ -5470,7 +5515,7 @@ test('all review packages fail closed without a recorded Review Range', async ()
     const planPath = path.join(planDir, 'plan.md');
     await fs.writeFile(
       planPath,
-      withoutProjectRuleVerdict(withPassedReviewVerdicts(withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8'))))
+      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8'))
         .replace('- AI Review：pending', '- AI Review：pending（full：验证非 Git 工作区门禁）'),
       'utf8',
     );
@@ -5731,15 +5776,9 @@ test('workflow eval close-check requires 整任务审查包 when 整任务审查
     const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
     const planDir = path.join('dev-plans', '2026-06-10-close-check-missing-whole-package');
     await writeValidExecutingPlan(planDir);
-    await writeReadyTaskHandoff('dev-plans/2026-06-10-close-check-missing-whole-package', 'S1');
-    await writeGeneratedReviewPackageFixture('dev-plans/2026-06-10-close-check-missing-whole-package', 'S1');
-    const planPath = path.join(planDir, 'plan.md');
-    await fs.writeFile(
-      planPath,
-      withPassedWholeReview(withClosedDoneSlice(await fs.readFile(planPath, 'utf8'), planDir)),
-      'utf8',
-    );
-    initGitRepo();
+    await writeCloseCheckHandoffFixtures(planDir);
+    await markWholeReviewPassed(planDir);
+    await fs.rm(path.join(planDir, 'review-packages', 'whole-task.md'));
 
     const result = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-missing-whole-package']);
     assert.equal(result.status, 1, result.stderr.toString());
@@ -5777,9 +5816,7 @@ test('workflow eval close-check rejects skeletal 整任务审查包 when 整任�
     const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
     const planDir = path.join('dev-plans', '2026-06-10-close-check-skeletal-whole-package');
     await writeValidExecutingPlan(planDir);
-    await writeReadyTaskHandoff('dev-plans/2026-06-10-close-check-skeletal-whole-package', 'S1');
-    await writeGeneratedReviewPackageFixture('dev-plans/2026-06-10-close-check-skeletal-whole-package', 'S1');
-    await fs.mkdir(path.join(planDir, 'review-packages'), { recursive: true });
+    await writeCloseCheckHandoffFixtures(planDir);
     await fs.writeFile(
       path.join(planDir, 'review-packages', 'whole-task.md'),
       `# 整任务审查包
@@ -5803,10 +5840,9 @@ test('workflow eval close-check rejects skeletal 整任务审查包 when 整任�
     const planPath = path.join(planDir, 'plan.md');
     await fs.writeFile(
       planPath,
-      withBlockedWholeReview(withClosedDoneSlice(await fs.readFile(planPath, 'utf8'), planDir)),
+      withBlockedWholeReview(await fs.readFile(planPath, 'utf8')),
       'utf8',
     );
-    initGitRepo();
 
     const result = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-skeletal-whole-package']);
     assert.equal(result.status, 1, result.stderr.toString());
@@ -6040,20 +6076,12 @@ test('workflow eval close-check rejects blocked task report for passed AI Review
     const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
     const planDir = path.join('dev-plans', '2026-06-10-close-check-blocked-report');
     await writeValidExecutingPlan(planDir);
-    await writeTaskBriefFixture('dev-plans/2026-06-10-close-check-blocked-report', 'S1');
-    await writeTaskReportTemplateFixture('dev-plans/2026-06-10-close-check-blocked-report', 'S1');
+    await writeCloseCheckHandoffFixtures(planDir);
     const reportPath = path.join(planDir, 'task-reports', 'S1.json');
     const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    report.conclusion = 'blocked';
     report.blockedReason = '测试 fixture 中保留 blocked report。';
     await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-    await writeReviewPackageFixture(planDir, 'S1');
-    const planPath = path.join(planDir, 'plan.md');
-    await fs.writeFile(
-      planPath,
-      withClosedDoneSlice(await fs.readFile(planPath, 'utf8'), planDir),
-      'utf8',
-    );
-    initGitRepo();
 
     const result = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-blocked-report']);
     assert.equal(result.status, 1, result.stderr.toString());
@@ -6066,14 +6094,8 @@ test('workflow eval close-check requires review package for passed AI Review', a
     const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
     const planDir = path.join('dev-plans', '2026-06-10-close-check-missing-package');
     await writeValidExecutingPlan(planDir);
-    await writeReadyTaskHandoff('dev-plans/2026-06-10-close-check-missing-package', 'S1');
-    const planPath = path.join(planDir, 'plan.md');
-    await fs.writeFile(
-      planPath,
-      withClosedDoneSlice(await fs.readFile(planPath, 'utf8'), planDir),
-      'utf8',
-    );
-    initGitRepo();
+    await writeCloseCheckHandoffFixtures(planDir);
+    await fs.rm(path.join(planDir, 'review-packages', 'S1.md'));
 
     const result = spawnSync('node', [script, 'close-check', 'dev-plans/2026-06-10-close-check-missing-package']);
     assert.equal(result.status, 1, result.stderr.toString());
