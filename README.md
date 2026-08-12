@@ -22,7 +22,7 @@
 ## 安装
 
 ```bash
-npx skills@1.5.20 add qianchengjie/skills --global
+npx skills add qianchengjie/skills --global
 ```
 
 可在 [skills.sh](https://skills.sh/qianchengjie/skills) 查看本仓库 skills。
