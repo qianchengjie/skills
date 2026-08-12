@@ -46,7 +46,7 @@ test('subagent 文档使用当前共享工作区契约', async () => {
   assert.match(reviewer, /负结论进入修复或阻塞，不得通过重派 reviewer 洗掉/);
   assert.match(reviewer, /同一输入 fresh 重派一次/);
   assert.match(reviewer, /仍失败则写 `AI Review：blocked/);
-  assert.match(reviewer, /每个已提交 TARGET 都复制累计 `baseCommit → headCommit`/);
+  assert.match(reviewer, /rule package 复制累计 `baseCommit → headCommit`/);
   assert.match(reviewer, /为当前 TARGET 创建全新 rules-review v8 run/);
   assert.match(reviewer, /完整审查本 TARGET 的全部当前 reviewItems/);
   assert.match(reviewer, /不引用旧 run，不继承旧 result/);
@@ -474,7 +474,10 @@ ${openFindings.map((item) => `| ${item.id} | ${item.verdict} | ${item.severity} 
 async function selectGeneralReviewAudit(planDir, auditId, { issues = false } = {}) {
   const planPath = path.join(planDir, 'plan.md');
   let plan = await fs.readFile(planPath, 'utf8');
-  if (!plan.includes('#### AI Review 结论')) plan = withPassedReviewVerdicts(plan);
+  if (!plan.includes('#### AI Review 结论')) {
+    plan = withPassedReviewVerdicts(plan);
+    if (plan.includes('- 状态：required')) plan = withoutProjectRuleVerdict(plan);
+  }
   if (issues) {
     plan = plan
       .replace('- AI Review：pending', '- AI Review：issues（存在开放 finding）')
@@ -605,10 +608,10 @@ function withPassedRequiredProjectRuleReviewVerdict(plan, {
   evidence = 'A2',
   note = 'rules-review 结论 clean',
 } = {}) {
-  const updated = plan.replace(
-    '| 项目规则审查 | not-applicable | not-applicable | 上下文预检 / 项目规则审查 | 本切片无适用项目规则 |',
-    `| 项目规则审查 | passed | not-applicable | ${evidence} | ${note} |`,
-  );
+  const row = `| 项目规则审查 | passed | not-applicable | ${evidence} | ${note} |`;
+  const updated = plan.includes('| 项目规则审查 |')
+    ? plan.replace(/^\| 项目规则审查 \|[^\n]+$/m, row)
+    : plan.replace('\n\n#### 门禁记录', `\n${row}\n\n#### 门禁记录`);
   return updated.replace(
     '\n#### 门禁记录',
     `\n- 项目规则审查 runId：${runId}\n\n#### 门禁记录`,
@@ -1052,6 +1055,61 @@ ${lines.join('\n')}
     plan.replace('| A1 | done |', `| A1 | done |\n| ${id} | done |`),
     'utf8',
   );
+}
+
+async function writeRulesReviewTargetBindingFixture(runId, boundCommit) {
+  const runDir = path.join('.rules-review-tmp', runId);
+  await fs.mkdir(runDir, { recursive: true });
+  await fs.writeFile(
+    path.join(runDir, 'dispatch.json'),
+    `${JSON.stringify({
+      kind: 'rules-review-dispatch',
+      schemaVersion: 8,
+      runId,
+      reviewRange: { boundCommit, excludedFiles: [] },
+    }, null, 2)}\n`,
+    'utf8',
+  );
+  await fs.writeFile(path.join(runDir, 'response.md'), '# Rules Review Response\n', 'utf8');
+}
+
+async function establishCurrentCleanGeneral(planDir, {
+  acceptance,
+  projectRuleReview = false,
+} = {}) {
+  await writeValidExecutingPlan(planDir);
+  const planPath = path.join(planDir, 'plan.md');
+  if (projectRuleReview) {
+    await fs.writeFile(
+      planPath,
+      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
+      'utf8',
+    );
+  }
+  await writeReadyTaskHandoff(planDir, 'S1');
+  await prepareReviewableSliceDiffFixture();
+  const range = await sealCurrentWorkspaceFixture(planDir, 'S1');
+  const packageResult = runDevPlanCli(['review-package', planDir, 'S1']);
+  assert.equal(packageResult.status, 0, packageResult.stderr.toString());
+  const prompt = runDevPlanCli(['review-prompt', planDir, 'S1']);
+  const reviewPackageHash = /- reviewPackageHash: (sha256:[0-9a-f]{64})/.exec(prompt.stdout.toString())?.[1];
+  assert.ok(reviewPackageHash);
+  await appendGeneralReviewV4Audit(planDir, { id: 'A2', range, reviewPackageHash });
+  await selectGeneralReviewAudit(planDir, 'A2');
+
+  let plan = await fs.readFile(planPath, 'utf8');
+  plan = plan.replaceAll('A1 / review-packages/S1.md', 'A2 / review-packages/S1.md');
+  if (acceptance) {
+    plan = plan.replace('- AI Review：pending', `- AI Review：pending\n- 用户验收：${acceptance}`);
+  }
+  await fs.writeFile(planPath, plan, 'utf8');
+  return range;
+}
+
+function withoutProjectRuleVerdict(plan) {
+  return plan
+    .replace(/^\| 项目规则审查 \|[^\n]+\n/m, '')
+    .replace(/^- 项目规则审查 runId：[^\n]+\n?/m, '');
 }
 
 async function appendShouldAcceptanceDecision(planDir, { runId, shouldSetHash } = {}) {
@@ -4693,7 +4751,6 @@ test('General Review 按首次 full、repair、最终累计 full 收口', async 
         summary: 'rewritten finding',
       }],
     });
-    assert((await validatePlan(planDir)).some((error) => error.includes('current general review audit must be latest direct-chain tip A3')));
     await selectGeneralReviewAudit(planDir, 'A3', { issues: true });
     assert((await validatePlan(planDir)).some((error) => error.includes('not_addressed finding G1 must remain unchanged')));
     await fs.writeFile(path.join(planDir, 'audits.md'), auditsBeforeMutation, 'utf8');
@@ -4741,7 +4798,7 @@ test('General Review 按首次 full、repair、最终累计 full 收口', async 
       .replace(/\| 需求符合性 \| failed \| major \|[^\n]+/, '| 需求符合性 | passed | not-applicable | A4 / review-packages/S1.md | 最终累计 full 通过 |');
     await fs.writeFile(path.join(planDir, 'plan.md'), finalPlan, 'utf8');
     const errors = await validatePlan(planDir);
-    assert(!errors.some((error) => error.includes('General Review')));
+    assert(!errors.some((error) => error.includes('General Review')), errors.join('\n'));
   });
 });
 
@@ -4777,7 +4834,7 @@ test('General Review 支持用户验收拒收后的累计 full', async () => {
     assert.match(brief, /- 用户验收：issues（hooks 验收未通过）/);
     result = runDevPlanCli(['review-package', planDir, 'S1']);
     assert.equal(result.status, 1);
-    assert.match(result.stderr.toString(), /user acceptance rework previousHeadCommit/);
+    assert.match(result.stderr.toString(), /TARGET-change full previousHeadCommit/);
     await writeTaskReportTemplateFixture(planDir, 'S1');
     await markTaskReportReady(planDir, 'S1');
     await fs.writeFile('src/example.ts', 'export const value = 3;\n', 'utf8');
@@ -4792,7 +4849,7 @@ test('General Review 支持用户验收拒收后的累计 full', async () => {
     );
     result = runDevPlanCli(['review-package', planDir, 'S1']);
     assert.equal(result.status, 1);
-    assert.match(result.stderr.toString(), /final full must reuse the repaired commit range/);
+    assert.match(result.stderr.toString(), /clean General Review A2 needs an explicit TARGET-change trigger/);
     await fs.writeFile(planPath, plan, 'utf8');
 
     result = runDevPlanCli(['review-package', planDir, 'S1']);
@@ -4838,6 +4895,227 @@ test('General Review 支持用户验收拒收后的累计 full', async () => {
     const repairPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1.md'), 'utf8');
     assert.match(repairPackage, /- reviewType：repair\n- previousReview：A3\n- baseCommit：/);
     assert.match(repairPackage, /-export const value = 3;[\s\S]*\+export const value = 4;/);
+  });
+});
+
+test('validate 支持 General 前无 verdict、General 后三 verdict、最终四 verdict', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-review-proof-stages');
+    await establishCurrentCleanGeneral(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const fourVerdicts = await fs.readFile(planPath, 'utf8');
+    const threeVerdicts = withoutProjectRuleVerdict(fourVerdicts);
+    await fs.writeFile(planPath, threeVerdicts, 'utf8');
+
+    let errors = await validatePlan(planDir);
+    assert(!errors.some((error) => error.includes('missing AI Review verdict 项目规则审查')), errors.join('\n'));
+
+    await fs.writeFile(
+      planPath,
+      fourVerdicts.replace('- AI Review：pending', '- AI Review：passed'),
+      'utf8',
+    );
+    errors = await validatePlan(planDir);
+    assert(!errors.some((error) => error.includes('AI Review verdict')), errors.join('\n'));
+  });
+});
+
+test('record-commit 失败保留 proof，成功建立新 TARGET 后失效当前 proof', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-target-proof-migration');
+    const previousRange = await establishCurrentCleanGeneral(planDir, { acceptance: 'passed' });
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8')).replace('- AI Review：pending', '- AI Review：passed'),
+      'utf8',
+    );
+    const planBefore = await fs.readFile(planPath, 'utf8');
+    const rangePath = path.join(planDir, 'review-packages', 'S1-range.json');
+    const rangeBefore = await fs.readFile(rangePath, 'utf8');
+
+    await fs.writeFile('src/example.ts', 'export const value = 3;\n', 'utf8');
+    execFileSync('git', ['add', 'src/example.ts']);
+    execFileSync('git', ['commit', '-m', 'S1 next target']);
+    const reportPath = path.join(planDir, 'task-reports', 'S1.json');
+    const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    report.changedFiles = [];
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+
+    let result = runDevPlanCli(['record-commit', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.equal(await fs.readFile(planPath, 'utf8'), planBefore);
+    assert.equal(await fs.readFile(rangePath, 'utf8'), rangeBefore);
+
+    report.changedFiles = [{ path: 'src/example.ts', reason: '完成下一 TARGET。' }];
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    result = runDevPlanCli(['record-commit', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+
+    const planAfter = await fs.readFile(planPath, 'utf8');
+    const rangeAfter = JSON.parse(await fs.readFile(rangePath, 'utf8'));
+    assert.equal(rangeAfter.previousHeadCommit, previousRange.headCommit);
+    assert.doesNotMatch(planAfter, /#### AI Review 结论/);
+    assert.match(planAfter, /- AI Review：pending/);
+    assert.match(planAfter, /- 用户验收：pending/);
+    assert.match(await fs.readFile(path.join(planDir, 'audits.md'), 'utf8'), /### A2：S1 General Review v4/);
+  });
+});
+
+test('新 TARGET 只使 passed 验收失效，issues 与 skipped 保留', async () => {
+  for (const [acceptance, expected] of [
+    ['issues（用户指出交互不符合预期）', 'issues（用户指出交互不符合预期）'],
+    ['skipped（用户明确跳过本片验收）', 'skipped（用户明确跳过本片验收）'],
+  ]) {
+    await withTempRepo(async () => {
+      const slug = acceptance.startsWith('issues') ? 'issues' : 'skipped';
+      const planDir = path.join('dev-plans', `2026-06-10-target-acceptance-${slug}`);
+      await establishCurrentCleanGeneral(planDir, { acceptance });
+      await fs.writeFile('src/example.ts', 'export const value = 3;\n', 'utf8');
+      execFileSync('git', ['add', 'src/example.ts']);
+      execFileSync('git', ['commit', '-m', `S1 ${slug} target`]);
+
+      const result = runDevPlanCli(['record-commit', planDir, 'S1']);
+      assert.equal(result.status, 0, result.stderr.toString());
+      const plan = await fs.readFile(path.join(planDir, 'plan.md'), 'utf8');
+      assert.match(plan, new RegExp(`- 用户验收：${expected.replace(/[()]/g, '\\$&')}`));
+      assert.doesNotMatch(plan, /#### AI Review 结论/);
+    });
+  }
+});
+
+test('rules finding 的新 TARGET 以 project-rule-review-issues 直接进入累计 General full', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-rule-finding-target');
+    const previousRange = await establishCurrentCleanGeneral(planDir, { projectRuleReview: true });
+    const runId = '20260812T000000Z-rr-target-proof';
+    await writeRulesReviewTargetBindingFixture(runId, previousRange.headCommit);
+    await appendProjectRuleReviewAudit(planDir, {
+      id: 'A3',
+      runId,
+      verdict: 'failed',
+      severity: 'major',
+      recommendation: 'must_fix_before_merge',
+      mustFix: 1,
+      summary: '当前 TARGET 存在 MUST finding',
+    });
+    const planPath = path.join(planDir, 'plan.md');
+    let plan = await fs.readFile(planPath, 'utf8');
+    plan = plan
+      .replace('- AI Review：pending', '- AI Review：issues（项目规则 finding 待修复）\n- 用户验收：passed')
+      .replace(
+        '\n\n#### 门禁记录',
+        '\n| 项目规则审查 | failed | major | A3 | 当前规则 finding 待修复 |\n\n#### 门禁记录',
+      )
+      .replace('\n#### 门禁记录', `\n- 项目规则审查 runId：${runId}\n\n#### 门禁记录`);
+    await fs.writeFile(planPath, plan, 'utf8');
+    const staleProofPlan = plan;
+
+    await fs.writeFile('src/example.ts', 'export const value = 3;\n', 'utf8');
+    execFileSync('git', ['add', 'src/example.ts']);
+    execFileSync('git', ['commit', '-m', 'fix rules finding']);
+    let result = runDevPlanCli(['record-commit', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    const migratedRange = JSON.parse(await fs.readFile(
+      path.join(planDir, 'review-packages', 'S1-range.json'),
+      'utf8',
+    ));
+
+    await fs.writeFile(planPath, staleProofPlan, 'utf8');
+    let errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('current General proof targets')));
+    assert(errors.some((error) => error.includes('current rules-review proof targets')));
+    await fs.writeFile(
+      path.join(planDir, 'review-packages', 'S1-range.json'),
+      `${JSON.stringify({ ...migratedRange, taskReportHash: `sha256:${'0'.repeat(64)}` }, null, 2)}\n`,
+      'utf8',
+    );
+    result = runDevPlanCli(['record-commit', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.equal(await fs.readFile(planPath, 'utf8'), staleProofPlan);
+    await fs.writeFile(
+      path.join(planDir, 'review-packages', 'S1-range.json'),
+      `${JSON.stringify(migratedRange, null, 2)}\n`,
+      'utf8',
+    );
+    result = runDevPlanCli(['record-commit', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    assert.deepEqual(
+      JSON.parse(await fs.readFile(path.join(planDir, 'review-packages', 'S1-range.json'), 'utf8')),
+      migratedRange,
+    );
+
+    plan = await fs.readFile(planPath, 'utf8');
+    assert.match(plan, /- AI Review：pending（project-rule-review-issues（A3））/);
+    assert.match(plan, /- 用户验收：pending/);
+    assert.doesNotMatch(plan, /#### AI Review 结论/);
+
+    const dispatchPath = path.join('.rules-review-tmp', runId, 'dispatch.json');
+    const dispatch = JSON.parse(await fs.readFile(dispatchPath, 'utf8'));
+    dispatch.reviewRange.boundCommit = migratedRange.headCommit;
+    await fs.writeFile(dispatchPath, `${JSON.stringify(dispatch, null, 2)}\n`, 'utf8');
+    errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('must bind Review Range previousHeadCommit')));
+    dispatch.reviewRange.boundCommit = previousRange.headCommit;
+    await fs.writeFile(dispatchPath, `${JSON.stringify(dispatch, null, 2)}\n`, 'utf8');
+
+    result = runDevPlanCli(['review-package', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    const reviewPackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1.md'), 'utf8');
+    assert.match(reviewPackage, /- reviewType：full\n- previousReview：A2\n- reviewTrigger：project-rule-review-issues（A3）/);
+    assert.match(reviewPackage, /本轮由项目规则 finding 触发返工后的重新审查/);
+    assert.doesNotMatch(reviewPackage, /本轮由用户验收拒收触发返工后的重新审查/);
+    assert.match(reviewPackage, new RegExp(`"previousHeadCommit": "${previousRange.headCommit}"`));
+
+    const prompt = runDevPlanCli(['review-prompt', planDir, 'S1']);
+    const hash = /- reviewPackageHash: (sha256:[0-9a-f]{64})/.exec(prompt.stdout.toString())?.[1];
+    assert.ok(hash);
+    await appendGeneralReviewV4Audit(planDir, {
+      id: 'A4',
+      range: migratedRange,
+      reviewPackageHash: hash,
+      previousReview: 'A2',
+      reviewTrigger: 'project-rule-review-issues（A3）',
+    });
+    await appendGeneralReviewV4Audit(planDir, {
+      id: 'A5',
+      range: migratedRange,
+      reviewPackageHash: hash,
+      previousReview: 'A4',
+      reviewTrigger: 'project-rule-review-issues（A3）',
+    });
+    errors = await validatePlan(planDir);
+    assert(errors.some((error) => error.includes('can be consumed only once')));
+  });
+});
+
+test('rule-review-package 只接受当前 TARGET 的 clean General 与适用用户验收', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-rule-package-order');
+    await establishCurrentCleanGeneral(planDir, {
+      acceptance: 'pending',
+      projectRuleReview: true,
+    });
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withoutProjectRuleVerdict(await fs.readFile(planPath, 'utf8')),
+      'utf8',
+    );
+
+    let result = runDevPlanCli(['rule-review-package', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /用户验收 pending/);
+
+    const accepted = (await fs.readFile(planPath, 'utf8'))
+      .replace('- 用户验收：pending', '- 用户验收：passed');
+    await fs.writeFile(planPath, accepted, 'utf8');
+    result = runDevPlanCli(['rule-review-package', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    assert.equal(await fs.readFile(planPath, 'utf8'), accepted);
+    result = runDevPlanCli(['rule-review-package', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    assert.equal(await fs.readFile(planPath, 'utf8'), accepted);
   });
 });
 
@@ -5105,16 +5383,7 @@ test('CLI rule-review-package writes rules-only package when project rule review
   await withTempRepo(async () => {
     const script = fileURLToPath(new URL('../../skills/sliced-dev/scripts/dev-plan.mjs', import.meta.url));
     const planDir = path.join('dev-plans', '2026-06-10-rule-review-package');
-    await writeValidExecutingPlan(planDir);
-    const planPath = path.join(planDir, 'plan.md');
-    await fs.writeFile(
-      planPath,
-      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
-      'utf8',
-    );
-    await writeReadyTaskHandoff('dev-plans/2026-06-10-rule-review-package', 'S1');
-    await prepareReviewableSliceDiffFixture();
-    await sealCurrentWorkspaceFixture(planDir, 'S1');
+    await establishCurrentCleanGeneral(planDir, { projectRuleReview: true });
 
     const result = spawnSync('node', [script, 'rule-review-package', 'dev-plans/2026-06-10-rule-review-package', 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
@@ -5139,13 +5408,12 @@ test('CLI rule-review-package writes rules-only package when project rule review
   });
 });
 
-test('rule-review-package 对 repair 仍提交累计 baseCommit..headCommit', async () => {
+test('rule-review-package 在累计 General 尚未 clean 时拒绝启动', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-rule-package-v4');
     await writeValidExecutingPlan(planDir);
     const planPath = path.join(planDir, 'plan.md');
     await fs.writeFile(planPath, withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')), 'utf8');
-    const initialRulesReview = await prepareRulesReviewRunFixture({ runId: '20260810T000001Z-rr-00000002' });
     await setSliceBaseCommit(planDir, 'S1', gitOid(['rev-parse', 'HEAD']));
     await writeReadyTaskHandoff(planDir, 'S1');
     await prepareReviewableSliceDiffFixture();
@@ -5171,32 +5439,14 @@ test('rule-review-package 对 repair 仍提交累计 baseCommit..headCommit', as
       }],
     });
     await selectGeneralReviewAudit(planDir, 'A2', { issues: true });
-    await appendProjectRuleReviewAudit(planDir, { id: 'A3', ...initialRulesReview });
-    await fs.writeFile(
-      planPath,
-      withPassedRequiredProjectRuleReviewVerdict(
-        await fs.readFile(planPath, 'utf8'),
-        { ...initialRulesReview, evidence: 'A3' },
-      ),
-      'utf8',
-    );
-    await fs.writeFile('src/example.ts', 'export const value = 3;\n', 'utf8');
-    const repairedRange = await sealCurrentWorkspaceFixture(planDir, 'S1');
 
     result = runDevPlanCli(['rule-review-package', planDir, 'S1']);
-    assert.equal(result.status, 0, result.stderr.toString());
-    const rulePackage = await fs.readFile(path.join(planDir, 'review-packages', 'S1-rules.md'), 'utf8');
-    assert.match(rulePackage, new RegExp(`"baseCommit": "${repairedRange.baseCommit}"`));
-    assert.match(rulePackage, new RegExp(`"headCommit": "${repairedRange.headCommit}"`));
-    assert.match(rulePackage, new RegExp(`--base ${repairedRange.baseCommit} --target-commit ${repairedRange.headCommit}`));
-    const sealCommand = /rules-review 必须使用 `([^`]+)`/.exec(rulePackage)?.[1];
-    assert.equal(sealCommand, `--base ${repairedRange.baseCommit} --target-commit ${repairedRange.headCommit}`);
-    assert.doesNotMatch(sealCommand, /--rules-commit/);
-    assert.match(rulePackage, /excludedFiles: \[\]/);
-    assert.match(rulePackage, /-export const value = 1;[\s\S]*\+export const value = 3;/);
-    assert.doesNotMatch(rulePackage, /baseRunId|continuation|effectiveResults/);
-    assert.doesNotMatch(getSectionForTest(rulePackage, '变更文件'), /\.rules-review-tmp\//);
-    assert.doesNotMatch(getSectionForTest(rulePackage, 'Git Diff'), /\.rules-review-tmp\//);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /final clean cumulative General full/);
+    assert.equal(
+      await fs.stat(path.join(planDir, 'review-packages', 'S1-rules.md')).then(() => true, () => false),
+      false,
+    );
   });
 });
 test('CLI rule-review-package skips when project rule review is not applicable', async () => {
@@ -5220,7 +5470,7 @@ test('all review packages fail closed without a recorded Review Range', async ()
     const planPath = path.join(planDir, 'plan.md');
     await fs.writeFile(
       planPath,
-      withPassedReviewVerdicts(withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')))
+      withoutProjectRuleVerdict(withPassedReviewVerdicts(withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8'))))
         .replace('- AI Review：pending', '- AI Review：pending（full：验证非 Git 工作区门禁）'),
       'utf8',
     );
@@ -5962,16 +6212,16 @@ test('CLI close-check blocks required project rule review when boundCommit is mi
       withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
       'utf8',
     );
+    await writeCloseCheckHandoffFixtures(planDir, 'S1', { rulesReview });
+    await appendProjectRuleReviewAudit(planDir, rulesReview);
     const dispatchPath = path.join(rulesReview.runDir, 'dispatch.json');
     const dispatch = JSON.parse(await fs.readFile(dispatchPath, 'utf8'));
     delete dispatch.reviewRange.boundCommit;
     await fs.writeFile(dispatchPath, `${JSON.stringify(dispatch, null, 2)}\n`, 'utf8');
-    await writeCloseCheckHandoffFixtures(planDir, 'S1', { rulesReview });
-    await appendProjectRuleReviewAudit(planDir, rulesReview);
 
     const result = runDevPlanCli(['close-check', planDir]);
     assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /trusted rules-review validator failed/);
+    assert.match(result.stderr.toString(), /rules-review dispatch must bind one normalized TARGET commit/);
   });
 });
 
@@ -6012,9 +6262,9 @@ test('CLI close-check binds rules-review dispatch rules to current slice rules',
   });
 });
 
-test('CLI close-check rejects rules-review file scope smaller than current review package', async () => {
+test('CLI close-check rejects General and rules-review proof from the previous TARGET', async () => {
   await withTempRepo(async () => {
-    const planDir = path.join('dev-plans', '2026-06-10-close-check-rule-file-binding');
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-stale-target-proof');
     await writeValidExecutingPlan(planDir);
     const rulesReview = await prepareRulesReviewRunFixture();
     const planPath = path.join(planDir, 'plan.md');
@@ -6024,21 +6274,25 @@ test('CLI close-check rejects rules-review file scope smaller than current revie
         .replace('  - test/example.test.ts', '  - test/example.test.ts\n  - src/context.ts'),
       'utf8',
     );
-    await writeCloseCheckHandoffFixtures(planDir, 'S1', {
-      rulesReview,
-      extraChangedFiles: ['src/context.ts'],
-      applyExtraWorkspaceChanges: () => fs.writeFile(
-        'src/context.ts',
-        'export const context = false;\n',
-        'utf8',
-      ),
-    });
+    await writeCloseCheckHandoffFixtures(planDir, 'S1', { rulesReview });
     await appendProjectRuleReviewAudit(planDir, rulesReview);
+    const stalePlan = await fs.readFile(planPath, 'utf8');
+
+    await fs.writeFile('src/context.ts', 'export const context = false;\n', 'utf8');
+    execFileSync('git', ['add', 'src/context.ts']);
+    execFileSync('git', ['commit', '-m', 'next target']);
+    const reportPath = path.join(planDir, 'task-reports', 'S1.json');
+    const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    report.changedFiles = [{ path: 'src/context.ts', reason: '测试新 TARGET。' }];
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    const recorded = runDevPlanCli(['record-commit', planDir, 'S1']);
+    assert.equal(recorded.status, 0, recorded.stderr.toString());
+    await fs.writeFile(planPath, stalePlan, 'utf8');
 
     const result = runDevPlanCli(['close-check', planDir]);
     assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /rules-review changed files must equal cumulative commit range/);
-    assert.match(result.stderr.toString(), /changedUnits must cover package file src\/context\.ts/);
+    assert.match(result.stderr.toString(), /current General proof targets .* not current TARGET/);
+    assert.match(result.stderr.toString(), /current rules-review proof targets .* not current TARGET/);
   });
 });
 
@@ -6419,7 +6673,7 @@ test('CLI close-check binds complete default SHOULD acceptance and rejects stale
           `项目规则审查 runId：${rulesReview.runId}`,
           `项目规则审查 runId：${rulesReview.runId}-old`,
         ),
-        expected: /rules-review run directory missing/,
+        expected: /rules-review run (?:directory )?missing/,
       },
       {
         name: 'dot in run selector',
@@ -6514,7 +6768,10 @@ test('CLI close-check binds complete default SHOULD acceptance and rejects stale
     await fs.symlink(path.resolve(realRunDir), runDir, 'dir');
     const symlinkedRun = runCloseCheck();
     assert.equal(symlinkedRun.status, 1, symlinkedRun.stderr.toString());
-    assert.match(symlinkedRun.stderr.toString(), /run directory must not be a symlink/);
+    assert.match(
+      symlinkedRun.stderr.toString(),
+      /(?:run directory|rules-review run) must not be a symlink/,
+    );
   });
 });
 

@@ -132,6 +132,8 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs record-commit dev-plans/YYYY-MM
 
 有代码轮要求 `headCommit^ == previousHeadCommit`、commit diff 路径等于 `iterationFiles`，且 `iterationFiles == taskReport.changedFiles`；无代码轮要求 `previousHeadCommit == headCommit` 和空文件集合。`baseCommit` 只能读取 plan 已记录值，禁止从 `headCommit^` 反推。
 
+`record-commit` 成功写入与上一 `headCommit` 不同的新 `headCommit` 时，才建立新 TARGET：同一逻辑迁移立即移除旧 TARGET 的当前 General selector / 三 verdict 与项目规则 verdict / runId，把 `用户验收：passed` 重置为 `pending`，保留 `issues` 原因、`skipped` waiver 和全部历史 A*。命令失败或 HEAD 未变时不失效 proof。若进程在 range 落盘后、状态失效写回前中断，`validate` 会拒绝新 TARGET 继续引用旧 proof；再次执行 `record-commit` 只完成失效迁移并复用已记录 range，审查包在恢复前不能生成。
+
 ## claims-template
 
 从仓库根目录执行：
@@ -208,10 +210,11 @@ package 只从 Review Range v2 已记录的 commit 生成，不读取当前业�
 - `repair`：展示 `previousHeadCommit..headCommit` fix diff；每个直接前序 finding 恰好返回一次 `addressed / not_addressed`，不输出三个 verdict。
 - repair 后最终 `full`：对同一最终 `headCommit` 再展示累计 `baseCommit..headCommit`；最终三个 verdict 只能来自这轮。
 - 用户验收拒收后的 `full`：直接前序必须是 clean full，返工 range 的 `previousHeadCommit` 必须等于该前序 `headCommit`；package、reviewer final summary 和新 A* 原样绑定 `reviewTrigger：user-acceptance-issues（<用户拒收原因>）`，展示累计 `baseCommit..headCommit`。该触发器只在当前 selector 仍指向拒收前 clean full 时消费；返工 full 发现问题后，下一包按当前 A* 派生普通 `repair`。
+- 项目规则 finding 后的 `full`：失败规则 A* 必须绑定直接前序 TARGET，返工 range 必须建立新 TARGET；package、reviewer final summary 和新 A* 原样绑定 `reviewTrigger：project-rule-review-issues（<失败 A*>）`，展示累计 `baseCommit..headCommit`。同一规则 A* 只能消费一次，不创建 General finding。
 
 A* 通过 `- General Review audit：A*` 明确选择，只引用直接上一轮。旧 `模式：incremental`、`基线`、`Full reason`、Disposition 快照和 legacy package 都不兼容。
 
-package 固定包含 `Review Range`、`General Review 阶段`、`General Review 前序`、`文件快照`、commit diff 和 `reviewPackageHash` 绑定；用户拒收返工时还包含带非占位原因的 `reviewTrigger`。`review-package` 只负责结构化输入，不判断 finding、用户反馈是否真实、证据强度、严重度或 BASE 选择是否正确。
+package 固定包含 `Review Range`、`General Review 阶段`、`General Review 前序`、`文件快照`、commit diff 和 `reviewPackageHash` 绑定；用户拒收或项目规则 finding 返工时还包含对应 `reviewTrigger`。`review-package` 只负责结构化输入，不判断 finding、用户反馈是否真实、证据强度、严重度或 BASE 选择是否正确。
 
 任何必需 Git commit/tree/blob 缺失、父子关系不成立、commit diff 文件集合或 range/task report hash 不一致、package 结构损坏都会 fail closed；不得回退当前文件、index、当前 HEAD 或同名路径。
 
@@ -223,13 +226,13 @@ package 固定包含 `Review Range`、`General Review 阶段`、`General Review 
 node <sliced-dev-skill-dir>/scripts/dev-plan.mjs rule-review-package dev-plans/YYYY-MM-DD-<slug> <S-id>
 ```
 
-作用：当当前切片 `项目规则审查` 状态为 `required` 时，生成 `dev-plans/YYYY-MM-DD-<slug>/review-packages/<S-id>-rules.md`，作为 rule-reviewer 的规则审查包。它与 `review-package` 共用前置 gate：`validate` 通过、task brief 存在、task report `ready-for-review`、P0/P1 claims 达到可审查状态。命令层不强制硬门禁 / diff-check 已 passed；包内只投影当前硬门禁记录，最终完成态由 `close-check` 校验。
+作用：当当前切片 `项目规则审查` 状态为 `required` 时，生成 `dev-plans/YYYY-MM-DD-<slug>/review-packages/<S-id>-rules.md`，作为 rule-reviewer 的规则审查包。除 `validate`、task brief / report 和 claims 前置 gate 外，还要求当前 TARGET 已有最终 clean 累计 General full，且适用的用户验收为 `passed / skipped`；自动且未启用逐片验收时可缺席该字段。General repair、用户验收 `pending / issues` 或旧 TARGET 的 General proof 都会阻塞。
 
 - `required`：生成 `<S-id>-rules.md`。
 - `not-applicable`：退出 0，提示 not-applicable，不生成文件。
 - `blocked`：退出 1，不生成文件。
 
-规则包复制当前 Review Range、累计文件快照和 `baseCommit..headCommit` diff。即使 General Review 当前是 repair，规则包也不缩成 fix diff。
+规则包复制当前 Review Range、累计文件快照和 `baseCommit..headCommit` diff。每个新 TARGET 使用 fresh run；同一 TARGET 仅修正 rules-review 协议或输入工件时可重新生成并重跑，当前 General 与用户验收不失效。
 
 每个新的 TARGET 都创建独立 rules-review v8 run，完整审查当前全部 reviewItems；不得携带 `baseRunId`、continuation、旧 result 或旧 package 协议。sliced-dev 始终传 `--base <baseCommit> --target-commit <headCommit>` 并保持 `excludedFiles: []`，不传 `--rules-commit`；代码 commit 输入和 snapshot 必须来自规则包，不从当前文件或 index 重建，规则使用封印时的当前工作区。
 
@@ -326,6 +329,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/YYYY-MM-D
 - 每个 `done` slice 必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确；最终 claim 状态必须是 `verified` 或 `waived`，不会从 task report 推断完成。
 - 每个 `done` 且 `AI Review：passed` 的 slice 必须存在非空 task brief、结论为 `ready-for-review` 的非空 task report、非空 review-package；JSON report 必须 schema valid；review-package 必须包含 Task Brief、Task Report、Claims、Git Diff 统计、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID；Git Diff 统计必须使用 `text` fence，Git Diff 必须使用 `diff` fence，允许无当前 dirty diff。
 - `AI Review：passed` 的前三个 verdict 必须来自当前最终 `full` A*；当前 A* 为 `repair`、仍有 openFindings、发生 repair 后缺少最终累计 full，或 package/A*/range hash 与 commit identity 不一致时阻塞。Review Range v2 的提交父子关系和文件集合必须闭合。
+- 适用的用户验收必须在 rules-review 前达到 `passed / skipped`；`passed` 只绑定当时 TARGET，新 TARGET 会重置，`skipped` 作为切片级 waiver 保留。
 - `项目规则审查：required` 时必须选择当前 TARGET 的全新 v8 run。`close-check` 重跑受信任 validator，核对 runId、selectedRuleRefs、recommendation、计数、条件性 hash、完整 commit range、累计 input snapshot、文件 hash/mode、`excludedFiles = []` 和 `boundCommit = headCommit`；不接受 continuation、baseRunId 或旧 package。默认 SHOULD 接受和零已知缺陷规则保持原有 A/D 绑定约束。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。
 - 启用 `零已知缺陷收口` 时，所有执行型切片都必须完成 AI Review，A 类也不能使用 `AI Review：skipped`。
@@ -415,6 +419,7 @@ get-rules.mjs --root <repo> --catalog --optional-source
 - `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不能是 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规则审查` 必须写明确状态，`禁止修改` 可显式写 `无`。展平后的 `selectedRuleIds` 与 `notApplicable` 必须各自无重复、互斥、无 unknown、完整覆盖 actual catalog，且每条 reason 非空、非占位。
 - 若切片存在 `#### 切片交接`，必须包含 `输入`、`输出`，且每项必须显式写 `无` 或至少一条非占位内容；`无` 不得和真实条目混写。
 - `依赖` 不能声明当前切片自身；普通 `依赖：S*` 不强制触发 `#### 切片交接`。
+- `#### AI Review 结论` 可按生命周期缺席，或只含前三项 General verdict；只有 `AI Review：passed` / `状态：done` 才必须出现最终第四项。当前 General selector 和 rules-review runId 必须绑定 Review Range 的当前 `headCommit`；新 TARGET 引用旧 proof 会失败。
 - 只要切片头部写 `AI Review：passed`，就必须有 `#### AI Review 结论`，且包含 [PLAN-FILE.md 的「AI Review 结论」](PLAN-FILE.md#ai-review-结论)定义的完整四 verdict。
 - `项目规则审查：required` 且切片写 `AI Review：passed` / `状态：done` 时，`#### AI Review 结论` 必须且只能有一个安全的 `项目规则审查 runId`；`not-applicable` 时不得出现该选择器。
 - `#### AI Review 结论` 必须使用 `Verdict | Status | Severity | Evidence | Note` 五列格式；旧四列格式会被判为无效表格。

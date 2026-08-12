@@ -64,6 +64,10 @@ reviewer 不运行 `git diff / git status / git log` 重建范围。package 中�
 
 直接前序是 clean full，且 package 带 `reviewTrigger：user-acceptance-issues（<用户拒收原因>）` 时，对返工后的新 TARGET 重新执行 `baseCommit..headCommit` 累计 full。它不是 repair，不要求伪造旧 finding；final summary 必须原样返回 `reviewTrigger`。缺少该绑定时，不得把跨提交 full 解释为合法用户返工。
 
+### 项目规则 finding 后的累计 full
+
+直接前序是 clean full，且 package 带 `reviewTrigger：project-rule-review-issues（<失败项目规则审查 A*>）` 时，对修复后的新 TARGET 重新执行 `baseCommit..headCommit` 累计 full。该 A* 必须绑定直接前序 TARGET，且只能消费一次；它不是 General finding，不进入 repair 的 finding 集合。final summary 必须原样返回 `reviewTrigger`。
+
 ## General Reviewer 任务模板
 
 ```text
@@ -73,7 +77,7 @@ reviewer 不运行 `git diff / git status / git log` 重建范围。package 中�
 Review package：<dev-plans/.../review-packages/<S-id>.md>
 reviewType：<full / repair>
 previousReview：<无 / 直接上一轮 A*>
-reviewTrigger：<仅用户拒收返工时原样返回，否则省略>
+reviewTrigger：<仅用户拒收或项目规则 finding 返工时原样返回，否则省略>
 baseCommit/previousHeadCommit/headCommit：<package 固定值>
 reviewPackageHash：<sha256:...>
 
@@ -113,7 +117,7 @@ repair 的结果表：
 
 ## Rule Reviewer
 
-仅当 `项目规则审查：required` 时派发。rule package 对每个已提交 TARGET 都复制累计 `baseCommit → headCommit` 的文件快照和 diff；即使 General Review 正处于 repair，也不能把规则审查缩成 fix diff。
+仅当 `项目规则审查：required`、当前 TARGET 的最终累计 General full 已通过，且适用的用户验收为 `passed / skipped` 时派发。rule package 复制累计 `baseCommit → headCommit` 的文件快照和 diff；不得在 General repair 或用户验收 pending / issues 时提前派发。
 
 ```text
 你是 sliced-dev rule-reviewer。
@@ -126,6 +130,7 @@ Rule review package：<dev-plans/.../review-packages/<S-id>-rules.md>
 - 不引用旧 run，不继承旧 result，不扫描目录猜“最新” run。
 - rules-review 使用 package 给出的 `--base <baseCommit> --target-commit <headCommit>` 和 `excludedFiles: []`，不从当前文件或 index 重建代码输入，也不传文件排除或 `--rules-commit`；规则使用封印时的当前工作区。
 - 只允许写 rules-review 自己的临时协议工件。
+- 同一 TARGET 仅修正 rules-review 协议或输入工件时，重新创建 fresh run；不得要求重做仍绑定该 TARGET 的 General Review 或用户验收。
 ```
 
 fixed summary：

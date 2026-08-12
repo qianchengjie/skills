@@ -34,13 +34,14 @@
 
 这些 commit 字段原样来自 Review Range v2。首次 full 使用 `baseCommit..headCommit`；repair 使用 `previousHeadCommit..headCommit`；repair 后最终 full 与直接前序 repair 保持相同 commit 三元组，通过 `reviewType` 和 `previousReview` 区分阶段。
 
-clean full 通过后由用户验收拒收触发返工时，新累计 full 在 `previousReview` 后额外写：
+clean full 通过后由用户验收拒收，或当前 TARGET 的项目规则 finding 触发返工时，新累计 full 在 `previousReview` 后额外写下列之一：
 
 ```markdown
 - reviewTrigger：user-acceptance-issues（<用户拒收原因>）
+- reviewTrigger：project-rule-review-issues（<失败项目规则审查 A*>）
 ```
 
-该字段只允许用于 `full`，直接前序必须是 verdict 全部 passed 且没有 open finding 的 clean full，当前 `previousHeadCommit` 必须等于该前序的 `headCommit`。字段和原因必须从 package、reviewer final summary 原样写回；其它 General Review 轮次省略。
+该字段只允许用于 `full`，直接前序必须是 verdict 全部 passed 且没有 open finding 的 clean full，当前 `previousHeadCommit` 必须等于该前序的 `headCommit`。`project-rule-review-issues` 还必须唯一引用直接前序 TARGET 的失败项目规则 A*；该 A* 与新 Review Range 只能被消费一次。字段和原因必须从 package、reviewer final summary 原样写回；其它 General Review 轮次省略。
 
 ### full
 
@@ -61,7 +62,7 @@ clean full 通过后由用户验收拒收触发返工时，新累计 full 在 `p
 | --- | --- | --- | --- | --- | --- |
 ```
 
-如果首次 full 没有进入 repair，它同时就是最终 full。发生过 repair 后，最终三个 verdict 只能来自 repair 之后的新累计 full；最终 full 发现问题时重新进入 repair。用户验收拒收后的返工也重新执行累计 full，但用 `reviewTrigger` 说明它不是无触发器的跨提交 full。
+如果首次 full 没有进入 repair，它同时就是最终 full。发生过 repair 后，最终三个 verdict 只能来自 repair 之后的新累计 full；最终 full 发现问题时重新进入 repair。用户验收拒收或项目规则 finding 返工后也重新执行累计 full，但用 `reviewTrigger` 说明它不是无触发器的跨提交 full。
 
 ### repair
 
@@ -111,6 +112,8 @@ repair 只审直接上一轮全部 open finding 和 `previousHeadCommit → head
 - summary: <非占位摘要>
 ```
 
+规则 finding 产生新 TARGET 时，该失败 A* 保留 raw verdict 和 `rulesReviewReport`，并作为下一轮 `project-rule-review-issues（A*）` 的输入；不得伪造 General finding。若 TARGET 未变，只修正 rules-review 协议或输入工件，则保留当前 General A* 和用户验收，只创建新的 rules-review run / A*。
+
 ## 校验边界
 
 脚本只检查字段、枚举、直接引用、package hash、commit 父子关系、文件集合、finding 集合机械演进和终态闭合。脚本不判断 BASE 选择是否合理、finding 是否正确、证据是否充分或严重度是否恰当；这些由 controller / reviewer 负责并留下证据。
@@ -119,4 +122,4 @@ repair 只审直接上一轮全部 open finding 和 `previousHeadCommit → head
 
 - 除 General Review 快照和项目规则审查投影外，只有长证据才创建 A*。
 - A* 不是操作日志；会话问答、门禁推进和普通命令时序放在切片记录或会话回复中。
-- `plan.md` 当前前三个 verdict 只引用最终 full A*；repair A* 不能提供最终 verdict。
+- `plan.md` 当前前三个 verdict 只引用最终 full A*；repair A* 不能提供最终 verdict。历史 A* 永久保留，但 TARGET 迁移后不再充当当前 selector。

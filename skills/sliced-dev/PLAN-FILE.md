@@ -347,13 +347,13 @@ Evidence 字段规则：
 - task report 不写 claim 状态建议；claims 更新由控制器依据实现、硬门禁、diff-check、测试 / 命令结果和必要回源检查直接写入 `claims/<S-id>.json`。
 - `conclusion: ready-for-review` 时，`validation` 必须非空，`blockedReason` 必须为空；无代码轮允许 `changedFiles: []`。`conclusion: blocked` 时，`blockedReason` 必须非空。
 - `review-package` 只接受 `conclusion: ready-for-review` 的 task report；同时 P0/P1 claims 必须已由控制器写成 `implemented` / `verified` / 合法 `waived`，并带 evidence 或 note。
-- `review-package` 是 general reviewer 的注意力入口，不是事实真源；它不包含 `项目规则审查` 信息。首轮 `full` 审查 `baseCommit..headCommit`；存在开放 finding 时，`repair` 只审查 `previousHeadCommit..headCommit`；发生过 repair 且开放 finding 清零后，再对相同最终提交执行 `baseCommit..headCommit` 的最终累计 `full`。AI Review 已通过但用户验收拒收时，返工后的 TARGET 直接引用上一轮 clean full，以 `reviewTrigger：user-acceptance-issues（<用户反馈>）` 重新执行 `baseCommit..headCommit` 累计 `full`。若 P0/P1 claim、边界或证据无法从 package 判断，reviewer 必须 focused 回源检查，或输出 `cannot-verify-from-package`。
-- `review-packages/<S-id>-range.json` 是 `sliced-dev.reviewRange.v2` 的不可变 Git 记录，字段仅为 `schemaVersion / sliceId / iteration / baseCommit / previousHeadCommit / headCommit / iterationFiles / taskReportHash`。package 只能读取该 sidecar 指向的 commit / blob；不得从当前文件、真实 index、当前 HEAD 或同名路径重建输入。对象缺失、提交父子关系不成立、commit diff 与 `iterationFiles` 不一致或 task report hash 改变时 fail closed。
-- `rule-review-package` 只在 `项目规则审查：required` 时生成，路径为 `review-packages/<S-id>-rules.md`；它复制同一 Review Range、累计文件快照和 `baseCommit..headCommit` diff，并额外包含 `项目规则审查`，但不内联 general reviewer 三 verdict、旧项目规则 A* 或旧 SHOULD 接受 D*。每个已提交 TARGET 都创建全新 rules-review v8 run，以 `--target-commit <headCommit>` 和 `excludedFiles: []` 审查完整 commit 范围；不传 `--rules-commit`，不引用、继承或续用旧 run。
+- `review-package` 是 general reviewer 的注意力入口，不是事实真源；它不包含 `项目规则审查` 信息。首轮 `full` 审查 `baseCommit..headCommit`；存在开放 finding 时，`repair` 只审查 `previousHeadCommit..headCommit`；发生过 repair 且开放 finding 清零后，再对相同最终提交执行 `baseCommit..headCommit` 的最终累计 `full`。用户验收拒收后的新 TARGET 以 `reviewTrigger：user-acceptance-issues（<用户反馈>）`，项目规则 finding 修复后的新 TARGET 以 `reviewTrigger：project-rule-review-issues（<失败项目规则审查 A*>）`，直接引用上一轮 clean full 并重新执行累计 `full`；两者都不得伪造 General finding。若 P0/P1 claim、边界或证据无法从 package 判断，reviewer 必须 focused 回源检查，或输出 `cannot-verify-from-package`。
+- `review-packages/<S-id>-range.json` 是当前 `sliced-dev.reviewRange.v2` Git 记录，字段仅为 `schemaVersion / sliceId / iteration / baseCommit / previousHeadCommit / headCommit / iterationFiles / taskReportHash`。`record-commit` 成功写入新的 `headCommit` 才建立新 TARGET，并同时使旧 TARGET 的当前 General selector / 三 verdict、`用户验收：passed`、项目规则 verdict / runId 失效；`issues` 保留反馈，`skipped` 作为切片级 waiver 保留，历史 A* 不删除。命令失败或 `headCommit` 未变时不失效仍绑定同一输入的 proof。package 只能读取该 sidecar 指向的 commit / blob；不得从当前文件、真实 index、当前 HEAD 或同名路径重建输入。若 range 已写入而状态失效尚未完成，validator 拒绝“新 TARGET + 旧 proof”，恢复时先完成失效迁移。
+- `rule-review-package` 只在 `项目规则审查：required`、当前 TARGET 的最终累计 General full 已通过，且适用的用户验收为 `passed / skipped` 时生成，路径为 `review-packages/<S-id>-rules.md`；自动且未启用逐片验收的切片可在 General 后直接继续。它复制同一 Review Range、累计文件快照和 `baseCommit..headCommit` diff，并额外包含 `项目规则审查`，但不内联 general reviewer 三 verdict、旧项目规则 A* 或旧 SHOULD 接受 D*。每个新 TARGET 都创建全新 rules-review v8 run；同一 TARGET 只修正规则协议或输入工件时，仅重做 rules-review，保留仍有效的 General 和用户验收。
 
 ## AI Review 结论
 
-`#### AI Review 结论` 是 AI Review 的结构化状态真源。执行前可省略；general reviewer 和必要的 rule-reviewer 都完成后，controller 一次性写回。`AI Review` 头部字段仍是真源状态：有可修问题写 `issues`，无法判断写 `blocked`，四项 verdict 收口后才写 `passed`；一旦头部写 `AI Review：passed`，本表必须存在且四项 verdict 完整。`AI Review：issues` / `AI Review：blocked` 必须在头部写非占位摘要 / 原因；若头部未写原因，本表必须提供对应 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位的说明。general reviewer 每轮返回后，controller 新建当前 `done` A* 保存 `reviewPackageHash`、三 verdict 和 Findings，再让 plan 前三个 verdict 的 Evidence 统一引用该 A*；A* 只是审计证据，不取代本表真源。自然语言说明写 Note。
+`#### AI Review 结论` 是 AI Review 的结构化状态真源。执行和 General 前可省略；最终累计 General full 完成后先写当前 General A* selector 与前三项 verdict，第四项尚不存在，`AI Review` 保持 `pending`。适用的用户验收满足后才进入 fresh rules-review；最终规则结果写入第四项后，才能把 `AI Review` 写为 `passed`。因此合法阶段只有“无 verdict → 三项 General verdict → 最终四项 verdict”，不得提前声明下游 General、用户验收或 rules-review 已通过。`AI Review：issues` / `AI Review：blocked` 必须在头部写非占位摘要 / 原因；若头部未写原因，当前表必须提供对应 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位的说明。A* 只是审计证据，不取代本表真源。自然语言说明写 Note。
 
 本节是固定 verdict 名称、`Status` / `Severity` 枚举及组合的唯一文档真源；其它 sliced-dev 文档只说明各自调用方式并引用本节，不重复维护这些枚举。运行时 `review-prompt` 和校验器共同读取 `dev-plan.mjs` 中的状态枚举常量。
 
@@ -363,6 +363,7 @@ General Review 固定为三阶段累计协议：
 - `repair` 只审查 `previousHeadCommit..headCommit`。它直接引用上一轮 A*，对每个旧 finding 恰好返回一次 `addressed` 或 `not_addressed`，并报告 fix diff 新引入的 finding。当前 `openFindings` 机械派生为旧 finding 中的 `not_addressed` 加 `Origin=repair-delta` 的新 finding；repair 不生成也不继承三个最终 verdict。
 - 发生过 repair 后，开放 finding 清零也不能收口；必须对当前最终 `headCommit` 再执行 `baseCommit..headCommit` 的累计 `full`。最终 full 与直接前序 repair 使用相同 commit 三元组，通过 `reviewType` 和 `previousReview` 区分。最终三个 verdict 只能来自这次 full；发现新问题时重新进入 repair。
 - 用户在 clean full 通过后拒收且不改变授权范围 / 验收口径时，不创建虚假 finding，也不进入 finding-focused repair。先写 `用户验收：issues（<原因>）`、重置 `AI Review：pending`，把反馈渲染进 task brief；返工提交的 package / reviewer final summary / 新 A* 必须原样绑定 `reviewTrigger：user-acceptance-issues（<原因>）`，并直接对 `baseCommit..headCommit` 执行新的累计 `full`。该轮 `previousHeadCommit` 必须等于直接前序 clean full 的 `headCommit`；缺少触发器、原因或 clean full 前序时 fail closed。该返工 full 若发现问题，保留 `用户验收：issues（<原因>）`，但不得再次消费同一触发器；后续按当前 A* 进入普通 repair。通过后再次进入 `用户验收：pending`。
+- 当前 TARGET 的项目规则 finding 产生新 TARGET 时，不创建虚假 General finding。`record-commit` 使旧当前 proof 失效并把失败规则 A* 记录为 `project-rule-review-issues（A*）`；新累计 full 必须绑定该直接前序 TARGET、失败 A* 和新 Review Range，且该 A* 只能消费一次。General clean 后，原 `用户验收：issues` 转为 `pending`；`passed` 已在 TARGET 迁移时转为 `pending`，`skipped` 保留。随后按适用的用户验收状态重新进入 fresh rules-review。
 
 每轮都新建 reviewer，只消费当前 package 和其中显式引用的直接上一轮 A*，不依赖 reviewer 会话记忆。`previousReview` 只能引用直接上一轮；每个 A* 都物化当前完整 `openFindings`，不递归继承结果。A* 缺失、多义、非 `done`，旧 finding 未被唯一裁决，range / package hash / commit identity 不一致，或 Git object 缺失时 fail closed，不得静默重建、回退当前文件或改用开放式 full 绕过协议错误。
 
@@ -372,7 +373,7 @@ General Review 固定为三阶段累计协议：
 - 项目规则审查 runId：<runId>
 ```
 
-`runId` 必须匹配 `^[A-Za-z0-9][A-Za-z0-9_-]*$`：以字母或数字开头，后续只含字母、数字、`_`、`-`；它选择当前仓库的 `.rules-review-tmp/<runId>`。`not-applicable` 时不得写该选择器。规则审查部分修复、重跑或 finding 内容变化后必须使用新 runId 和新 A*，不能用旧 A* 覆盖或继续消费旧 run。
+`runId` 必须匹配 `^[A-Za-z0-9][A-Za-z0-9_-]*$`：以字母或数字开头，后续只含字母、数字、`_`、`-`；它选择当前仓库的 `.rules-review-tmp/<runId>`。`not-applicable` 时不得写该选择器。规则审查部分修复、重跑或 finding 内容变化后必须使用新 runId 和新 A*，不能用旧 A* 覆盖或继续消费旧 run；若 TARGET 未变，只重做 rules-review，前三项 General verdict 和已满足的用户验收继续有效。
 
 固定四项 verdict：
 
