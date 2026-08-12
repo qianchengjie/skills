@@ -1711,18 +1711,18 @@ async function writeRuleRepairVerificationFixture(planDir, sliceId = 'S1', {
   scopeVerdict = 'bounded',
   dispositionStatus = 'addressed',
   newFindings = [],
-  applicabilityVerdict = 'unchanged',
+  applicabilityExpansionVerdict = 'none',
 } = {}) {
   const taskPath = path.join(planDir, 'review-packages', `${sliceId}-rule-repair-task.json`);
   const verificationPath = path.join(planDir, 'review-packages', `${sliceId}-rule-repair-verification.json`);
   const task = JSON.parse(await fs.readFile(taskPath, 'utf8'));
   const cannotVerify = scopeVerdict === 'scope_unbounded'
     || dispositionStatus === 'cannot_verify'
-    || applicabilityVerdict !== 'unchanged';
+    || applicabilityExpansionVerdict !== 'none';
   const hasFinding = dispositionStatus === 'not_addressed' || newFindings.length > 0;
   const verification = {
     kind: 'sliced-dev-rule-repair-verification',
-    schemaVersion: 'sliced-dev.ruleRepairVerification.v2',
+    schemaVersion: 'sliced-dev.ruleRepairVerification.v3',
     sliceId,
     taskHash: task.taskHash,
     previousFullRunId: task.previousFullRunId,
@@ -1731,9 +1731,9 @@ async function writeRuleRepairVerificationFixture(planDir, sliceId = 'S1', {
     scopeVerdict,
     ...(scopeVerdict === 'scope_unbounded' ? { scopeReason: '无法可靠界定修复对动态消费者的影响范围。' } : {}),
     reviewedDeltaFiles: task.repairRange.changedFiles,
-    applicabilityCheck: {
-      verdict: applicabilityVerdict,
-      evidence: [{ loc: 'src/example.ts:1', summary: '已检查前序不适用规则的适用性分区。' }],
+    applicabilityExpansion: {
+      verdict: applicabilityExpansionVerdict,
+      evidence: [{ loc: 'src/example.ts:1', summary: '已检查前序不适用规则是否因 repair delta 新进入审查范围。' }],
     },
     issueDispositions: task.previousIssues.map((issue) => ({
       issueId: issue.issueId,
@@ -6448,6 +6448,7 @@ test('sliced-dev repair verification closes a direct rules finding repair and fa
     const taskPath = path.join(planDir, 'review-packages', 'S1-rule-repair-task.json');
     const task = JSON.parse(await fs.readFile(taskPath, 'utf8'));
     assert.equal(task.kind, 'sliced-dev-rule-repair-task');
+    assert.equal(task.schemaVersion, 'sliced-dev.ruleRepairTask.v3');
     assert.equal(task.previousFullRunId, previous.runId);
     assert.equal(task.repairRange.baseCommit, previous.targetCommit);
     assert.equal(task.repairRange.targetCommit, range.headCommit);
@@ -6455,6 +6456,7 @@ test('sliced-dev repair verification closes a direct rules finding repair and fa
     assert(task.previousIssues.length > 0);
     assert(task.previousIssues.every((issue) => ['finding', 'cannot_verify'].includes(issue.kind)));
     assert.doesNotMatch(JSON.stringify(task), /"status":"passed"|"observations"/);
+    assert(task.reviewRequirements.includes('check_applicability_expansion_from_previous_not_applicable_rules'));
     assert(task.reviewRequirements.includes('inspect_statically_discoverable_consumers'));
     assert(task.reviewRequirements.includes('reject_unrelated_changes'));
     assert.deepEqual(task.ruleScope.globallyNotApplicableRuleRefs, ['TYPE-001', 'UI-001']);
@@ -6469,7 +6471,9 @@ test('sliced-dev repair verification closes a direct rules finding repair and fa
     assert.match(rulePackage, /不得继承任何 passed \/ observation/);
     assert.match(rulePackage, /所有可静态发现的调用方 \/ consumer/);
     assert.match(rulePackage, /非前序失败项返修所需的功能改动/);
-    assert.match(rulePackage, /applicability partition/);
+    assert.match(rulePackage, /applicability expansion/);
+    assert.match(rulePackage, /none \/ detected \/ cannot_verify/);
+    assert.match(rulePackage, /scope contraction/);
     assert.match(rulePackage, /currentTargetCommit.*Git tree\/blob/);
     assert.match(rulePackage, /不得读取工作区、index 或当前 HEAD/);
     assert.match(rulePackage, /scope_unbounded/);
@@ -6501,7 +6505,11 @@ test('sliced-dev repair verification closes a direct rules finding repair and fa
     assert.equal(result.status, 0, result.stderr.toString());
 
     const legacyRepair = await writeRuleRepairVerificationFixture(planDir);
-    delete legacyRepair.verification.applicabilityCheck;
+    legacyRepair.verification.applicabilityCheck = {
+      verdict: 'unchanged',
+      evidence: legacyRepair.verification.applicabilityExpansion.evidence,
+    };
+    delete legacyRepair.verification.applicabilityExpansion;
     await fs.writeFile(
       legacyRepair.verificationPath,
       `${JSON.stringify(legacyRepair.verification, null, 2)}\n`,
@@ -6509,10 +6517,10 @@ test('sliced-dev repair verification closes a direct rules finding repair and fa
     );
     result = runDevPlanCli(['rule-repair-check', planDir, 'S1']);
     assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /applicabilityCheck/);
+    assert.match(result.stderr.toString(), /applicabilityExpansion/);
 
-    const changedApplicability = await writeRuleRepairVerificationFixture(planDir, 'S1', {
-      applicabilityVerdict: 'changed',
+    await writeRuleRepairVerificationFixture(planDir, 'S1', {
+      applicabilityExpansionVerdict: 'detected',
     });
     result = runDevPlanCli(['rule-repair-check', planDir, 'S1']);
     assert.equal(result.status, 1, result.stderr.toString());
@@ -6524,7 +6532,7 @@ test('sliced-dev repair verification closes a direct rules finding repair and fa
     assert.match(result.stderr.toString(), /explicitly request fresh full/);
 
     await writeRuleRepairVerificationFixture(planDir, 'S1', {
-      applicabilityVerdict: 'cannot_verify',
+      applicabilityExpansionVerdict: 'cannot_verify',
     });
     result = runDevPlanCli(['rule-repair-check', planDir, 'S1']);
     assert.equal(result.status, 1, result.stderr.toString());
@@ -6535,7 +6543,7 @@ test('sliced-dev repair verification closes a direct rules finding repair and fa
     });
 
     const repair = await writeRuleRepairVerificationFixture(planDir, 'S1', {
-      applicabilityVerdict: 'unchanged',
+      applicabilityExpansionVerdict: 'none',
     });
     result = runDevPlanCli(['rule-repair-check', planDir, 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
