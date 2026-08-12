@@ -97,7 +97,11 @@ repair 只审直接上一轮全部 open finding 和 `previousHeadCommit → head
 
 - 状态：done
 - 关联：S2
-- selectedRuleIds: CORE-001, TEST-002
+- reviewSelectedRuleRefs: CORE-001, TEST-002
+- reviewNotApplicable：
+  - ruleRefs: UI-001, TYPE-001
+    reason: 最终 TARGET 不触发这些规则。
+    evidence: src/example.ts:1 已检查最终 TARGET。
 - rulesReviewRunId: <当前 TARGET 的 runId>
 - validation: <rules-review validate command> => passed
 - recommendation: <recommendation>
@@ -112,7 +116,16 @@ repair 只审直接上一轮全部 open finding 和 `previousHeadCommit → head
 - summary: <非占位摘要>
 ```
 
-规则 finding 产生新 TARGET 时，该失败 A* 保留 raw verdict 和 `rulesReviewReport`，并作为下一轮 `project-rule-review-issues（A*）` 的输入；不得伪造 General finding。若 TARGET 未变，只修正 rules-review 协议或输入工件，则保留当前 General A* 和用户验收，只创建新的 rules-review run / A*。
+`reviewSelectedRuleRefs` 必须机械等于当前 dispatch 的 `ruleSet.selectedRuleRefs`，是最终审查范围而不是审查结果；结果来自当前 shards / `finalReview`。`reviewNotApplicable` 的 `ruleRefs` 必须机械闭合到 `dispatch.ruleSet.globallyNotApplicableRuleRefs`，每组 `reason` / `evidence` 由 rule-reviewer 基于最终 TARGET 独立分类时产生。没有全局不适用规则时固定写：
+
+```markdown
+- reviewNotApplicable：
+  - 无
+```
+
+审查阶段不保留 `selectedRuleIds` 兼容别名。当前 run 的 `excludedRuleRefs` 必须为 `[]`；非空 active catalog 即使最终 `reviewSelectedRuleRefs` 为空，也必须保留真实 zero-item run 的 fixed summary。sliced-dev 只检查分类集合机械绑定及 `reason` / `evidence` 显式非空，不判断其语义真实性。
+
+规则 finding 产生新 TARGET 时，该失败 A* 保留 raw verdict 和 `rulesReviewReport`，并作为下一轮 `project-rule-review-issues（A*）` 的输入；不得伪造 General finding，也不得回写历史 preflight 的 execution-time `selectedRuleIds` / `notApplicable`。若 TARGET 未变，只修正 rules-review 协议或输入工件，则保留当前 General A* 和用户验收，只创建新的 rules-review run / A*。
 
 ## 校验边界
 

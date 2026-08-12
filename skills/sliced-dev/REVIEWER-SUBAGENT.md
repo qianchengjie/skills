@@ -117,7 +117,7 @@ repair 的结果表：
 
 ## Rule Reviewer
 
-仅当 `项目规则审查：required`、当前 TARGET 的最终累计 General full 已通过，且适用的用户验收为 `passed / skipped` 时派发。rule package 复制累计 `baseCommit → headCommit` 的文件快照和 diff；不得在 General repair 或用户验收 pending / issues 时提前派发。
+仅当 `项目规则审查：required`、当前 TARGET 的最终累计 General full 已通过，且适用的用户验收为 `passed / skipped` 时派发。active catalog 真实为空时跳过 rules-review；非空时即使 execution-time `selectedRuleIds` 为空也必须派发。rule package 复制累计 `baseCommit → headCommit` 的文件快照和 diff，完全不包含 preflight 的 `项目规则审查`、`selectedRuleIds`、`notApplicable`、`规则获取` 或嵌有这些字段的 task brief；不得在 General repair 或用户验收 pending / issues 时提前派发。
 
 ```text
 你是 sliced-dev rule-reviewer。
@@ -126,11 +126,14 @@ repair 的结果表：
 Rule review package：<dev-plans/.../review-packages/<S-id>-rules.md>
 
 - 为当前 TARGET 创建全新 rules-review v8 run。
-- 完整审查本 TARGET 的全部当前 reviewItems。
+- 基于最终 TARGET 和完整 active catalog 独立分类；不得从 execution-time rule set 推断或恢复审查范围。
+- `dispatch.ruleSet.selectedRuleRefs` 是最终审查范围，`globallyNotApplicableRuleRefs` 是最终全局不适用分类，`excludedRuleRefs` 必须为 `[]`；shards / `finalReview` 才是审查结果。
+- 完整审查本 TARGET 的全部当前 reviewItems；这里的当前项来自对最终 TARGET 的独立分类。非空 catalog 即使最终 selected 为空，也要完成真实 zero-item run 并取得 validator-closed 结果。
 - 不引用旧 run，不继承旧 result，不扫描目录猜“最新” run。
 - rules-review 使用 package 给出的 `--base <baseCommit> --target-commit <headCommit>` 和 `excludedFiles: []`，不从当前文件或 index 重建代码输入，也不传文件排除或 `--rules-commit`；规则使用封印时的当前工作区。
 - 只允许写 rules-review 自己的临时协议工件。
 - 同一 TARGET 仅修正 rules-review 协议或输入工件时，重新创建 fresh run；不得要求重做仍绑定该 TARGET 的 General Review 或用户验收。
+- finding 只向前进入返修，不回写历史 preflight 的 execution-time `selectedRuleIds` / `notApplicable`。
 ```
 
 fixed summary：
@@ -140,7 +143,11 @@ fixed summary：
 | --- | --- | --- | --- | --- |
 | 项目规则审查 | <passed / failed / cannot-verify-from-package> | <severity> | <runId / final summary / response.md> | <结论> |
 
-- selectedRuleIds: CORE-001, TEST-002
+- reviewSelectedRuleRefs: <dispatch.ruleSet.selectedRuleRefs；无则写 无>
+- reviewNotApplicable：
+  - ruleRefs: <dispatch.ruleSet.globallyNotApplicableRuleRefs；无则整段写一项 无>
+    reason: <rule-reviewer 对最终 TARGET 的独立分类说明>
+    evidence: <最终 TARGET 的代码证据>
 - rulesReviewRunId: <本 TARGET 的新 runId>
 - validation: <rules-review validate command> => passed / failed
 - recommendation: <recommendation>
@@ -152,6 +159,15 @@ fixed summary：
 - summary: <一句话说明>
 - rulesReviewReport: <非 ready_for_merge 时为 .rules-review-tmp/<runId>/response.md>
 ```
+
+`reviewSelectedRuleRefs` 和 `reviewNotApplicable` 是审查阶段唯一字段，不保留 `selectedRuleIds` 兼容别名。`reviewNotApplicable` 无条目时固定写：
+
+```markdown
+- reviewNotApplicable：
+  - 无
+```
+
+每个 `ruleRefs` 分组必须机械闭合到 `dispatch.ruleSet.globallyNotApplicableRuleRefs`；`reason` / `evidence` 必须由 rule-reviewer 独立分类时显式给出。sliced-dev 只检查它们存在且非空，不判断语义是否正确。
 
 规则语义审查在代码提交后完成。`--target-commit` 封印时直接固定 `targetTree = headCommit^{tree}` 与 `boundCommit = headCommit`。
 

@@ -167,7 +167,7 @@ task brief 只从 `plan.md`、`decisions.md`、`audits.md` 和 `claims/<S-id>.js
 
 - 当前切片标题和 `任务内容`。
 - `全局约束`。
-- `上下文预检` 中的 `需理解`、`必读上下文`、`允许修改`、`禁止修改`、`禁止词`、`基线脏文件`、`非目标`、`停止条件`；`项目规则审查` 只投影 `selectedRuleIds` 与 `规则获取`，不投影 `notApplicable` 或状态账务。
+- `上下文预检` 中的 `需理解`、`必读上下文`、`允许修改`、`禁止修改`、`禁止词`、`基线脏文件`、`非目标`、`停止条件`；`项目规则审查` 只把 execution-time `selectedRuleIds` 与 `规则获取` 投影给 implementer，不投影 `notApplicable` 或最终审查状态账务。
 - `切片交接` 的 `输入` / `输出`。
 - 当前切片关联的 D/A 正文。
 - 当前切片 claims 概览，作为实现约束。
@@ -232,13 +232,13 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs rule-review-package dev-plans/Y
 - `not-applicable`：退出 0，提示 not-applicable，不生成文件。
 - `blocked`：退出 1，不生成文件。
 
-规则包复制当前 Review Range、累计文件快照和 `baseCommit..headCommit` diff。每个新 TARGET 使用 fresh run；同一 TARGET 仅修正 rules-review 协议或输入工件时可重新生成并重跑，当前 General 与用户验收不失效。
+规则包复制当前 Review Range、累计文件快照和 `baseCommit..headCommit` diff，但完全不包含 execution-time `项目规则审查` 块、`selectedRuleIds`、`notApplicable`、`规则获取` 或嵌有这些字段的 task brief。每个新 TARGET 使用 fresh run；同一 TARGET 仅修正 rules-review 协议或输入工件时可重新生成并重跑，当前 General 与用户验收不失效。
 
-每个新的 TARGET 都创建独立 rules-review v8 run，完整审查当前全部 reviewItems；不得携带 `baseRunId`、continuation、旧 result 或旧 package 协议。sliced-dev 始终传 `--base <baseCommit> --target-commit <headCommit>` 并保持 `excludedFiles: []`，不传 `--rules-commit`；代码 commit 输入和 snapshot 必须来自规则包，不从当前文件或 index 重建，规则使用封印时的当前工作区。
+每个新的 TARGET 都创建独立 rules-review v8 run；rule-reviewer 基于最终 TARGET 和完整 active catalog 独立分类，不得携带 `baseRunId`、continuation、旧 result 或旧 package 协议。sliced-dev 始终传 `--base <baseCommit> --target-commit <headCommit>` 并保持 `excludedFiles: []`、`excludedRuleRefs = []`，不传 `--rules-commit`；代码 commit 输入和 snapshot 必须来自规则包，不从当前文件或 index 重建，规则使用封印时的当前工作区。active catalog 真实为空时跳过；非空 catalog 即使最终 `selectedRuleRefs` 为空，也完成真实 zero-item run。
 
-fixed summary 投影当前新 run 的 `rulesReviewRunId`、recommendation、三个 issueSummary 计数和条件性 `shouldSetHash`。`--target-commit` 在封印时直接固定 `targetTree = headCommit^{tree}`、`boundCommit = headCommit` 和 `excludedFiles = []`，无需后置绑定。
+fixed summary 以 `reviewSelectedRuleRefs` 投影 `dispatch.ruleSet.selectedRuleRefs`，以 `reviewNotApplicable.ruleRefs` 机械闭合 `dispatch.ruleSet.globallyNotApplicableRuleRefs`，并投影当前新 run 的 `rulesReviewRunId`、recommendation、三个 issueSummary 计数和条件性 `shouldSetHash`；审查阶段不保留 `selectedRuleIds` 兼容别名。`reviewNotApplicable` 的 reason / evidence 由 rule-reviewer 独立分类时产生，sliced-dev 只检查显式非空。`--target-commit` 在封印时直接固定 `targetTree = headCommit^{tree}`、`boundCommit = headCommit` 和 `excludedFiles = []`，无需后置绑定。
 
-`close-check` 重跑受信任 rules-review validator，并核对 selectedRuleRefs、reviewRange、累计 changed units、input snapshot、文件 hash/mode 和精确 commit 绑定。机器不判断规则是否真的适用、finding 是否正确或证据是否充分。
+`close-check` 重跑受信任 rules-review validator，并核对 `reviewSelectedRuleRefs` / `reviewNotApplicable.ruleRefs` 与 dispatch、reviewRange、累计 changed units、input snapshot、文件 hash/mode 和精确 commit 绑定；不要求最终范围等于 execution-time `selectedRuleIds`。`dispatch.ruleSet.selectedRuleRefs` 是最终审查范围，shards / `finalReview` 才是结果。机器不判断规则是否真的适用、分类 reason / evidence 是否真实、finding 是否正确或证据是否充分。
 
 ## whole-review-package
 
@@ -330,7 +330,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/YYYY-MM-D
 - 每个 `done` 且 `AI Review：passed` 的 slice 必须存在非空 task brief、结论为 `ready-for-review` 的非空 task report、非空 review-package；JSON report 必须 schema valid；review-package 必须包含 Task Brief、Task Report、Claims、Git Diff 统计、Git Diff、Reviewer Instructions 或等价审查输入规则，以及当前 slice ID；Git Diff 统计必须使用 `text` fence，Git Diff 必须使用 `diff` fence，允许无当前 dirty diff。
 - `AI Review：passed` 的前三个 verdict 必须来自当前最终 `full` A*；当前 A* 为 `repair`、仍有 openFindings、发生 repair 后缺少最终累计 full，或 package/A*/range hash 与 commit identity 不一致时阻塞。Review Range v2 的提交父子关系和文件集合必须闭合。
 - 适用的用户验收必须在 rules-review 前达到 `passed / skipped`；`passed` 只绑定当时 TARGET，新 TARGET 会重置，`skipped` 作为切片级 waiver 保留。
-- `项目规则审查：required` 时必须选择当前 TARGET 的全新 v8 run。`close-check` 重跑受信任 validator，核对 runId、selectedRuleRefs、recommendation、计数、条件性 hash、完整 commit range、累计 input snapshot、文件 hash/mode、`excludedFiles = []` 和 `boundCommit = headCommit`；不接受 continuation、baseRunId 或旧 package。默认 SHOULD 接受和零已知缺陷规则保持原有 A/D 绑定约束。
+- `项目规则审查：required` 时必须选择当前 TARGET 的全新 v8 run。`close-check` 重跑受信任 validator，核对 runId、`reviewSelectedRuleRefs` / `reviewNotApplicable.ruleRefs` 与 dispatch、recommendation、计数、条件性 hash、完整 commit range、累计 input snapshot、文件 hash/mode、`excludedFiles = []`、`excludedRuleRefs = []` 和 `boundCommit = headCommit`；不接受 continuation、baseRunId 或旧 package，也不把 execution-time `selectedRuleIds` 当成最终审查范围。默认 SHOULD 接受和零已知缺陷规则保持原有 A/D 绑定约束。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。
 - 启用 `零已知缺陷收口` 时，所有执行型切片都必须完成 AI Review，A 类也不能使用 `AI Review：skipped`。
 - `整任务审查：passed` 或 `整任务审查：blocked` 时，`review-packages/whole-task.md` 必须存在、非空，且包含 `whole-review-package` 生成器承诺的顶层章节，包括 Reviewer Instructions、计划头、全局约束、切片概览、切片交接、Claims 概览、D/A 摘要与全文、切片 AI Review、Task Reports、变更文件、Git Diff 和整任务审查结论模板；`整任务审查：package-generated` 和 `整任务审查：blocked` 都阻塞 `close-check`。
@@ -416,7 +416,7 @@ get-rules.mjs --root <repo> --catalog --optional-source
 - 写入 `用户验收` 时只允许 `pending` / `passed` / `issues` / `skipped` 开头；`issues` 必须写明用户拒收原因，`skipped` 必须写明用户明确跳过原因。
 - `修复次数` 必须是 `当前次数/最大次数`，最大次数只允许 `2` / `4`，当前次数不能超过最大次数；默认使用 `/4`。
 - `上下文预检` 必须包含 `需理解`、`必读上下文`、`项目规则审查`、`允许修改`、`禁止修改`、`非目标`、`停止条件`；`项目规则审查` 的 `状态` 只允许 `required` / `not-applicable` / `blocked`，任何状态都必须存在结构可解析的 `selectedRuleIds` 与 `notApplicable`。`selectedRuleIds` 每项只接受一个 ID；`notApplicable` 每项可用逗号分隔多个 ID 共用一个 reason，parser 展平后参与闭包。旧 `适用规则` 字段不兼容。
-- `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不能是 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规则审查` 必须写明确状态，`禁止修改` 可显式写 `无`。展平后的 `selectedRuleIds` 与 `notApplicable` 必须各自无重复、互斥、无 unknown、完整覆盖 actual catalog，且每条 reason 非空、非占位。
+- `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不能是 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规则审查` 必须写明确状态，`禁止修改` 可显式写 `无`。actual catalog 为空只允许 `not-applicable`，非空只允许 `required` 且 execution-time `selectedRuleIds` 可为空；展平后的 `selectedRuleIds` 与 `notApplicable` 必须各自无重复、互斥、无 unknown、完整覆盖 actual catalog，且每条 reason 非空、非占位。
 - 若切片存在 `#### 切片交接`，必须包含 `输入`、`输出`，且每项必须显式写 `无` 或至少一条非占位内容；`无` 不得和真实条目混写。
 - `依赖` 不能声明当前切片自身；普通 `依赖：S*` 不强制触发 `#### 切片交接`。
 - `#### AI Review 结论` 可按生命周期缺席，或只含前三项 General verdict；只有 `AI Review：passed` / `状态：done` 才必须出现最终第四项。当前 General selector 和 rules-review runId 必须绑定 Review Range 的当前 `headCommit`；新 TARGET 引用旧 proof 会失败。
@@ -425,7 +425,7 @@ get-rules.mjs --root <repo> --catalog --optional-source
 - `#### AI Review 结论` 必须使用 `Verdict | Status | Severity | Evidence | Note` 五列格式；旧四列格式会被判为无效表格。
 - `AI Review：issues` / `AI Review：blocked` 必须有非占位头部原因，或在 `#### AI Review 结论` 中有 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位。
 - AI Review verdict 的固定名称、`Status` / `Severity` 枚举、组合和完成态阻塞条件以 [PLAN-FILE.md 的「AI Review 结论」](PLAN-FILE.md#ai-review-结论)为唯一文档真源；本命令直接按该结构校验。整任务五项额外允许 `blocked`，但不允许 `not-applicable`。
-- `项目规则审查：not-applicable` 的 `selectedRuleIds` 必须为空；有 selected 规则但 `rules-review` 不可用时必须写 `blocked`，并把切片头部 `上下文预检` 同步写为 `blocked`。脚本不判断分类 reason 是否真实，也不判断 selected 规则义务是否已充分映射进执行契约。
+- `项目规则审查：not-applicable` 只允许 actual catalog 真实为空，且 `selectedRuleIds` 必须为空；catalog 非空但 `rules-review` 不可用时必须写 `blocked`，并把切片头部 `上下文预检` 同步写为 `blocked`。脚本不判断 execution-time 分类 reason 是否真实，也不判断 selected 规则义务是否已充分映射进执行契约。
 - `状态：done` 的切片必须满足 [PLAN-FILE.md](PLAN-FILE.md) 的完成态约束；`风险：B/C` 不允许三项机器门禁为 `skipped`；`执行：需确认` / `风险：C` 必须有 `用户验收：passed/skipped`。
 - 依赖字段中出现的 `S*` 必须存在。
 - 关联项只能包含 `D*` 和 `A*`，ID 不能重复。

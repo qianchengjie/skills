@@ -67,16 +67,16 @@ REPORT_AND_NEXT
 
 每个状态只允许做对应动作：
 
-- `PREFLIGHT_TASK`：只产出或更新 `#### 上下文预检`，不得修改业务代码。路径、变更范围和 catalog 在此阶段只能形成候选规则分类，不得固定最终 `selectedRuleIds` / `notApplicable`。
-- `READ_CONTEXT`：读取必读代码，并针对候选规则的触发条件做 focused search；读取后重新校准最终 `selectedRuleIds` / `notApplicable`，无法用代码证据明确排除的候选归入 selected。若上下文不足，写 `上下文预检：blocked` 并停止。
+- `PREFLIGHT_TASK`：只产出或更新 `#### 上下文预检`，不得修改业务代码。路径、变更范围和 catalog 在此阶段只能形成候选 execution-time 规则分类，不得固定 `selectedRuleIds` / `notApplicable`。
+- `READ_CONTEXT`：读取必读代码，并针对候选规则的触发条件做 focused search；读取后重新校准 execution-time `selectedRuleIds` / `notApplicable`，无法用代码证据明确排除的候选归入 selected。它们只供 controller / implementer 执行使用，不是最终 rules-review 范围。若上下文不足，写 `上下文预检：blocked` 并停止。
 - `PREPARE_CLAIMS`：创建或细化 `claims/<S-id>.json`；claims 是本片可验证执行声明，不写完整 Markdown 表格，不把 claims 状态双写进 `plan.md`。
-- `WRITE_TASK_BRIEF`：每轮派发前生成或刷新当前片 `task-briefs/<S-id>.md`，作为 implementer 的窄上下文入口；brief 的 `项目规则审查` 只投影 `selectedRuleIds` 与 `规则获取`，并渲染当前片 claims，以及已写回并关联的失败门禁、当前 General Review A* / open G* 或 `用户验收：issues（<原因>）` 修复依据；`项目规则审查：blocked` 时不得生成；需确认片必须先生成 brief，再发执行预告。
+- `WRITE_TASK_BRIEF`：每轮派发前生成或刷新当前片 `task-briefs/<S-id>.md`，作为 implementer 的窄上下文入口；brief 的 `项目规则审查` 只投影 execution-time `selectedRuleIds` 与 `规则获取`，并渲染当前片 claims，以及已写回并关联的失败门禁、当前 General Review A* / open G* 或 `用户验收：issues（<原因>）` 修复依据；`项目规则审查：blocked` 时不得生成；需确认片必须先生成 brief，再发执行预告。
 - `CONFIRM_TASK`：仅需确认片使用；执行预告引用 task brief 路径和摘要，等待用户确认，不修改业务代码。用户确认后必须在同一连续流程内派发 implementer subagent；若确认后未派发即中断，续跑时重新预告并重新确认。
 - `IMPLEMENT_TASK`：控制器固定按 `task-brief` → `task-report-template` → subagent 的顺序派发；首轮使用 `spawn_agent(fork_turns: "none")`，安全返修优先 `followup_task` 原 implementer，fresh fallback 条件见 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md)。运行时共享工作区，派发期间控制器和其他写入型 agent 不得修改业务文件。完整档实现只能由 implementer subagent 执行，轻量档没有 task brief，不能使用 subagent。
 - `ACCEPT_IMPLEMENTER_REPORT`：控制器读取 subagent summary 和本轮重置后由 implementer 更新的 `task-reports/<S-id>.json`，确认 `conclusion: ready-for-review`、最小 handoff 字段已填写、实际改动未越过 `允许修改` / `禁止修改`、且 subagent 未报告 blocked / 新分叉 / 风险升级；默认 `blocked` 报告、旧轮次报告或不通过的结果不得进入硬门禁。
 - `RUN_HARD_GATES`：执行 lint / type-check / test / `diff-check` 等确定性门禁；控制器依据真实证据更新 `claims/<S-id>.json`，不要让 implementer 自行最终裁定 `verified`。
 - `COMMIT_ITERATION`：首轮派发前已固定 `baseCommit`。controller 只 stage `taskReport.changedFiles`，运行 `pre-commit-check` 后创建普通单父 commit，再运行 `record-commit`；无代码轮不创建空 commit。任何 HEAD、路径集合、父子关系或 commit diff 不一致都停止。
-- `AI_REVIEW_PACKAGE_AND_REVIEW`：只从 Review Range v2 的已记录 commit 生成 package。General Review 按首次累计 `full`、finding-focused `repair`、发生 repair 后最终累计 `full` 推进；用户验收拒收或项目规则 finding 产生新 TARGET 时，以对应 `reviewTrigger` 直接重新执行累计 `full`。最终 General clean 后先写前三项 verdict，满足适用的用户验收后才生成累计 rule package并派发 fresh rules-review v8 run；第四项完成后才写 `AI Review：passed`。
+- `AI_REVIEW_PACKAGE_AND_REVIEW`：只从 Review Range v2 的已记录 commit 生成 package。General Review 按首次累计 `full`、finding-focused `repair`、发生 repair 后最终累计 `full` 推进；用户验收拒收或项目规则 finding 产生新 TARGET 时，以对应 `reviewTrigger` 直接重新执行累计 `full`。最终 General clean 后先写前三项 verdict，满足适用的用户验收后，active catalog 非空才生成不含 execution-time 规则分类的累计 rule package，并派发 fresh rules-review v8 run；真实空 catalog 跳过。第四项完成后才写 `AI Review：passed`。
 - `FIX_OR_STOP`：每个切片最多自动修复 4 次；次数用尽仍失败则停止并报告。
 - `USER_ACCEPTANCE`：最终 General clean 后按 [PLAN-FILE.md](PLAN-FILE.md) 的 `用户验收` 条件字段收口；自动片默认不逐片停下并直接继续规则审查，需确认片 / C 类片必须停下。用户拒收且不产生 D 分叉时，写明 `issues` 原因、重置 AI Review 并回到返修派发；新 TARGET 的 General clean 后再转回 `pending`。阻塞状态不得进入 rules-review 或标记 done；标记 done 前，当前片所有 claims 必须是 `verified` 或 `waived`。
 
@@ -132,7 +132,7 @@ REPORT_AND_NEXT
 1. 本片风险等级是 A / B / C。
 2. 本片必须理解哪些上下文。
 3. 必须读取哪些文件、搜索哪些关键词或查看哪些旧行为。
-4. 本片是否需要项目规则审查；需要时列出 selected rule IDs、resolved `get-rules` 命令和适用原因。
+4. 本片的 active catalog 状态与 execution-time rule set；列出 selected rule IDs、resolved `get-rules` 命令和适用原因。
 5. 本片是否触碰 `全局约束` 或当前切片 `切片交接`。
 6. 本片允许 / 禁止改哪些文件。
 7. 哪些情况必须停止。
@@ -143,7 +143,7 @@ REPORT_AND_NEXT
 - `执行：自动/需确认/待判定`
 - `上下文预检：ready/blocked/skipped`
 
-`项目规则审查` 的 `selectedRuleIds` 与 `notApplicable` 在任何状态都必须存在且结构可解析；`selectedRuleIds` 每项写 `<RULE-ID>：<reason>`，`notApplicable` 每项写 `<RULE-ID>[, <RULE-ID>...]：<共同 reason>`，空类写 `无`。路径、变更范围和 catalog 只能产生候选分类；完成本片必读代码与针对规则触发条件的 focused search 后，才能重新校准最终分类，无法用代码证据明确排除的候选归入 selected。`pending` / `blocked` 允许 well-formed but incomplete。写 `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不得仍是占位内容；`项目规则审查` 必须显式存在且状态不是 `blocked`，`禁止修改` 必须显式存在，可写 `无`。两类规则必须无内部重复、互斥、无 unknown、完整覆盖 actual catalog，reason 非空且非占位；有 selected 规则但 `rules-review` 不可用时写 `blocked`，并把切片头部 `上下文预检` 同步写为 `blocked` 后停止。
+`项目规则审查` 的 `selectedRuleIds` 与 `notApplicable` 是 execution-time rule set，在任何状态都必须存在且结构可解析；`selectedRuleIds` 每项写 `<RULE-ID>：<reason>`，`notApplicable` 每项写 `<RULE-ID>[, <RULE-ID>...]：<共同 reason>`，空类写 `无`。路径、变更范围和 catalog 只能产生候选分类；完成本片必读代码与针对规则触发条件的 focused search 后，才能重新校准执行分类，无法用代码证据明确排除的候选归入 selected。`pending` / `blocked` 允许 well-formed but incomplete。写 `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不得仍是占位内容；`项目规则审查` 必须显式存在且状态不是 `blocked`，`禁止修改` 必须显式存在，可写 `无`。两类规则必须无内部重复、互斥、无 unknown、完整覆盖 actual catalog，reason 非空且非占位；active catalog 为空才写 `not-applicable`，非空则写 `required` 且允许 `selectedRuleIds` 为空，rules-review unavailable 时写 `blocked`，并把切片头部 `上下文预检` 同步写为 `blocked` 后停止。
 
 结构闭包通过后，控制器仍须按 `规则获取` 读取 selected 规则，并把每条可执行义务映射到当前已有的执行契约字段（`允许修改` / `禁止修改`、验证、claims、停止条件或门禁记录）。义务未写入、冲突未解决时保持 `pending` / `blocked`，不得生成 task brief 或写 `ready`；不在 plan 中复制规则正文。validator 只检查显式结构和集合闭包，不判断分类 reason 是否真实，也不判断义务映射是否充分。
 
@@ -159,7 +159,7 @@ REPORT_AND_NEXT
 ### 必读上下文读取规则
 
 - `必读上下文` 读完之前，不允许进入实现。
-- `全局约束` 是每片默认继承的约束；`项目规则审查` 是独立 rule-reviewer 的输入，不由 general reviewer 代审；当前片声明 `#### 切片交接` 时，执行前必须读取该小节。
+- `全局约束` 是每片默认继承的约束；上下文预检的 `项目规则审查` 只形成 execution-time rule set，不是 rule-reviewer 输入，也不由 general reviewer 代审；最终 rule-reviewer 基于最终 TARGET 和完整 active catalog 独立分类。当前片声明 `#### 切片交接` 时，执行前必须读取该小节。
 - 读完后发现原判断错误，必须更新 `上下文预检` 和风险等级。
 - 需要修改 `允许修改` 外的文件时，必须先停手并说明原因；按拟扩范围重跑受影响的上下文预检，补读新增路径所需上下文并重新判断项目规则适用性、风险 / 执行和 claims。仍在用户授权边界内、未命中 `禁止修改`、风险为 A/B、未新增命中「需确认」面且无需新的执行确认时，先更新执行清单再继续，不能先改再补记录；否则停止确认。
 - 上下文不足时写 `上下文预检：blocked（原因）`，并把切片 `状态` 置为 `blocked` 或记录 D 分叉。
@@ -313,7 +313,7 @@ done slice 的 `#### 门禁记录` 必须保留 diff-check 的结构化证据；
 
 general reviewer 以 `review-packages/<S-id>.md` 为主输入，只输出当前阶段允许的结果；普通包不包含 `项目规则审查` 信息。每轮 general review 都使用 `spawn_agent(fork_turns: "none")` 新建 reviewer，禁止用 `followup_task` 复用原 reviewer。首次 `full` 完整审查 `baseCommit..headCommit` 并输出前三个 verdict 和完整 `openFindings`；`repair` 只审查 `previousHeadCommit..headCommit`，逐一裁决上一轮 finding 并报告 fix diff 新 finding，不输出或继承前三个 verdict；发生过 repair 后必须对同一最终 `headCommit` 再执行累计 `full`。clean full 后的用户拒收以 `reviewTrigger：user-acceptance-issues（...）`，项目规则 finding 修复产生的新 TARGET 以 `reviewTrigger：project-rule-review-issues（A*）`，直接重新执行累计 `full`，都不伪造 General finding。新 reviewer 只消费本轮 package 和其中显式引用的直接上一轮 A*，不继承上一 reviewer 的会话记忆。
 
-`项目规则审查：required` 时，只有当前 TARGET 的最终累计 General full clean，且适用的用户验收为 `passed / skipped` 后，才生成 `review-packages/<S-id>-rules.md` 并派发 fresh rule-reviewer。规则包复制当前 Review Range、累计文件快照和 `baseCommit..headCommit` diff；每个新 TARGET 创建全新 run，以 `--base <baseCommit> --target-commit <headCommit>` 和 `excludedFiles: []` 完整审查全部当前 `reviewItems`，不传 `--rules-commit`，不携带旧 run、旧规则审查 A* 或旧 SHOULD 接受 D*，也不继承旧结果。同一 TARGET 的规则协议或输入工件修正只重做 rules-review，仍绑定该 TARGET 的 General 和用户验收继续有效。controller 最后写第四 verdict 和唯一安全的当前 `项目规则审查 runId`；非 `ready_for_merge` 时 A* 必须记录 `.rules-review-tmp/<runId>/response.md`。
+`项目规则审查：required` 时，只有当前 TARGET 的最终累计 General full clean，且适用的用户验收为 `passed / skipped` 后，才生成 `review-packages/<S-id>-rules.md` 并派发 fresh rule-reviewer。规则包复制当前 Review Range、累计文件快照和 `baseCommit..headCommit` diff，但完全不包含 execution-time `项目规则审查` 块、`selectedRuleIds`、`notApplicable`、`规则获取` 或嵌有这些字段的 task brief。每个新 TARGET 创建全新 run；rule-reviewer 基于最终 TARGET 和完整 active catalog 独立分类，以 `--base <baseCommit> --target-commit <headCommit>` 和 `excludedFiles: []` 审查全部最终 `reviewItems`，保持 `excludedRuleRefs = []`，不传 `--rules-commit`，不携带旧 run、旧规则审查 A* 或旧 SHOULD 接受 D*，也不继承旧结果。`dispatch.ruleSet.selectedRuleRefs` 是最终审查范围，shards / `finalReview` 才是结果；非空 catalog 即使最终 selected 为空也要完成真实 zero-item run。active catalog 真实为空时才跳过 run。同一 TARGET 的规则协议或输入工件修正只重做 rules-review，仍绑定该 TARGET 的 General 和用户验收继续有效。controller 最后写第四 verdict 和唯一安全的当前 `项目规则审查 runId`；非 `ready_for_merge` 时 A* 必须记录 `.rules-review-tmp/<runId>/response.md`。
 
 结构合法的正负结果都是有效审查结果，负结论不得通过重派洗掉。只有 reviewer 未返回、越界写文件或 final summary 无法归属本轮 package / run 时，才允许对同一输入最多 fresh 重派一次，禁止对 reviewer 使用 `followup_task`；仍失败则写 `AI Review：blocked（<原因>）` 并停止。`close-check` 会要求 general / rule package、当前 A*、rules-review dispatch 和 Review Range v2 的 commit 三元组、累计文件集合及精确绑定一致。
 
@@ -335,7 +335,7 @@ general reviewer 以 `review-packages/<S-id>.md` 为主输入，只输出当前�
 - 本次变更引入或加重的所有 finding，无论 `must_fix` / `should_fix`，都进入本片有限修复；不得用风险接受、claim waiver 或 follow-up 关闭缺陷。
 - 所有执行型切片都必须完成 AI Review；A 类也不得使用 `AI Review：skipped`。
 - `cannot_verify` 必须补证清零。规则审查的 `recommendation = must_fix_before_merge / should_review_before_merge` 投影为 `项目规则审查 failed`，`manual_verification_required / review_incomplete / review_blocked` 投影为 `cannot-verify-from-package`；只有 `ready_for_merge` 可投影为 `passed`。
-- controller 写回规则审查 A* 时，要记录当前 `rulesReviewRunId`、`recommendation` 和 `issueSummary.mustFix / shouldFix / cannotVerify`。`close-check` 要求 recommendation 为 `ready_for_merge` 且三个计数均为 `0`，不接受 SHOULD D* 例外。
+- controller 写回规则审查 A* 时，要记录当前 `reviewSelectedRuleRefs`、`reviewNotApplicable`、`rulesReviewRunId`、`recommendation` 和 `issueSummary.mustFix / shouldFix / cannotVerify`。`close-check` 要求 recommendation 为 `ready_for_merge` 且三个计数均为 `0`，不接受 SHOULD D* 例外。
 - 既有且未被本次变更加重的 observation 不自动扩入范围。修复超出当前 `允许修改` 时先按授权边界规则重跑受影响的上下文预检、更新执行清单并重跑门禁；命中 `禁止修改`、改变用户授权边界、令风险升为 C、新增命中「需确认」面或需要新的执行确认时立即停止，不能标 `done`。
 
 脚本只检查固定 token、规则审查显式 recommendation 和计数，不根据 finding 文案、代码规模或 reviewer 语气推断是否“完美”。
@@ -385,7 +385,7 @@ repair 中的新 finding 只能来自本轮 fix diff，统一写 `Origin=repair-
 
 `AI Review：issues` / `AI Review：blocked` 必须在头部括号中写非占位摘要 / 原因；若头部未写原因，`#### AI Review 结论` 中必须有对应 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位。占位包括 `TBD`、`TODO`、`暂无`、`待补充`、`未填写`、`pending`、`待执行前补充`。
 
-阻塞规则：任一 verdict 为 `failed`、任一 `Severity=critical`、仍有 `cannot-verify-from-package`、或 `项目规则审查：blocked`，都阻塞 `AI Review：passed` 和 `状态：done`；只要头部已写 `AI Review：passed`，四 verdict 必须完整且无阻塞项。默认 SHOULD 接受只允许第四 verdict 单独变为 `passed`，A* 的 raw `failed` 不改写。`项目规则审查：required` 时，第四 verdict 不能是 `not-applicable`，Evidence 必须引用当前最终 A*；A* 至少包含 `selectedRuleIds`、`rulesReviewRunId`、`validation: <rules-review validate command> => passed`、`recommendation`、三个 issueSummary 计数、条件性 `shouldSetHash`、`verdict`、`severity` 和 `summary`。`项目规则审查：not-applicable` 时，第四 verdict 必须为 `not-applicable`，且 `selectedRuleIds` 必须为空。
+阻塞规则：任一 verdict 为 `failed`、任一 `Severity=critical`、仍有 `cannot-verify-from-package`、或 `项目规则审查：blocked`，都阻塞 `AI Review：passed` 和 `状态：done`；只要头部已写 `AI Review：passed`，四 verdict 必须完整且无阻塞项。默认 SHOULD 接受只允许第四 verdict 单独变为 `passed`，A* 的 raw `failed` 不改写。`项目规则审查：required` 时，第四 verdict 不能是 `not-applicable`，Evidence 必须引用当前最终 A*；A* 至少包含 `reviewSelectedRuleRefs`、`reviewNotApplicable`、`rulesReviewRunId`、`validation: <rules-review validate command> => passed`、`recommendation`、三个 issueSummary 计数、条件性 `shouldSetHash`、`verdict`、`severity` 和 `summary`。`reviewSelectedRuleRefs` 机械绑定 `dispatch.ruleSet.selectedRuleRefs`；`reviewNotApplicable.ruleRefs` 机械闭合到 `globallyNotApplicableRuleRefs`，其 reason / evidence 只要求显式非空，不做语义代判。审查阶段不保留 `selectedRuleIds` 兼容别名。`项目规则审查：not-applicable` 只允许 active catalog 真实为空，第四 verdict 必须为 `not-applicable`，且 `selectedRuleIds` 必须为空。
 
 ## 用户验收
 
@@ -400,7 +400,7 @@ repair 中的新 finding 只能来自本轮 fix diff，统一写 `Origin=repair-
 - 每个切片从 `修复次数：0/4` 开始。
 - 只有为解决失败门禁 / review issue 而实际修改任务范围内文件时才增加当前次数。单纯重跑 reviewer、重生成 package、补测试运行证据或修复 review 协议工件不计次；没有新增证据或工件变化时不得原样重跑 reviewer。
 - 每次修复前只针对失败门禁 / review issues 改，不顺手扩展需求。
-- 每次派发返修前，先把失败硬门禁、当前 General Review A* / open G*、`用户验收：issues（<原因>）`，或当前项目规则审查 A* / `rulesReviewReport` 修复依据写回并关联，重新生成 task brief，再重置 task report；随后优先 `followup_task` 原 implementer。`followup_task.message` 完整使用固定任务包，只替换当前切片和最新 Task brief 路径；返修依据只通过最新 task brief 进入 follow-up 消息，新增或变化的业务口径、实现取舍、文件保留 / 删除及修复终点必须先写回适用真源并重新生成 brief。只有 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 明示的不安全复用条件才 fresh fallback；既有授权内扩展执行 allowlist 仍复用原 implementer。
+- 每次派发返修前，先把失败硬门禁、当前 General Review A* / open G*、`用户验收：issues（<原因>）`，或当前项目规则审查 A* / `rulesReviewReport` 修复依据写回并关联，重新生成 task brief，再重置 task report；随后优先 `followup_task` 原 implementer。规则 finding 只作为向前返修依据，不回写历史 preflight 的 execution-time `selectedRuleIds` / `notApplicable`。`followup_task.message` 完整使用固定任务包，只替换当前切片和最新 Task brief 路径；返修依据只通过最新 task brief 进入 follow-up 消息，新增或变化的业务口径、实现取舍、文件保留 / 删除及修复终点必须先写回适用真源并重新生成 brief。只有 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 明示的不安全复用条件才 fresh fallback；既有授权内扩展执行 allowlist 仍复用原 implementer。
 - 修复后重跑失败门禁，执行 `pre-commit-check`，由 controller 追加普通单父 commit 并运行 `record-commit`。若直接前序有 open finding，生成 `repair` package，只复核旧 `openFindings` 和本轮 fix diff；开放 finding 清零后必须对同一最终 commit 生成累计 `full` package。若直接前序是用户拒收前的 clean full，则用 `user-acceptance-issues`；若修复直接前序 TARGET 的规则 finding，则用唯一的 `project-rule-review-issues（A*）`，两者都跳过 finding-focused repair并生成新累计 `full`。所有阶段都新建 general reviewer。
 - 修复次数用尽后任一门禁仍失败，停止并报告剩余问题，不继续自动修。
 - 修复需要超出当前 `允许修改` 时按授权边界规则先重跑受影响的上下文预检并更新执行清单；命中 `禁止修改`、改变用户授权边界、风险升为 C、新增命中「需确认」面或需要新的执行确认时立即停止。
@@ -423,7 +423,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/<date-slu
 - 每个 done slice 必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确；最终 claim 状态必须是 `verified` 或 `waived`。
 - 每个 done + `AI Review：passed` slice 必须有非空 task brief、`conclusion: ready-for-review` 的 task report、非空 review-package 和合法 Review Range v2；JSON report 必须 schema valid。`close-check` 使用已记录 commit、父子关系、文件集合和 task report hash 收口，不读取当前 HEAD 重建范围。当前 A* 必须是覆盖 `baseCommit..headCommit` 的 `full`；发生过 repair 时，缺少最终累计 full、旧 finding 未被唯一裁决或当前 `openFindings` 非空都拒收。
 - `split` / `skipped` 不要求 done slice 的实现证据；它们分别以 `替代切片` / `跳过依据` 作为拒收门禁。脚本只检查 `替代切片` ID 非重复、真实存在且为父片后代，不判断这些切片是否完整覆盖父片任务与验收；覆盖关系由拆分拷问 / 计划审查判断。
-- `项目规则审查：required` 时，必须有唯一安全的当前 runId 选择器和当前最终 A*。`close-check` 从当前 sliced-dev skill root 安全解析受信任 rules-review validator，对当前仓库 `.rules-review-tmp/<runId>` 重跑真实 `--mode run`，不执行 A* 的 validation 展示命令；它拒绝不安全、缺失、symlink / 逃逸路径、validator / finalReview 失败，并比较真实 runId、recommendation、三个计数和仅 SHOULD recommendation 存在的 `shouldSetHash`。真实 dispatch 必须是 v8，满足 `baseCommit = sliced-dev baseCommit`、`boundCommit = headCommit`、`baseTree = baseCommit^{tree}`、`targetTree = headCommit^{tree}`、`excludedFiles = []`；`inputSnapshot`、changed units 及当前全部 `reviewItems` 的 shard 覆盖必须与累计 commit 范围和 rule package 一致。每个 TARGET 必须是独立 run，不接受旧 package 或结果继承字段。第四 verdict 默认必须等于 A* raw verdict；只有默认 SHOULD 完整 A/D/Evidence/token/confirmation 链可单独通过。`项目规则审查：not-applicable` 时，第四 verdict 必须为 `not-applicable`、不得有选择器且 `selectedRuleIds` 必须为空；`blocked` 阻塞 `上下文预检：ready`、`AI Review：passed` 和 `状态：done`。机器不判断 BASE 选择、rule ID 是否该选、分类 reason 是否真实、selected 义务是否已充分进入执行契约、finding 是否正确、证据是否充分或用户确认是否真实。
+- `项目规则审查：required` 时，必须有唯一安全的当前 runId 选择器和当前最终 A*。`close-check` 从当前 sliced-dev skill root 安全解析受信任 rules-review validator，对当前仓库 `.rules-review-tmp/<runId>` 重跑真实 `--mode run`，不执行 A* 的 validation 展示命令；它拒绝不安全、缺失、symlink / 逃逸路径、validator / finalReview 失败，并比较真实 runId、`reviewSelectedRuleRefs`、`reviewNotApplicable.ruleRefs`、recommendation、三个计数和仅 SHOULD recommendation 存在的 `shouldSetHash`。真实 dispatch 必须是 v8，满足 `baseCommit = sliced-dev baseCommit`、`boundCommit = headCommit`、`baseTree = baseCommit^{tree}`、`targetTree = headCommit^{tree}`、`excludedFiles = []`、`excludedRuleRefs = []`；`inputSnapshot`、changed units 及当前全部 `reviewItems` 的 shard 覆盖必须与累计 commit 范围和 rule package 一致。`dispatch.ruleSet.selectedRuleRefs` 是最终范围，shards / `finalReview` 是结果；非空 catalog 的空 selected 仍须完成 zero-item run。每个 TARGET 必须是独立 run，不接受旧 package 或结果继承字段，也不要求最终范围等于 execution-time `selectedRuleIds`。第四 verdict 默认必须等于 A* raw verdict；只有默认 SHOULD 完整 A/D/Evidence/token/confirmation 链可单独通过。`项目规则审查：not-applicable` 只允许 active catalog 真实为空，此时第四 verdict 必须为 `not-applicable`、不得有选择器且 `selectedRuleIds` 必须为空；`blocked` 阻塞 `上下文预检：ready`、`AI Review：passed` 和 `状态：done`。机器不判断 BASE 选择、execution-time rule ID 是否该选、分类 reason 是否真实、selected 义务是否已充分进入执行契约、最终不适用说明是否真实、finding 是否正确、证据是否充分或用户确认是否真实。
 
 `close-check` 只信 `claims/<S-id>.json` 的终态，不从 task report 推断 claim 完成。`waived` 只接受 `risk` / `scope` claim 且必须有非占位 note；P0/P1 `behavior`、`scope`、`validation` claim 写 `verified` 时必须有 `ai-statement` 之外的证据。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。

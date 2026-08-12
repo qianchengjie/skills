@@ -1081,6 +1081,73 @@ test("construct-dispatch 对 2×2 紧凑输入做完整确定性投影", async (
   assert.equal(validation.ok, true);
 });
 
+test("非空 TARGET 的候选规则全部全局不适用时完成零任务全链路", async (t) => {
+  const fixture = createConstructionCase(t, {
+    runId: "globally-not-applicable-zero-task",
+    productionInput: true,
+    mutateInput(input) {
+      input.ruleProjection.selectedRuleRefs = [];
+      input.ruleProjection.globallyNotApplicableRuleRefs = ["CORE-001", "CORE-002"];
+      input.applicability.byRule = {};
+      input.batchRuleRefs = {};
+      Object.assign(input.expectedCounts, {
+        selectedRuleRefs: 0,
+        globallyNotApplicableRuleRefs: 2,
+        applicabilityMatrix: 0,
+        reviewItems: 0,
+        reviewBatches: 0,
+      });
+    },
+  });
+  const runDir = path.dirname(fixture.outputPath);
+  const taskDir = path.join(runDir, "tasks");
+  const finalReviewFile = path.join(runDir, "finalReview.json");
+  const finalFile = path.join(runDir, "final.md");
+
+  for (const args of [
+    ["--mode", "construct-dispatch", "--input", fixture.inputPath, "--output", fixture.output],
+    ["--mode", "dispatch", "--input", fixture.outputPath],
+    ["--mode", "build-tasks", "--dispatch", fixture.outputPath, "--out", taskDir],
+    ["--mode", "aggregate-final", "--dir", runDir, "--output", finalReviewFile],
+    ["--mode", "render-final", "--input", finalReviewFile, "--dispatch", fixture.outputPath, "--output", finalFile],
+    ["--mode", "run", "--dir", runDir],
+    ["--mode", "render-response", "--dir", runDir],
+    ["--mode", "render-handoff", "--dir", runDir],
+  ]) {
+    assert.equal((await runJson(args, fixture.root)).ok, true, args[1]);
+  }
+
+  const dispatch = readJson(fixture.outputPath);
+  assert.ok(dispatch.targets.changedUnits.length + dispatch.targets.candidates.length > 0);
+  assert.deepEqual(dispatch.ruleSet.candidateRuleRefs, ["CORE-001", "CORE-002"]);
+  assert.deepEqual(dispatch.ruleSet.selectedRuleRefs, []);
+  assert.deepEqual(dispatch.ruleSet.excludedRuleRefs, []);
+  assert.deepEqual(dispatch.ruleSet.globallyNotApplicableRuleRefs, ["CORE-001", "CORE-002"]);
+  assert.deepEqual(dispatch.applicabilityMatrix, []);
+  assert.deepEqual(dispatch.reviewItems, []);
+  assert.deepEqual(dispatch.reviewBatches, []);
+  assert.deepEqual(fs.readdirSync(taskDir), []);
+  assert.deepEqual(fs.existsSync(path.join(runDir, "shards"))
+    ? fs.readdirSync(path.join(runDir, "shards"))
+    : [], []);
+
+  const finalReview = readJson(finalReviewFile);
+  assert.equal(finalReview.protocolGate, "passed");
+  assert.equal(finalReview.scopeMode, "full");
+  assert.equal(finalReview.coverageClaim, "full_complete");
+  assert.equal(finalReview.semanticVerdict, "clean");
+  assert.deepEqual(finalReview.excludedFiles, []);
+  assert.deepEqual(finalReview.excludedRuleRefs, []);
+  assert.equal(finalReview.recommendation, "ready_for_merge");
+  assert.deepEqual(finalReview.issueSummary, {
+    findings: 0,
+    mustFix: 0,
+    shouldFix: 0,
+    cannotVerify: 0,
+    observations: 0,
+  });
+});
+
 test("construct-dispatch 要求通过条件使用非空两空格缩进列表", async (t) => {
   const cases = [
     {
