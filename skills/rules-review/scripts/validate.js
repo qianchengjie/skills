@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
 const MODES = new Set([
+  'new-run-id',
   'dispatch',
   'construct-dispatch',
   'seal-dispatch',
@@ -129,6 +130,7 @@ function publicResult(result) {
   if (result.gate) data.gate = result.gate;
   if (result.rendered) data.rendered = result.rendered;
   if (result.response) data.response = result.response;
+  if (result.runId) data.runId = result.runId;
   return data;
 }
 
@@ -170,7 +172,9 @@ function run(args) {
   if (mode !== 'render-final' && result.exitCode === 2) return result;
 
   try {
-    if (mode === 'construct-dispatch') {
+    if (mode === 'new-run-id') {
+      result.runId = `${new Date().toISOString().replace(/[-:]|\.\d{3}/g, '')}-rr-${crypto.randomBytes(4).toString('hex')}`;
+    } else if (mode === 'construct-dispatch') {
       constructDispatchMode(args, result);
     } else if (mode === 'seal-dispatch') {
       sealDispatchMode(args, result);

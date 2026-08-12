@@ -2022,6 +2022,14 @@ test("boundCommit 是必填的规范 commit，且其 tree 必须等于 targetTre
   await expectFailure(["--mode", "dispatch", "--input", file], /boundCommit tree does not match targetTree/);
 });
 
+test("new-run-id 由宿主生成符合协议的 fresh runId", async () => {
+  const result = await runJson(["--mode", "new-run-id"]);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, "new-run-id");
+  assert.match(result.runId, /^[0-9]{8}T[0-9]{6}Z-rr-[0-9a-f]{8}$/);
+});
+
 test("runId 只接受 UTC 时间、rr 标记和 8 位小写十六进制随机后缀", async (t) => {
   const root = createRepository();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

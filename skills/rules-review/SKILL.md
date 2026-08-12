@@ -21,7 +21,13 @@ controller 只把用户语法解析为固定的 BASE commit 与 TARGET commit，
 
 BASE、TARGET 或目标解释不唯一时立即 blocked，不任选一种解释。用户要求审查 current、staged、worktree、branch 或裸 tree 时，停止并要求先形成目标 commit；不要把这些入口静默降级为 commit 审查。
 
-创建 construction input 前，controller 必须为本轮生成新的 `runId`：
+创建 construction input 前，controller 必须为本轮生成新的 `runId`。建议使用官方入口：
+
+```text
+node scripts/validate.js --mode new-run-id
+```
+
+该入口返回成功 JSON 中的 `runId`。controller 也可自行生成；无论采用哪种方式，`runId` 都必须符合：
 
 ```text
 <YYYYMMDDTHHmmssZ>-rr-<8 位小写十六进制随机串>
@@ -329,7 +335,13 @@ render-response
 render-handoff
 ```
 
-主要命令：
+`runId` 建议通过以下命令生成：
+
+```text
+node scripts/validate.js --mode new-run-id
+```
+
+正式工件链主要命令：
 
 ```text
 node scripts/validate.js --mode construct-dispatch --input .rules-review-tmp/<run-id>-construction.json --output .rules-review-tmp/<run-id>/dispatch.json
@@ -350,6 +362,7 @@ node scripts/validate.js --mode render-handoff --dir .rules-review-tmp/<run-id>
 
 validator 检查：
 
+- `new-run-id` 使用宿主 UTC 时钟和加密随机字节生成规范 `runId`。
 - schemaVersion、固定字段、路径与 strict JSON。
 - `runId` 符合 `YYYYMMDDTHHmmssZ-rr-xxxxxxxx`，并在当前工件链中保持一致。
 - commit/tree/blob 存在，baseCommit/tree、boundCommit/tree 身份一致，且 `excludedFiles = []`。
@@ -361,7 +374,7 @@ validator 检查：
 - task 投影、batch 引用和当前结果唯一覆盖。
 - finalReview、Markdown 与当前结果的机械派生一致。
 
-validator 明确不检查：
+validator 对已有工件明确不检查：
 
 - `runId` 时间戳是否来自可信时钟、随机后缀是否具有声明的熵；也不从名称推断 TARGET、版本或结论。
 - BASE 选择是否符合业务意图。
