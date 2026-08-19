@@ -2103,12 +2103,24 @@ function commitParents(root, commit) {
   return objectIds.slice(1);
 }
 
-function assertFirstExecutionPlanCheckpoint(root, planDir, sliceId, slices, plan, baseCommit) {
-  const firstExecutionSliceId = [...slices].find(([, block]) => {
+async function assertInitialExecutionSliceBaseline(root, planDir, sliceId, slices, plan, baseCommit) {
+  const executionSliceIds = [...slices].filter(([, block]) => {
     const status = getField(getSliceHeaderBlock(block.body), '状态');
     return status !== 'split' && status !== 'skipped';
-  })?.[0];
-  if (sliceId !== firstExecutionSliceId) return;
+  }).map(([executionSliceId]) => executionSliceId);
+  const executionIndex = executionSliceIds.indexOf(sliceId);
+  if (executionIndex < 0) return;
+  if (executionIndex > 0) {
+    const previousSliceId = executionSliceIds[executionIndex - 1];
+    const previousBoundary = await readSliceCommitBoundary(planDir, previousSliceId);
+    const previousBaseCommit = resolveGitCommit(root, previousBoundary.baseCommit, `plan ${previousSliceId} baseCommit`);
+    const previousRange = await readExistingReviewRange(planDir, previousSliceId, root, previousBaseCommit);
+    if (!previousRange.range) throw gateError(`task-brief:${sliceId}: previous execution slice ${previousSliceId} must have a Review Range`);
+    if (baseCommit !== previousRange.range.headCommit) {
+      throw gateError(`task-brief:${sliceId}: baseCommit must equal previous execution slice headCommit ${previousRange.range.headCommit}`);
+    }
+    return;
+  }
 
   const parents = commitParents(root, baseCommit);
   if (parents.length !== 1) {
@@ -3200,7 +3212,7 @@ async function buildTaskBrief(planDir, sliceId) {
     throw gateError(`task-brief: HEAD must equal recorded dispatch baseline ${expectedHead}, got ${actualHead}`);
   }
   if (!existingRange.range) {
-    assertFirstExecutionPlanCheckpoint(root, planDir, sliceId, slices, plan, baseCommit);
+    await assertInitialExecutionSliceBaseline(root, planDir, sliceId, slices, plan, baseCommit);
   }
 
   const decisions = getBlocks(decisionsMarkdown, DECISION_ID_RE);

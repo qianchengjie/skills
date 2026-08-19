@@ -4430,6 +4430,36 @@ test('CLI task-brief rejects a first execution plan checkpoint mixed with busine
   });
 });
 
+test('CLI task-brief rejects a later execution slice whose baseCommit skips the previous slice headCommit', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-brief-cross-slice-gap');
+    await writeValidExecutingPlan(planDir);
+    await writeCloseCheckHandoffFixtures(planDir);
+    const s1Range = JSON.parse(await fs.readFile(path.join(planDir, 'review-packages', 'S1-range.json'), 'utf8'));
+
+    await fs.writeFile('src/context.ts', 'export const context = false;\n', 'utf8');
+    execFileSync('git', ['add', 'src/context.ts']);
+    execFileSync('git', ['commit', '-m', 'between slices']);
+    const gapCommit = gitOid(['rev-parse', 'HEAD']);
+    assert.notEqual(gapCommit, s1Range.headCommit);
+
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = (await fs.readFile(planPath, 'utf8'))
+      .replace('> 状态：done', '> 状态：executing')
+      .replace('- 阶段：done', '- 阶段：executing')
+      .replace('- 当前切片：无', '- 当前切片：S2')
+      .replace('- 下一步：执行 S1', '- 下一步：执行 S2')
+      + withReviewPackageReadySlice(createConsumerSliceBlock(), planDir, 'S2');
+    await fs.writeFile(planPath, plan, 'utf8');
+    await setSliceBaseCommit(planDir, 'S2', gapCommit);
+    await writeVerifiedClaimsFixture(planDir, 'S2');
+
+    const result = runDevPlanCli(['task-brief', planDir, 'S2']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), new RegExp(`S2: baseCommit must equal previous execution slice headCommit ${s1Range.headCommit}`));
+  });
+});
+
 test('CLI task-brief rejects blocked project rule review', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-task-brief-rule-review-blocked');
@@ -7716,7 +7746,11 @@ test('CLI whole-review-package rejects commit gaps between slices', async () => 
       .replace('- 下一步：执行 S1', '- 下一步：执行 S2')
       + withReviewPackageReadySlice(createConsumerSliceBlock(), planDir, 'S2');
     await fs.writeFile(planPath, plan, 'utf8');
-    await writeReadyTaskHandoff(planDir, 'S2');
+    await setSliceBaseCommit(planDir, 'S2', gapCommit);
+    await ensureVerifiedClaimsFixture(planDir, 'S2');
+    await writeTaskBriefSnapshotFixture(planDir, 'S2');
+    await writeTaskReportTemplateFixture(planDir, 'S2');
+    await markTaskReportReady(planDir, 'S2');
     await fs.writeFile('src/consumer.ts', 'export const consumer = true;\n', 'utf8');
     const s2Range = await sealCurrentWorkspaceFixture(planDir, 'S2');
     assert.equal(s2Range.baseCommit, gapCommit);
