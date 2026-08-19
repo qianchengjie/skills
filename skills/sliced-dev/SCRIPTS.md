@@ -101,7 +101,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs diff-check dev-plans/YYYY-MM-DD
 
 ## pre-commit-check / record-commit
 
-首轮 implementer 派发前，controller 先把当前规范化的 `HEAD` 写入切片 `baseCommit`。实现和硬门禁完成后，controller 只 stage `taskReport.changedFiles`，再运行：
+首个执行型切片首轮 implementer 派发前，controller 先提交执行前 plan checkpoint P，再把 P 写入该片 `baseCommit`；后续执行型切片把前一片 Review Range 的 `headCommit` 写入 `baseCommit`。实现和硬门禁完成后，controller 只 stage `taskReport.changedFiles`，再运行：
 
 ```bash
 node <sliced-dev-skill-dir>/scripts/dev-plan.mjs pre-commit-check dev-plans/YYYY-MM-DD-<slug> <S-id>
@@ -161,7 +161,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs claims-template dev-plans/YYYY-
 node <sliced-dev-skill-dir>/scripts/dev-plan.mjs task-brief dev-plans/YYYY-MM-DD-<slug> <S-id>
 ```
 
-作用：生成当前切片的 `dev-plans/YYYY-MM-DD-<slug>/task-briefs/<S-id>.md`，作为 implementer 的窄上下文入口和注意力收束视图。生成前先运行 `validate`；`项目规则审查：blocked` 时退出 1，不生成 task brief；通过后维护 `dev-plans/.gitignore`。
+作用：生成当前切片的 `dev-plans/YYYY-MM-DD-<slug>/task-briefs/<S-id>.md`，作为 implementer 的窄上下文入口和注意力收束视图。生成前先运行 `validate`；`项目规则审查：blocked` 时退出 1，不生成 task brief；通过后维护 `dev-plans/.gitignore`。首个执行型切片首次生成时还要求 `HEAD == baseCommit == P`，且 P 是普通单父、只改持久 plan 文件（可含 `dev-plans/.gitignore`）、包含 `plan.md` / `decisions.md` / `audits.md` / 当前 claims，工作区持久 plan 除写入 P 的 `baseCommit` 外与 P 一致；不满足时退出 1。该检查只判断 Git 结构与文件边界，不判断计划语义、证据强度或用户确认是否正确。
 
 task brief 只从 `plan.md`、`decisions.md`、`audits.md` 和 `claims/<S-id>.json` 抽取必要上下文：
 

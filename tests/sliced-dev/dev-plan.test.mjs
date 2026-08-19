@@ -82,6 +82,22 @@ test('项目规则闭包文档保持 selected 义务先消费契约', async () =
   assert.match(implementer, /只包含 selectedRuleIds 和 `规则获取`/);
 });
 
+test('执行前 plan checkpoint 文档保持 P 到 F 契约', async () => {
+  const [skill, executionRules, planFile, scriptsDoc, implementer] = await Promise.all(
+    ['SKILL.md', 'EXECUTION-RULES.md', 'PLAN-FILE.md', 'SCRIPTS.md', 'IMPLEMENTER-SUBAGENT.md']
+      .map((name) => fs.readFile(new URL(`../../skills/sliced-dev/${name}`, import.meta.url), 'utf8')),
+  );
+  const contract = [skill, executionRules, planFile, scriptsDoc, implementer].join('\n');
+
+  assert.match(skill, /`P → C1…Cn → F`/);
+  assert.match(executionRules, /保持该片 `baseCommit` 缺席，只提交持久 plan 真源为检查点 P/);
+  assert.match(scriptsDoc, /`HEAD == baseCommit == P`/);
+  assert.match(planFile, /后续执行型切片首轮派发前写入前一执行片 Review Range 的 `headCommit`/);
+  assert.match(implementer, /从 P 恢复时，临时 task brief \/ report \/ review package 直接重新生成/);
+  assert.match(contract, /`task-briefs\/\*\*`、`task-reports\/\*\*`、`review-packages\/\*\*` 是可重建临时产物/);
+  assert.doesNotMatch(contract, /默认唯一一次 plan 提交|默认收口落一次/);
+});
+
 test('拷问展示明确区分整体拆分与当前切片', async () => {
   const [skill, executionRules] = await Promise.all(
     ['SKILL.md', 'EXECUTION-RULES.md']
@@ -692,10 +708,34 @@ async function runWithIsolatedRuleCatalogProvider(args, providerSource) {
 async function writeTaskBriefFixture(planDir, sliceId = 'S1') {
   const rangePath = path.join(planDir, 'review-packages', `${sliceId}-range.json`);
   const hasRange = await fs.stat(rangePath).then(() => true, () => false);
-  if (!hasRange) await setSliceBaseCommit(planDir, sliceId, gitOid(['rev-parse', 'HEAD']));
   await ensureVerifiedClaimsFixture(planDir, sliceId);
+  if (!hasRange) {
+    if (sliceId === 'S1') await commitPlanCheckpointFixture(planDir, sliceId);
+    else await setSliceBaseCommit(planDir, sliceId, gitOid(['rev-parse', 'HEAD']));
+  }
   const result = runDevPlanCli(['task-brief', planDir, sliceId]);
   assert.equal(result.status, 0, result.stderr.toString());
+}
+
+async function writeTaskBriefSnapshotFixture(planDir, sliceId = 'S1') {
+  const claims = JSON.parse(await fs.readFile(path.join(planDir, 'claims', `${sliceId}.json`), 'utf8')).claims;
+  const rows = claims.map((claim) => (
+    `| ${claim.id} | ${claim.type} | ${claim.priority} | ${claim.status} | ${claim.text} | fixture |`
+  )).join('\n');
+  const target = path.join(planDir, 'task-briefs', `${sliceId}.md`);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(
+    target,
+    `# Task Brief：${sliceId}
+
+## Claims
+
+| Claim | Type | Priority | Status | Text | Evidence Summary |
+| --- | --- | --- | --- | --- | --- |
+${rows}
+`,
+    'utf8',
+  );
 }
 
 async function writeTaskReportTemplateFixture(planDir, sliceId = 'S1') {
@@ -761,6 +801,22 @@ async function setSliceBaseCommit(planDir, sliceId, commit) {
     ? match[1].replace(/(^|\n)- baseCommit：[^\n]*/m, `$1- baseCommit：${commit}`)
     : match[1].replace(/(^|\n)- Commit：[^\n]*/m, `$&\n- baseCommit：${commit}`);
   await fs.writeFile(planPath, plan.replace(match[1], updatedSlice), 'utf8');
+}
+
+async function commitPlanCheckpointFixture(planDir, sliceId = 'S1') {
+  const planPath = path.join(planDir, 'plan.md');
+  const plan = await fs.readFile(planPath, 'utf8');
+  const slicePattern = new RegExp(`(### ${sliceId}：[\\s\\S]*?)(?=\\n### S\\d|$)`);
+  const match = slicePattern.exec(plan);
+  assert.ok(match, `slice ${sliceId} missing`);
+  const sliceWithoutBase = match[1].replace(/(^|\n)- baseCommit：[^\n]*(?:\n|$)/m, '$1');
+  assert.notEqual(sliceWithoutBase, match[1], `slice ${sliceId} baseCommit missing`);
+  await fs.writeFile(planPath, plan.replace(match[1], sliceWithoutBase), 'utf8');
+  execFileSync('git', ['add', '--', planDir]);
+  execFileSync('git', ['commit', '-m', '提交执行前计划检查点']);
+  const checkpoint = gitOid(['rev-parse', 'HEAD']);
+  await setSliceBaseCommit(planDir, sliceId, checkpoint);
+  return checkpoint;
 }
 
 async function writeVerifiedClaimsFixture(planDir, sliceId = 'S1') {
@@ -1241,7 +1297,13 @@ async function writeCloseCheckHandoffFixtures(
   );
   await writeVerifiedClaimsFixture(planDir, sliceId);
   if (rulesReview) await setSliceBaseCommit(planDir, sliceId, rulesReview.baseCommit);
-  await writeReadyTaskHandoff(planDir, sliceId);
+  if (rulesReview) {
+    await writeTaskBriefSnapshotFixture(planDir, sliceId);
+    await writeTaskReportTemplateFixture(planDir, sliceId);
+    await markTaskReportReady(planDir, sliceId);
+  } else {
+    await writeReadyTaskHandoff(planDir, sliceId);
+  }
   if (!hasCodeChange) {
     const reportPath = path.join(planDir, 'task-reports', `${sliceId}.json`);
     const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
@@ -4305,6 +4367,7 @@ test('CLI task-brief writes narrow implementer brief', async () => {
     const planDir = path.join('dev-plans', '2026-06-10-task-brief');
     await writeValidExecutingPlan(planDir);
     await writeVerifiedClaimsFixture(planDir, 'S1');
+    await commitPlanCheckpointFixture(planDir, 'S1');
 
     const result = runDevPlanCli(['task-brief', 'dev-plans/2026-06-10-task-brief', 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());
@@ -4320,6 +4383,50 @@ test('CLI task-brief writes narrow implementer brief', async () => {
     assert.match(brief, /task-reports\/S1\.json/);
     assert.doesNotMatch(brief, /## 文件索引/);
     assert.doesNotMatch(brief, /## 切片\n/);
+  });
+});
+
+test('CLI task-brief requires a durable plan checkpoint before the first execution slice', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-brief-plan-checkpoint');
+    await writeValidExecutingPlan(planDir);
+    await writeVerifiedClaimsFixture(planDir, 'S1');
+
+    let result = runDevPlanCli(['task-brief', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /first execution slice baseCommit must be a durable plan checkpoint/);
+
+    await commitPlanCheckpointFixture(planDir, 'S1');
+
+    result = runDevPlanCli(['task-brief', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+
+    await fs.appendFile(path.join(planDir, 'decisions.md'), '\n未提交的计划改写。\n', 'utf8');
+    result = runDevPlanCli(['task-brief', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /durable plan files must match the plan checkpoint before dispatch/);
+  });
+});
+
+test('CLI task-brief rejects a first execution plan checkpoint mixed with business files', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-brief-mixed-plan-checkpoint');
+    await writeValidExecutingPlan(planDir);
+    await writeVerifiedClaimsFixture(planDir, 'S1');
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8')).replace(/\n- baseCommit：[0-9a-f]{40}/, ''),
+      'utf8',
+    );
+    await fs.writeFile('src/context.ts', 'export const context = false;\n', 'utf8');
+    execFileSync('git', ['add', '--', planDir, 'src/context.ts']);
+    execFileSync('git', ['commit', '-m', '混合计划与业务文件']);
+    await setSliceBaseCommit(planDir, 'S1', gitOid(['rev-parse', 'HEAD']));
+
+    const result = runDevPlanCli(['task-brief', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /plan checkpoint may only change durable plan files/);
   });
 });
 
@@ -4343,10 +4450,11 @@ test('CLI task brief requires slice claims and task report template stays claim-
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-task-handoff-missing-claims');
     await writeValidExecutingPlan(planDir);
+    await commitPlanCheckpointFixture(planDir, 'S1');
 
     const brief = runDevPlanCli(['task-brief', 'dev-plans/2026-06-10-task-handoff-missing-claims', 'S1']);
     assert.equal(brief.status, 1, brief.stderr.toString());
-    assert.match(brief.stderr.toString(), /task-brief: missing claims file/);
+    assert.match(brief.stderr.toString(), /missing dev-plans\/2026-06-10-task-handoff-missing-claims\/claims\/S1\.json/);
 
     const report = runDevPlanCli(['task-report-template', 'dev-plans/2026-06-10-task-handoff-missing-claims', 'S1']);
     assert.equal(report.status, 0, report.stderr.toString());
@@ -4465,7 +4573,7 @@ test('CLI task-brief binds project rule review report into repair input', async 
     await appendProjectRuleReviewAudit(planDir, rulesReview);
     await appendCurrentGeneralReviewFixture(planDir, { id: 'A3' });
     await writeVerifiedClaimsFixture(planDir, 'S1');
-    await setSliceBaseCommit(planDir, 'S1', gitOid(['rev-parse', 'HEAD']));
+    await commitPlanCheckpointFixture(planDir, 'S1');
 
     const success = runDevPlanCli(['task-brief', planDir, 'S1']);
     assert.equal(success.status, 0, success.stderr.toString());
@@ -4479,11 +4587,13 @@ test('CLI task-brief binds project rule review report into repair input', async 
       audits.replace(/\n- rulesReviewReport: [^\n]+/, ''),
       'utf8',
     );
+    await commitPlanCheckpointFixture(planDir, 'S1');
     const missing = runDevPlanCli(['task-brief', planDir, 'S1']);
     assert.equal(missing.status, 1, missing.stderr.toString());
     assert.match(missing.stderr.toString(), /rulesReviewReport must be \.rules-review-tmp/);
 
     await fs.writeFile(auditsPath, audits, 'utf8');
+    await commitPlanCheckpointFixture(planDir, 'S1');
     const responsePath = path.join('.rules-review-tmp', rulesReview.runId, 'response.md');
     const realResponsePath = `${responsePath}.real`;
     await fs.rename(responsePath, realResponsePath);
@@ -4739,6 +4849,7 @@ test('CLI review-package requires review-ready P0/P1 claims', async () => {
     await writeValidExecutingPlan(planDir);
     const claimsTemplate = runDevPlanCli(['claims-template', 'dev-plans/2026-06-10-review-package-claims-not-ready', 'S1']);
     assert.equal(claimsTemplate.status, 0, claimsTemplate.stderr.toString());
+    await commitPlanCheckpointFixture(planDir, 'S1');
     const brief = runDevPlanCli(['task-brief', 'dev-plans/2026-06-10-review-package-claims-not-ready', 'S1']);
     assert.equal(brief.status, 0, brief.stderr.toString());
     await writeTaskReportTemplateFixture('dev-plans/2026-06-10-review-package-claims-not-ready', 'S1');
@@ -6402,7 +6513,10 @@ test('sliced-dev repair verification closes a direct rules finding repair and fa
       'utf8',
     );
     await setSliceBaseCommit(planDir, 'S1', previous.baseCommit);
-    await writeReadyTaskHandoff(planDir, 'S1');
+    await writeVerifiedClaimsFixture(planDir, 'S1');
+    await writeTaskBriefSnapshotFixture(planDir, 'S1');
+    await writeTaskReportTemplateFixture(planDir, 'S1');
+    await markTaskReportReady(planDir, 'S1');
     execFileSync('git', ['checkout', '--detach', previous.targetCommit]);
     let result = runDevPlanCli(['record-commit', planDir, 'S1']);
     assert.equal(result.status, 0, result.stderr.toString());

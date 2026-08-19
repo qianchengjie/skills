@@ -10,7 +10,7 @@
 | 分叉确认 | 用户明确不拷问，或拷问后仍需单点确认 | 重复当前 `> 拷问对象：...`，再按 `SKILL.md`「拷问展示协议」的具体问题格式，一次只问一个分叉结论 | 只确认口径 |
 | 执行确认 | 切片无开放分叉，但命中高风险 | “确认执行切片 N 吗？” | 授权控制器在已说明的用户授权边界内派发 implementer subagent；task brief 是执行快照，不是逐文件授权书 |
 
-硬顺序：任务级分叉门禁 → 切片 → 计划一致性预检 → 拆分拷问门禁（按 `拷问` / `不拷问` 分支收口）→ 如用户要求则提前全量拷问 → 计划确认检查点（提前全量拷问完成时默认暂停；用户明确继续后才进入）→ 选择当前切片 → 切片前拷问门禁（仅候选需确认 / 跨模块片 / 用户要求；低风险候选自动片可跳过）→ 切片前分叉审查 → 上下文预检 → 风险判定 / 执行模式写回 → 生成 task-brief → 自动执行或执行预告 / 执行确认。若用户在任一拷问门禁选择 `拷问`，在该门禁内先完成拷问执行和拷问收口；若选择 `不拷问`，已有未决分叉时先按具体问题格式逐个确认，分叉清零后再进入下一阶段，没有未决分叉时直接进入下一阶段。拷问门禁只压实边界和分叉，不直接决定最终执行模式。
+硬顺序：任务级分叉门禁 → 切片 → 计划一致性预检 → 拆分拷问门禁（按 `拷问` / `不拷问` 分支收口）→ 如用户要求则提前全量拷问 → 计划确认检查点（提前全量拷问完成时默认暂停；用户明确继续后才进入）→ 选择当前切片 → 切片前拷问门禁（仅候选需确认 / 跨模块片 / 用户要求；低风险候选自动片可跳过）→ 切片前分叉审查 → 上下文预检 → 风险判定 / 执行模式写回 → 准备 claims → 首个执行型切片提交执行前 plan checkpoint P 并记录 `baseCommit` → 生成 task-brief → 自动执行或执行预告 / 执行确认。若用户在任一拷问门禁选择 `拷问`，在该门禁内先完成拷问执行和拷问收口；若选择 `不拷问`，已有未决分叉时先按具体问题格式逐个确认，分叉清零后再进入下一阶段，没有未决分叉时直接进入下一阶段。拷问门禁只压实边界和分叉，不直接决定最终执行模式。
 
 任一阶段发现决策分叉时，中断当前顺序，按「分叉处理协议」处理。分叉清零后，回到被中断的阶段重跑门禁。禁止把拷问选择、拷问收口、分叉确认和执行确认合并成一个问题。`是 / 确认 / 继续 / 好的` 等普通确认词在拷问选择阶段无效，只能重问固定口令；拷问收口阶段只有 `结束拷问` 会收口，`继续拷问` 或直接提问都保持拷问态。
 
@@ -69,8 +69,8 @@ REPORT_AND_NEXT
 
 - `PREFLIGHT_TASK`：只产出或更新 `#### 上下文预检`，不得修改业务代码。路径、变更范围和 catalog 在此阶段只能形成候选 execution-time 规则分类，不得固定 `selectedRuleIds` / `notApplicable`。
 - `READ_CONTEXT`：读取必读代码，并针对候选规则的触发条件做 focused search；读取后重新校准 execution-time `selectedRuleIds` / `notApplicable`，无法用代码证据明确排除的候选归入 selected。它们只供 controller / implementer 执行使用，不是最终 rules-review 范围。若上下文不足，写 `上下文预检：blocked` 并停止。
-- `PREPARE_CLAIMS`：创建或细化 `claims/<S-id>.json`；claims 是本片可验证执行声明，不写完整 Markdown 表格，不把 claims 状态双写进 `plan.md`。
-- `WRITE_TASK_BRIEF`：每轮派发前生成或刷新当前片 `task-briefs/<S-id>.md`，作为 implementer 的窄上下文入口；brief 的 `项目规则审查` 只投影 execution-time `selectedRuleIds` 与 `规则获取`，并渲染当前片 claims，以及已写回并关联的失败门禁、当前 General Review A* / open G* 或 `用户验收：issues（<原因>）` 修复依据；`项目规则审查：blocked` 时不得生成；需确认片必须先生成 brief，再发执行预告。
+- `PREPARE_CLAIMS`：创建或细化 `claims/<S-id>.json`；claims 是本片可验证执行声明，不写完整 Markdown 表格，不把 claims 状态双写进 `plan.md`。当前片为计划顺序中首个执行型切片时，离开本状态前还必须运行 `validate`，保持该片 `baseCommit` 缺席，只提交持久 plan 真源为检查点 P，再把 P 写入 `baseCommit`。
+- `WRITE_TASK_BRIEF`：每轮派发前生成或刷新当前片 `task-briefs/<S-id>.md`，作为 implementer 的窄上下文入口；首个执行型切片的首次生成会拒绝缺少、混入业务文件或 P 后持久 plan 漂移的执行前检查点；brief 的 `项目规则审查` 只投影 execution-time `selectedRuleIds` 与 `规则获取`，并渲染当前片 claims，以及已写回并关联的失败门禁、当前 General Review A* / open G* 或 `用户验收：issues（<原因>）` 修复依据；`项目规则审查：blocked` 时不得生成；需确认片必须先生成 brief，再发执行预告。
 - `CONFIRM_TASK`：仅需确认片使用；执行预告引用 task brief 路径和摘要，等待用户确认，不修改业务代码。用户确认后必须在同一连续流程内派发 implementer subagent；若确认后未派发即中断，续跑时重新预告并重新确认。
 - `IMPLEMENT_TASK`：控制器固定按 `task-brief` → `task-report-template` → subagent 的顺序派发；首轮使用 `spawn_agent(fork_turns: "none")`，安全返修优先 `followup_task` 原 implementer，fresh fallback 条件见 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md)。运行时共享工作区，派发期间控制器和其他写入型 agent 不得修改业务文件。完整档实现只能由 implementer subagent 执行，轻量档没有 task brief，不能使用 subagent。
 - `ACCEPT_IMPLEMENTER_REPORT`：控制器读取 subagent summary 和本轮重置后由 implementer 更新的 `task-reports/<S-id>.json`，确认 `conclusion: ready-for-review`、最小 handoff 字段已填写、实际改动未越过 `允许修改` / `禁止修改`、且 subagent 未报告 blocked / 新分叉 / 风险升级；默认 `blocked` 报告、旧轮次报告或不通过的结果不得进入硬门禁。
@@ -228,7 +228,7 @@ REPORT_AND_NEXT
 - 复用项目已有公共能力（import 调用）→ 不触发「需确认」。
 - 改项目公共库源码、删公共导出 / 跨模块入口 → 落到操作性质，仍「需确认」。
 - 规模小但高风险（如改一行 `requests` 契约）→ 不算轻量档，跳过繁重切片，但该片仍按「需确认」停下。
-- 切片完成后的代码 scoped commit、收口时的 `dev-plans` commit、用户中途要求的 `dev-plans` commit → 均为默认收口动作，不单独触发「需确认」；非切片收口、范围不清或用户未授权任务内的 commit 仍需先确认。
+- 首个执行型切片前的 plan checkpoint P、切片完成后的代码 scoped commit、收口时的 `dev-plans` commit F、用户中途要求的 `dev-plans` commit → 均为默认收口动作，不单独触发「需确认」；非切片收口、范围不清或用户未授权任务内的 commit 仍需先确认。
 
 风险与执行字段写回规则：
 
@@ -487,13 +487,13 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs whole-review-package dev-plans/
 
 ## 切片提交
 
-`sliced-dev` 区分两类提交：本片**代码**提交按切片走，`dev-plans` 记录提交独立于代码、默认收口落一次；两者永远不进同一个 commit。
+`sliced-dev` 区分两类提交：本片**代码**提交按切片走，`dev-plans` 记录提交独立于代码，默认在执行前落检查点 P、收口落最终状态 F；两者永远不进同一个 commit。
 
 ### 代码提交（每片）
 
 每个执行型切片在实现与硬门禁通过后，先由 controller 原地提交，再进入 General Review / rules-review：
 
-- 首轮 implementer 派发前把当时 `HEAD` 的规范 commit ID 写入切片 `baseCommit`；该值之后不可改写。返修轮的期望起点来自上一 Review Range 的 `headCommit`。
+- 首个执行型切片以执行前 plan checkpoint P 为 `baseCommit`；后续执行型切片的 `baseCommit` 等于前一执行片 Review Range 的 `headCommit`。各片该值一经首次派发不可改写；返修轮的期望起点来自本片上一 Review Range 的 `headCommit`。
 - 提交前运行 `validate` 和 `diff-check`。controller 只 stage `taskReport.changedFiles`，不 stage `dev-plans/<date-slug>`；已记录基线脏文件保持原状态。
 - 运行 `pre-commit-check`。首轮要求 `HEAD == baseCommit`，返修轮要求 `HEAD == previousHeadCommit`。排除当前 plan 产物和已记录基线脏文件后，全部 task-owned staged / unstaged / untracked 路径、task report 文件集合和 staged 集合必须精确相等；任何未暂存残余、额外 staged、untracked 漏报、rename 逃逸、allowlist / forbidden path 违规或基线重叠都停止。
 - 有代码变化时创建普通单父 commit；commit title 使用简体中文并遵循仓库既有风格。随后运行：
@@ -508,15 +508,17 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs whole-review-package dev-plans/
 - Review Range v2 记录成功后才生成 review package。`项目规则审查：required` 时使用 `--target-commit <headCommit>` 自动精确绑定，不做后置绑定。
 - 每轮提交后复核 `git status --short -uall`，确认未提交内容仅为当前 `dev-plans` 产物、已记录基线脏改动或下一片待处理内容。
 
-### dev-plans 提交（收口 / 按需）
+### dev-plans 提交（执行前 / 收口 / 按需）
 
 `dev-plans/<date-slug>` 是审计交付物，但走自己的 commit，不随代码片提交：
 
-- 执行期默认 local：只更新工作区，不 stage、不提交。**不要**把 `dev-plans/` 写进 `.gitignore`，否则收口提交不进去；「local」靠不 stage 实现，不靠 gitignore。
-- 默认在收口时独立 commit 一次，落地全部 durable 状态（切片边界、决策、验证证据、各执行型切片 `Commit` 状态）。
-- agent 不主动中途提交 `dev-plans`；仅在收口、或用户中途明确要求时，独立 scoped commit 当前 `dev-plans/<date-slug>`，沿用同样的独立边界。
-- 失效面：执行期 `dev-plans` 未提交时若切换机器 / agent 接手，git 内没有中途审计态；需要跨机器中途交接时，先按上一条要求提交。
-- 提交前先运行 `validate` 和 `close-check` 确保计划、分叉、审计与整任务审查自洽；只 stage `dev-plans/<date-slug>`，commit title 用简体中文、`chore:` 前缀，标明提交的是本任务 `dev-plans` 记录。
+- 首个执行型切片首次生成 task brief 前，保持该片 `baseCommit` 缺席，先运行 `validate`；只 stage `plan.md`、`decisions.md`、`audits.md`、`claims/*.json` 与按需更新的 `dev-plans/.gitignore`，创建普通单父 plan checkpoint P。不运行只适用于已完成任务的 `close-check`。
+- 提交 P 后，把 P 的规范 commit ID 写入首个执行型切片 `baseCommit`，再运行 `task-brief`。该命令会确定性检查 P 的单父结构、文件边界、所需真源以及 P 后持久 plan 无漂移；只允许本次 `baseCommit` 自绑定差异。执行前计划实质变化时，重新提交 P 并更新 `baseCommit`。
+- P 后的执行期 plan 更新默认 local：只更新工作区，不 stage、不提交，切片间不插入 plan commit。**不要**把持久 plan 真源写进 `.gitignore`；「local」靠不 stage 实现。
+- `task-briefs/**`、`task-reports/**`、`review-packages/**` 是可重建临时产物，继续由 `dev-plans/.gitignore` 忽略，不进入 P 或 F；恢复到 P 后按持久真源重新生成。P 恢复的是已提交 Git tree 和持久 plan；已记录的基线脏文件不在 Git 恢复保证内。
+- 默认在收口时独立提交 F，落地 P 后的全部 durable 状态（切片边界、决策、验证证据、各执行型切片 `Commit` 状态）。
+- 除 P 和 F 外，agent 不主动中途提交 `dev-plans`；仅在用户中途明确要求时，独立 scoped commit 当前 `dev-plans/<date-slug>`。
+- P 提交前运行 `validate`；F 提交前运行 `validate` 和 `close-check`。两者都只 stage 上述持久文件，commit title 用简体中文、`chore:` 前缀，标明提交的是本任务 `dev-plans` 检查点或最终记录。
 
 ### 提交标题
 

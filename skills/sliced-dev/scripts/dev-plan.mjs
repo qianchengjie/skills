@@ -2103,6 +2103,54 @@ function commitParents(root, commit) {
   return objectIds.slice(1);
 }
 
+function assertFirstExecutionPlanCheckpoint(root, planDir, sliceId, slices, plan, baseCommit) {
+  const firstExecutionSliceId = [...slices].find(([, block]) => {
+    const status = getField(getSliceHeaderBlock(block.body), '状态');
+    return status !== 'split' && status !== 'skipped';
+  })?.[0];
+  if (sliceId !== firstExecutionSliceId) return;
+
+  const parents = commitParents(root, baseCommit);
+  if (parents.length !== 1) {
+    throw gateError('task-brief: first execution slice baseCommit must be a durable plan checkpoint: checkpoint must be a normal single-parent commit');
+  }
+
+  const changedFiles = listTreeChangedFiles(root, parents[0], baseCommit);
+  if (!changedFiles.some((file) => isPathInsidePlanDir(file, planDir))) {
+    throw gateError('task-brief: first execution slice baseCommit must be a durable plan checkpoint: checkpoint must change a durable plan file');
+  }
+  const outsideFiles = changedFiles.filter((file) => !isPathInsidePlanDir(file, planDir) && !isDevPlansGitignore(file));
+  if (outsideFiles.length > 0) {
+    throw gateError(`task-brief: plan checkpoint may only change durable plan files: ${outsideFiles.join(', ')}`);
+  }
+
+  const normalizedPlanDir = normalizeRepoPath(planDir).replace(/\/$/, '');
+  const planPath = `${normalizedPlanDir}/plan.md`;
+  const requiredFiles = [
+    planPath,
+    `${normalizedPlanDir}/decisions.md`,
+    `${normalizedPlanDir}/audits.md`,
+    `${normalizedPlanDir}/claims/${sliceId}.json`,
+  ];
+  for (const file of requiredFiles) {
+    if (readRegularTreeBlob(root, baseCommit, file).state === 'deleted') {
+      throw gateError(`task-brief: first execution slice baseCommit must be a durable plan checkpoint: missing ${file}`);
+    }
+  }
+
+  const slice = slices.get(sliceId);
+  const header = getSliceHeaderBlock(slice.body);
+  const headerWithoutBase = header.replace(/(^|\n)-\s*baseCommit[：:]\s*[^\n]*(?:\n|$)/i, '$1');
+  const planWithoutBase = plan.replace(slice.body, slice.body.replace(header, headerWithoutBase));
+  const checkpointPlan = readRegularTreeBlob(root, baseCommit, planPath).content.toString('utf8');
+  const driftedFiles = getChangedFiles()
+    .map(({ file }) => file)
+    .filter((file) => isPathInsidePlanDir(file, planDir) && file !== planPath);
+  if (checkpointPlan !== planWithoutBase || driftedFiles.length > 0) {
+    throw gateError(`task-brief: durable plan files must match the plan checkpoint before dispatch: ${driftedFiles.join(', ') || planPath}`);
+  }
+}
+
 function validateRecordedCommitRange(root, range) {
   const baseCommit = resolveGitCommit(root, range.baseCommit, 'review range baseCommit');
   const previousHeadCommit = resolveGitCommit(root, range.previousHeadCommit, 'review range previousHeadCommit');
@@ -3150,6 +3198,9 @@ async function buildTaskBrief(planDir, sliceId) {
   const actualHead = resolveGitCommit(root, 'HEAD', 'HEAD');
   if (actualHead !== expectedHead) {
     throw gateError(`task-brief: HEAD must equal recorded dispatch baseline ${expectedHead}, got ${actualHead}`);
+  }
+  if (!existingRange.range) {
+    assertFirstExecutionPlanCheckpoint(root, planDir, sliceId, slices, plan, baseCommit);
   }
 
   const decisions = getBlocks(decisionsMarkdown, DECISION_ID_RE);
