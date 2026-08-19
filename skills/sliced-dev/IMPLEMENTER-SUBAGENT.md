@@ -21,7 +21,7 @@
 每轮派发顺序固定为：
 
 1. 把本轮实现依据写回真源。首轮使用当前切片、Claims 和门禁记录；返修把失败硬门禁写入 `#### 门禁记录`，把用户拒收反馈写成 `用户验收：issues（<原因>）`，或把当前 General Review A*（含完整 `openFindings`）/ 项目规则审查 A*（含 `rulesReviewReport`）写回 `audits.md` 并关联当前切片。task brief 必须包含本轮适用的返修依据。需要调整执行边界时，先按授权边界规则完成预检和写回。
-2. 首个执行型切片首轮先确认执行前 plan checkpoint P 已提交并写入 `baseCommit`；运行 `task-brief`，重新生成 `task-briefs/<S-id>.md`。从 P 恢复时，临时 task brief / report / review package 直接重新生成，不作为恢复前提。
+2. 首个执行型切片首轮先确认执行前 plan checkpoint P 已提交并写入 `baseCommit`；运行 `task-brief`，重新生成 `task-briefs/<S-id>.md`。从 P 恢复时，先确认 `HEAD == P` 并把 P 的规范 commit ID 写入首个执行型切片 `baseCommit`，再重新生成临时 task brief / report / review package；这些临时产物不作为恢复前提。
 3. 运行 `task-report-template`，覆盖 `task-reports/<S-id>.json` 为默认 `blocked`、空 `changedFiles`、空 `validation` 的本轮报告。
 4. 首轮确认 `HEAD == baseCommit`；返修轮确认 `HEAD == previousHeadCommit`。不创建 worktree、临时 tree 或恢复 anchor。
 5. 派发 subagent。旧的 `ready-for-review` 报告不得沿用；implementer 未更新的默认 `blocked` 报告不得通过接收门禁。

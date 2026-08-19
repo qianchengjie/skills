@@ -515,7 +515,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs whole-review-package dev-plans/
 - 首个执行型切片首次生成 task brief 前，保持该片 `baseCommit` 缺席，先运行 `validate`；只 stage `plan.md`、`decisions.md`、`audits.md`、`claims/*.json` 与按需更新的 `dev-plans/.gitignore`，创建普通单父 plan checkpoint P。不运行只适用于已完成任务的 `close-check`。
 - 提交 P 后，把 P 的规范 commit ID 写入首个执行型切片 `baseCommit`，再运行 `task-brief`。该命令会确定性检查 P 的单父结构、文件边界、所需真源以及 P 后持久 plan 无漂移；只允许本次 `baseCommit` 自绑定差异。执行前计划实质变化时，重新提交 P 并更新 `baseCommit`。
 - P 后的执行期 plan 更新默认 local：只更新工作区，不 stage、不提交，切片间不插入 plan commit。**不要**把持久 plan 真源写进 `.gitignore`；「local」靠不 stage 实现。
-- `task-briefs/**`、`task-reports/**`、`review-packages/**` 是可重建临时产物，继续由 `dev-plans/.gitignore` 忽略，不进入 P 或 F；恢复到 P 后按持久真源重新生成。P 恢复的是已提交 Git tree 和持久 plan；已记录的基线脏文件不在 Git 恢复保证内。
+- `task-briefs/**`、`task-reports/**`、`review-packages/**` 是可重建临时产物，继续由 `dev-plans/.gitignore` 忽略，不进入 P 或 F；恢复到 P 后，先确认 `HEAD == P` 并把 P 的规范 commit ID 写入首个执行型切片 `baseCommit`，再按持久真源重新生成。P 恢复的是已提交 Git tree 和持久 plan；已记录的基线脏文件不在 Git 恢复保证内。
 - 默认在收口时独立提交 F，落地 P 后的全部 durable 状态（切片边界、决策、验证证据、各执行型切片 `Commit` 状态）。
 - 除 P 和 F 外，agent 不主动中途提交 `dev-plans`；仅在用户中途明确要求时，独立 scoped commit 当前 `dev-plans/<date-slug>`。
 - P 提交前运行 `validate`；F 提交前运行 `validate` 和 `close-check`。两者都只 stage 上述持久文件，commit title 用简体中文、`chore:` 前缀，标明提交的是本任务 `dev-plans` 检查点或最终记录。

@@ -558,7 +558,7 @@ repair verification A* 的 `validation` 必须展示 `rule-repair-check <planDir
 
 不要把用户口令或过程说明（如 `已拷问写回`）写进 `拆分拷问` 或切片 `门禁` 字段。
 
-`Commit` 只用于执行型切片，表示本片**代码**的提交状态，不表示 `dev-plans` 自身是否已提交，也不写最终 commit hash：未提交写 `待提交`，本片代码提交边界已收口写 `已提交`；`split` / `skipped` 不进入执行，必须省略该字段。`dev-plans` 记录走自己的独立 commit：默认首个执行型切片前提交执行就绪检查点 P，收口时提交最终审计状态 F，不由切片 `Commit` 字段表达。首次派发前的固定起点写在切片 `baseCommit`，每轮最终 commit hash 的持久机器真源是 Review Range v2 的 `headCommit`；`项目规则审查：required` 时 rules-review dispatch 的 `reviewRange.boundCommit` 必须等于该值。P 后的持久 plan 状态在 F 前保持未提交，`task-briefs/**`、`task-reports/**`、`review-packages/**` 不进入 P / F，恢复时重新生成。执行型切片无代码变更时不要创建空 commit，完成后仍写 `Commit：已提交`，并在 `验证备注` / 完成报告说明无可提交变更。
+`Commit` 只用于执行型切片，表示本片**代码**的提交状态，不表示 `dev-plans` 自身是否已提交，也不写最终 commit hash：未提交写 `待提交`，本片代码提交边界已收口写 `已提交`；`split` / `skipped` 不进入执行，必须省略该字段。`dev-plans` 记录走自己的独立 commit：默认首个执行型切片前提交执行就绪检查点 P，收口时提交最终审计状态 F，不由切片 `Commit` 字段表达。首次派发前的固定起点写在切片 `baseCommit`，每轮最终 commit hash 的持久机器真源是 Review Range v2 的 `headCommit`；`项目规则审查：required` 时 rules-review dispatch 的 `reviewRange.boundCommit` 必须等于该值。P 后的持久 plan 状态在 F 前保持未提交，`task-briefs/**`、`task-reports/**`、`review-packages/**` 不进入 P / F；从 P 恢复时，先确认 `HEAD == P` 并把 P 的规范 commit ID 写入首个执行型切片 `baseCommit`，再重新生成这些临时产物。执行型切片无代码变更时不要创建空 commit，完成后仍写 `Commit：已提交`，并在 `验证备注` / 完成报告说明无可提交变更。
 
 ## 维护规则
 

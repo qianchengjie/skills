@@ -93,7 +93,7 @@ test('执行前 plan checkpoint 文档保持 P 到 F 契约', async () => {
   assert.match(executionRules, /保持该片 `baseCommit` 缺席，只提交持久 plan 真源为检查点 P/);
   assert.match(scriptsDoc, /`HEAD == baseCommit == P`/);
   assert.match(planFile, /后续执行型切片首轮派发前写入前一执行片 Review Range 的 `headCommit`/);
-  assert.match(implementer, /从 P 恢复时，临时 task brief \/ report \/ review package 直接重新生成/);
+  assert.match(implementer, /从 P 恢复时，先确认 `HEAD == P` 并把 P 的规范 commit ID 写入首个执行型切片 `baseCommit`，再重新生成临时 task brief \/ report \/ review package/);
   assert.match(contract, /`task-briefs\/\*\*`、`task-reports\/\*\*`、`review-packages\/\*\*` 是可重建临时产物/);
   assert.doesNotMatch(contract, /默认唯一一次 plan 提交|默认收口落一次/);
 });
