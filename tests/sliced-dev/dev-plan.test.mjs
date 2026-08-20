@@ -82,20 +82,23 @@ test('项目规则闭包文档保持 selected 义务先消费契约', async () =
   assert.match(implementer, /只包含 selectedRuleIds 和 `规则获取`/);
 });
 
-test('执行前 plan checkpoint 文档保持 P 到 F 契约', async () => {
+test('逐切片 plan checkpoint 文档保持 P C K F 契约', async () => {
   const [skill, executionRules, planFile, scriptsDoc, implementer] = await Promise.all(
     ['SKILL.md', 'EXECUTION-RULES.md', 'PLAN-FILE.md', 'SCRIPTS.md', 'IMPLEMENTER-SUBAGENT.md']
       .map((name) => fs.readFile(new URL(`../../skills/sliced-dev/${name}`, import.meta.url), 'utf8')),
   );
   const contract = [skill, executionRules, planFile, scriptsDoc, implementer].join('\n');
 
-  assert.match(skill, /`P → C1…Cn → F`/);
+  assert.match(skill, /`P → C1 → K1 → C2 → K2/);
   assert.match(executionRules, /保持该片 `baseCommit` 缺席，只提交持久 plan 真源为检查点 P/);
-  assert.match(scriptsDoc, /`HEAD == baseCommit == P`/);
-  assert.match(planFile, /后续执行型切片首轮派发前写入前一执行片 Review Range 的 `headCommit`/);
+  assert.match(executionRules, /`slice-close-check`/);
+  assert.match(executionRules, /`plan-commit-check`/);
+  assert.match(scriptsDoc, /后续片首次派发前要求 `HEAD == baseCommit == K/);
+  assert.match(planFile, /后续执行型切片首轮派发前写入前一执行片 `headCommit` 的直接、普通单父、plan-only 子提交/);
   assert.match(implementer, /从 P 恢复时，先确认 `HEAD == P` 并把 P 的规范 commit ID 写入首个执行型切片 `baseCommit`，再重新生成临时 task brief \/ report \/ review package/);
   assert.match(contract, /`task-briefs\/\*\*`、`task-reports\/\*\*`、`review-packages\/\*\*` 是可重建临时产物/);
-  assert.doesNotMatch(contract, /默认唯一一次 plan 提交|默认收口落一次/);
+  assert.match(contract, /当前仓库适用的 commit message 规范/);
+  assert.doesNotMatch(contract, /commit title 用简体中文、`chore:` 前缀|commit type 先按本片实际变更性质判定/);
 });
 
 test('拷问展示明确区分整体拆分与当前切片', async () => {
@@ -389,6 +392,18 @@ function createClosedConsumerSliceBlock() {
     .replace('- 验证：pending', '- 验证：passed（标准流程）')
     .replace('- 需理解：待执行前补充。', '- 需理解：S1 产出的切片交接。')
     .replace('- 必读上下文：待执行前补充。', '- 必读上下文：S1 切片交接与消费代码。');
+}
+
+function createSkippedConsumerSliceBlock() {
+  return createConsumerSliceBlock()
+    .replace('- 状态：not-started', '- 状态：skipped\n- 跳过依据：D2')
+    .replace('- Commit：待提交\n', '')
+    .replace('- 验证：pending', '- 验证：skipped（按 D2 不再执行）\n\n#### 验证备注\n\n- 本片按跳过依据关闭。')
+    .replace('#### 关联项\n\n暂无。', `#### 关联项
+
+| ID | 状态 |
+| --- | --- |
+| D2 | decided |`);
 }
 
 function replaceMarkdownSection(markdown, title, body) {
@@ -817,6 +832,49 @@ async function commitPlanCheckpointFixture(planDir, sliceId = 'S1') {
   const checkpoint = gitOid(['rev-parse', 'HEAD']);
   await setSliceBaseCommit(planDir, sliceId, checkpoint);
   return checkpoint;
+}
+
+async function stageDurablePlanFixture(planDir) {
+  const paths = [planDir];
+  if (await fs.stat(path.join('dev-plans', '.gitignore')).then(() => true, () => false)) {
+    paths.push(path.join('dev-plans', '.gitignore'));
+  }
+  execFileSync('git', ['add', '-A', '--', ...paths]);
+}
+
+async function commitPlanOnlyCheckpointFixture(planDir, sliceId) {
+  const planPath = path.join(planDir, 'plan.md');
+  const plan = await fs.readFile(planPath, 'utf8');
+  const slicePattern = new RegExp(`(### ${sliceId}：[\\s\\S]*?)(?=\\n### S\\d|$)`);
+  const match = slicePattern.exec(plan);
+  assert.ok(match, `slice ${sliceId} missing`);
+  const sliceWithoutBase = match[1].replace(/(^|\n)- baseCommit：[^\n]*(?:\n|$)/m, '$1');
+  await fs.writeFile(planPath, plan.replace(match[1], sliceWithoutBase), 'utf8');
+  await stageDurablePlanFixture(planDir);
+  execFileSync('git', ['commit', '-m', `${sliceId} plan checkpoint`]);
+  const checkpoint = gitOid(['rev-parse', 'HEAD']);
+  await setSliceBaseCommit(planDir, sliceId, checkpoint);
+  return checkpoint;
+}
+
+async function appendSecondSliceFixture(planDir, block = createConsumerSliceBlock()) {
+  const planPath = path.join(planDir, 'plan.md');
+  const plan = (await fs.readFile(planPath, 'utf8'))
+    .replace('> 状态：done', '> 状态：executing')
+    .replace('- 阶段：done', '- 阶段：executing')
+    .replace('- 当前切片：无', '- 当前切片：S2')
+    .replace('- 下一步：执行 S1', '- 下一步：执行 S2')
+    + block;
+  await fs.writeFile(planPath, plan, 'utf8');
+}
+
+async function makeSecondSliceReadyFixture(planDir, baseCommit) {
+  const planPath = path.join(planDir, 'plan.md');
+  const plan = await fs.readFile(planPath, 'utf8');
+  const block = withReviewPackageReadySlice(createConsumerSliceBlock(), planDir, 'S2')
+    .replace('- Commit：待提交', `- Commit：待提交\n- baseCommit：${baseCommit}`);
+  await fs.writeFile(planPath, plan.replace(/\n### S2：[\s\S]*$/, block), 'utf8');
+  await writeVerifiedClaimsFixture(planDir, 'S2');
 }
 
 async function writeVerifiedClaimsFixture(planDir, sliceId = 'S1') {
@@ -4408,6 +4466,110 @@ test('CLI task-brief requires a durable plan checkpoint before the first executi
   });
 });
 
+test('CLI plan-commit-check accepts a fully staged durable plan checkpoint', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-plan-commit-check');
+    await writeValidExecutingPlan(planDir);
+    await writeVerifiedClaimsFixture(planDir, 'S1');
+    await stageDurablePlanFixture(planDir);
+
+    const result = runDevPlanCli(['plan-commit-check', planDir]);
+    assert.equal(result.status, 0, result.stderr.toString());
+    assert.match(result.stdout.toString(), /staged durable plan files are ready to commit/);
+  });
+});
+
+test('CLI plan-commit-check rejects an empty staged set', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-plan-commit-empty');
+    await writeValidExecutingPlan(planDir);
+    await stageDurablePlanFixture(planDir);
+    execFileSync('git', ['commit', '-m', 'committed plan fixture']);
+
+    const result = runDevPlanCli(['plan-commit-check', planDir]);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /staged durable plan files must not be empty/);
+  });
+});
+
+test('CLI plan-commit-check rejects pre-staged business files', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-plan-commit-business');
+    await writeValidExecutingPlan(planDir);
+    await stageDurablePlanFixture(planDir);
+    await fs.writeFile('src/context.ts', 'export const context = false;\n', 'utf8');
+    execFileSync('git', ['add', 'src/context.ts']);
+
+    const result = runDevPlanCli(['plan-commit-check', planDir]);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /staged path outside current plan durable allowlist: src\/context\.ts/);
+  });
+});
+
+test('CLI plan-commit-check rejects staged temporary review artifacts', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-plan-commit-review-artifact');
+    await writeValidExecutingPlan(planDir);
+    await stageDurablePlanFixture(planDir);
+    const artifact = path.join(planDir, 'review-packages', 'S1.md');
+    await fs.mkdir(path.dirname(artifact), { recursive: true });
+    await fs.writeFile(artifact, '# temporary review package\n', 'utf8');
+    execFileSync('git', ['add', artifact]);
+
+    const result = runDevPlanCli(['plan-commit-check', planDir]);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /staged path outside current plan durable allowlist: .*review-packages\/S1\.md/);
+  });
+});
+
+test('CLI plan-commit-check rejects unstaged durable plan residual', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-plan-commit-residual');
+    await writeValidExecutingPlan(planDir);
+    await stageDurablePlanFixture(planDir);
+    await fs.appendFile(path.join(planDir, 'audits.md'), '\n提交后才出现的审计残余。\n', 'utf8');
+
+    const result = runDevPlanCli(['plan-commit-check', planDir]);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /durable plan paths have unstaged residual: .*audits\.md/);
+  });
+});
+
+test('CLI slice-close-check closes S1 while S2 remains unfinished', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-slice-close-check');
+    await writeValidExecutingPlan(planDir);
+    await writeCloseCheckHandoffFixtures(planDir);
+    await appendSecondSliceFixture(planDir);
+
+    const slice = runDevPlanCli(['slice-close-check', planDir, 'S1']);
+    assert.equal(slice.status, 0, slice.stderr.toString());
+    assert.match(slice.stdout.toString(), /slice S1 is ready to close/);
+
+    const full = runDevPlanCli(['close-check', planDir]);
+    assert.equal(full.status, 1, full.stderr.toString());
+    assert.match(full.stderr.toString(), /S2: not-started slice is not closed/);
+  });
+});
+
+test('CLI slice-close-check rejects a target slice with unfinished claims', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-slice-close-claims');
+    await writeValidExecutingPlan(planDir);
+    await writeCloseCheckHandoffFixtures(planDir);
+    await appendSecondSliceFixture(planDir);
+    const claimsPath = path.join(planDir, 'claims', 'S1.json');
+    const claims = JSON.parse(await fs.readFile(claimsPath, 'utf8'));
+    claims.claims[0].status = 'proposed';
+    claims.claims[0].evidence = [];
+    await fs.writeFile(claimsPath, `${JSON.stringify(claims, null, 2)}\n`, 'utf8');
+
+    const result = runDevPlanCli(['slice-close-check', planDir, 'S1']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /claims\/S1\.json:C1 final status must be verified or waived/);
+  });
+});
+
 test('CLI task-brief rejects a first execution plan checkpoint mixed with business files', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-task-brief-mixed-plan-checkpoint');
@@ -4430,33 +4592,81 @@ test('CLI task-brief rejects a first execution plan checkpoint mixed with busine
   });
 });
 
-test('CLI task-brief rejects a later execution slice whose baseCommit skips the previous slice headCommit', async () => {
+test('CLI task-brief accepts a later execution slice based on a direct plan-only checkpoint', async () => {
   await withTempRepo(async () => {
-    const planDir = path.join('dev-plans', '2026-06-10-task-brief-cross-slice-gap');
+    const planDir = path.join('dev-plans', '2026-06-10-task-brief-cross-slice-checkpoint');
     await writeValidExecutingPlan(planDir);
     await writeCloseCheckHandoffFixtures(planDir);
     const s1Range = JSON.parse(await fs.readFile(path.join(planDir, 'review-packages', 'S1-range.json'), 'utf8'));
+    await appendSecondSliceFixture(planDir);
+    const checkpoint = await commitPlanOnlyCheckpointFixture(planDir, 'S2');
+    assert.deepEqual(gitOid(['rev-list', '--parents', '-n', '1', checkpoint]).split(' '), [checkpoint, s1Range.headCommit]);
+    const checkpointPlan = gitOid(['show', `${checkpoint}:${planDir}/plan.md`]);
+    const checkpointS2 = /### S2：[\s\S]*$/.exec(checkpointPlan)?.[0] ?? '';
+    assert.doesNotMatch(checkpointS2, /- baseCommit：/);
+    await makeSecondSliceReadyFixture(planDir, checkpoint);
 
-    await fs.writeFile('src/context.ts', 'export const context = false;\n', 'utf8');
-    execFileSync('git', ['add', 'src/context.ts']);
-    execFileSync('git', ['commit', '-m', 'between slices']);
-    const gapCommit = gitOid(['rev-parse', 'HEAD']);
-    assert.notEqual(gapCommit, s1Range.headCommit);
+    const result = runDevPlanCli(['task-brief', planDir, 'S2']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    assert.match(result.stdout.toString(), /task-briefs\/S2\.md/);
+  });
+});
 
-    const planPath = path.join(planDir, 'plan.md');
-    const plan = (await fs.readFile(planPath, 'utf8'))
-      .replace('> 状态：done', '> 状态：executing')
-      .replace('- 阶段：done', '- 阶段：executing')
-      .replace('- 当前切片：无', '- 当前切片：S2')
-      .replace('- 下一步：执行 S1', '- 下一步：执行 S2')
-      + withReviewPackageReadySlice(createConsumerSliceBlock(), planDir, 'S2');
-    await fs.writeFile(planPath, plan, 'utf8');
-    await setSliceBaseCommit(planDir, 'S2', gapCommit);
-    await writeVerifiedClaimsFixture(planDir, 'S2');
+test('CLI task-brief rejects a later execution slice without its plan-only checkpoint', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-brief-missing-cross-slice-checkpoint');
+    await writeValidExecutingPlan(planDir);
+    await writeCloseCheckHandoffFixtures(planDir);
+    const s1Range = JSON.parse(await fs.readFile(path.join(planDir, 'review-packages', 'S1-range.json'), 'utf8'));
+    await appendSecondSliceFixture(planDir);
+    await makeSecondSliceReadyFixture(planDir, s1Range.headCommit);
 
     const result = runDevPlanCli(['task-brief', planDir, 'S2']);
     assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), new RegExp(`S2: baseCommit must equal previous execution slice headCommit ${s1Range.headCommit}`));
+    assert.match(result.stderr.toString(), /baseCommit must be a direct plan-only checkpoint child of previous execution slice headCommit/);
+  });
+});
+
+test('CLI task-brief rejects a cross-slice checkpoint mixed with business files', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-brief-mixed-cross-slice-checkpoint');
+    await writeValidExecutingPlan(planDir);
+    await writeCloseCheckHandoffFixtures(planDir);
+    await appendSecondSliceFixture(planDir);
+    await fs.writeFile('src/context.ts', 'export const context = false;\n', 'utf8');
+    await stageDurablePlanFixture(planDir);
+    execFileSync('git', ['add', 'src/context.ts']);
+    execFileSync('git', ['commit', '-m', 'mixed cross-slice checkpoint']);
+    const checkpoint = gitOid(['rev-parse', 'HEAD']);
+    await makeSecondSliceReadyFixture(planDir, checkpoint);
+
+    const result = runDevPlanCli(['task-brief', planDir, 'S2']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /plan checkpoint may only change durable plan files: src\/context\.ts/);
+  });
+});
+
+test('CLI task-brief rejects a merge commit as a cross-slice checkpoint', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-task-brief-merge-cross-slice-checkpoint');
+    await writeValidExecutingPlan(planDir);
+    await writeCloseCheckHandoffFixtures(planDir);
+    const s1Range = JSON.parse(await fs.readFile(path.join(planDir, 'review-packages', 'S1-range.json'), 'utf8'));
+    await appendSecondSliceFixture(planDir);
+    await stageDurablePlanFixture(planDir);
+    const tree = gitOid(['write-tree']);
+    const checkpoint = gitOid([
+      'commit-tree', tree,
+      '-p', s1Range.headCommit,
+      '-p', s1Range.baseCommit,
+      '-m', 'merge cross-slice checkpoint',
+    ]);
+    execFileSync('git', ['update-ref', 'HEAD', checkpoint]);
+    await makeSecondSliceReadyFixture(planDir, checkpoint);
+
+    const result = runDevPlanCli(['task-brief', planDir, 'S2']);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /checkpoint must be a normal single-parent commit/);
   });
 });
 
@@ -7604,6 +7814,118 @@ test('CLI close-check rejects unfinished plans and accepts closed plans with pas
   });
 });
 
+test('CLI allows the last slice checkpoint to serve as F only after full close-check passes', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-last-checkpoint-is-final');
+    await writeValidExecutingPlan(planDir);
+    await writeCloseCheckHandoffFixtures(planDir);
+    const range = JSON.parse(await fs.readFile(path.join(planDir, 'review-packages', 'S1-range.json'), 'utf8'));
+
+    const sliceClose = runDevPlanCli(['slice-close-check', planDir, 'S1']);
+    assert.equal(sliceClose.status, 0, sliceClose.stderr.toString());
+    const fullClose = runDevPlanCli(['close-check', planDir]);
+    assert.equal(fullClose.status, 0, fullClose.stderr.toString());
+    await stageDurablePlanFixture(planDir);
+    const planCommit = runDevPlanCli(['plan-commit-check', planDir]);
+    assert.equal(planCommit.status, 0, planCommit.stderr.toString());
+    execFileSync('git', ['commit', '-m', 'last checkpoint and final audit']);
+    const finalCommit = gitOid(['rev-parse', 'HEAD']);
+
+    assert.deepEqual(gitOid(['rev-list', '--parents', '-n', '1', finalCommit]).split(' '), [finalCommit, range.headCommit]);
+    assert.equal(gitOid(['status', '--short']), '');
+  });
+});
+
+test('CLI requires F after Kn when whole-review adds final durable state', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-last-checkpoint-before-whole-review');
+    await writeValidExecutingPlan(planDir);
+    await writeCloseCheckHandoffFixtures(planDir);
+
+    const sliceClose = runDevPlanCli(['slice-close-check', planDir, 'S1']);
+    assert.equal(sliceClose.status, 0, sliceClose.stderr.toString());
+    await stageDurablePlanFixture(planDir);
+    let planCommit = runDevPlanCli(['plan-commit-check', planDir]);
+    assert.equal(planCommit.status, 0, planCommit.stderr.toString());
+    execFileSync('git', ['commit', '-m', 'last slice checkpoint']);
+    const lastCheckpoint = gitOid(['rev-parse', 'HEAD']);
+
+    await markWholeReviewPassed(planDir);
+    const fullClose = runDevPlanCli(['close-check', planDir]);
+    assert.equal(fullClose.status, 0, fullClose.stderr.toString());
+    await stageDurablePlanFixture(planDir);
+    planCommit = runDevPlanCli(['plan-commit-check', planDir]);
+    assert.equal(planCommit.status, 0, planCommit.stderr.toString());
+    execFileSync('git', ['commit', '-m', 'final audit after whole review']);
+    const finalCommit = gitOid(['rev-parse', 'HEAD']);
+
+    assert.deepEqual(gitOid(['rev-list', '--parents', '-n', '1', finalCommit]).split(' '), [finalCommit, lastCheckpoint]);
+  });
+});
+
+test('CLI requires F when a skipped slice is recorded after the last execution checkpoint', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-skipped-after-last-checkpoint');
+    await writeValidExecutingPlan(planDir);
+    await writeCloseCheckHandoffFixtures(planDir);
+    await stageDurablePlanFixture(planDir);
+    let planCommit = runDevPlanCli(['plan-commit-check', planDir]);
+    assert.equal(planCommit.status, 0, planCommit.stderr.toString());
+    execFileSync('git', ['commit', '-m', 'last execution checkpoint']);
+    const lastCheckpoint = gitOid(['rev-parse', 'HEAD']);
+
+    const decisionsPath = path.join(planDir, 'decisions.md');
+    await fs.appendFile(decisionsPath, `
+
+### D2：跳过 S2
+
+- 状态：decided
+- 关联：S2
+- 结论：不再执行 S2。
+- 证据：用户已确认该片不再需要。
+`, 'utf8');
+    await fs.appendFile(path.join(planDir, 'plan.md'), createSkippedConsumerSliceBlock(), 'utf8');
+
+    const fullClose = runDevPlanCli(['close-check', planDir]);
+    assert.equal(fullClose.status, 0, fullClose.stderr.toString());
+    await stageDurablePlanFixture(planDir);
+    planCommit = runDevPlanCli(['plan-commit-check', planDir]);
+    assert.equal(planCommit.status, 0, planCommit.stderr.toString());
+    execFileSync('git', ['commit', '-m', 'final audit with skipped slice']);
+    const finalCommit = gitOid(['rev-parse', 'HEAD']);
+
+    assert.deepEqual(gitOid(['rev-list', '--parents', '-n', '1', finalCommit]).split(' '), [finalCommit, lastCheckpoint]);
+  });
+});
+
+test('CLI creates F for an all-skipped plan without any slice checkpoint', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-all-skipped-final');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = (await fs.readFile(planPath, 'utf8'))
+      .replace('> 状态：executing', '> 状态：done')
+      .replace('- 阶段：executing', '- 阶段：done')
+      .replace('- 当前切片：S1', '- 当前切片：无')
+      .replace('- 状态：not-started', '- 状态：skipped\n- 跳过依据：D1')
+      .replace('- Commit：待提交\n', '')
+      .replace(/- baseCommit：[0-9a-f]+\n/, '')
+      .replace('- 验证：pending', '- 验证：skipped（按 D1 不再执行）\n\n#### 验证备注\n\n- 本片按跳过依据关闭。');
+    await fs.writeFile(planPath, plan, 'utf8');
+
+    const fullClose = runDevPlanCli(['close-check', planDir]);
+    assert.equal(fullClose.status, 0, fullClose.stderr.toString());
+    const baseline = gitOid(['rev-parse', 'HEAD']);
+    await stageDurablePlanFixture(planDir);
+    const planCommit = runDevPlanCli(['plan-commit-check', planDir]);
+    assert.equal(planCommit.status, 0, planCommit.stderr.toString());
+    execFileSync('git', ['commit', '-m', 'final audit for skipped plan']);
+    const finalCommit = gitOid(['rev-parse', 'HEAD']);
+
+    assert.deepEqual(gitOid(['rev-list', '--parents', '-n', '1', finalCommit]).split(' '), [finalCommit, baseline]);
+  });
+});
+
 test('CLI close-check rejects a general review A* bound to stale review-package content', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-close-check-review-package-hash');
@@ -7660,16 +7982,9 @@ test('CLI whole-review-package covers two committed slices', async () => {
     await writeCloseCheckHandoffFixtures(planDir);
 
     const s1Range = JSON.parse(await fs.readFile(path.join(planDir, 'review-packages', 'S1-range.json'), 'utf8'));
-    const s2Block = withReviewPackageReadySlice(createConsumerSliceBlock(), planDir, 'S2');
-    const planPath = path.join(planDir, 'plan.md');
-    let plan = await fs.readFile(planPath, 'utf8');
-    plan = plan
-      .replace('> 状态：done', '> 状态：executing')
-      .replace('- 阶段：done', '- 阶段：executing')
-      .replace('- 当前切片：无', '- 当前切片：S2')
-      .replace('- 下一步：执行 S1', '- 下一步：执行 S2')
-      + s2Block;
-    await fs.writeFile(planPath, plan, 'utf8');
+    await appendSecondSliceFixture(planDir);
+    const checkpoint = await commitPlanOnlyCheckpointFixture(planDir, 'S2');
+    await makeSecondSliceReadyFixture(planDir, checkpoint);
     await writeReadyTaskHandoff(planDir, 'S2');
 
     await fs.writeFile('src/consumer.ts', 'export const consumer = true;\n', 'utf8');
@@ -7680,12 +7995,13 @@ test('CLI whole-review-package covers two committed slices', async () => {
     execFileSync('git', ['commit', '-m', 'post-slice unrelated']);
     assert.notEqual(gitOid(['rev-parse', 'HEAD']), s2Commit);
 
-    plan = (await fs.readFile(planPath, 'utf8'))
+    const planPath = path.join(planDir, 'plan.md');
+    let plan = (await fs.readFile(planPath, 'utf8'))
       .replace('> 状态：executing', '> 状态：done')
       .replace('- 阶段：executing', '- 阶段：done')
       .replace('- 当前切片：S2', '- 当前切片：无');
     const closedS2 = createClosedConsumerSliceBlock()
-      .replace('- Commit：已提交', `- Commit：已提交\n- baseCommit：${s1Range.headCommit}`);
+      .replace('- Commit：已提交', `- Commit：已提交\n- baseCommit：${checkpoint}`);
     plan = plan.replace(/\n### S2：[\s\S]*$/, closedS2);
     await fs.writeFile(planPath, plan, 'utf8');
     const result = spawnSync('node', [script, 'whole-review-package', 'dev-plans/2026-06-10-whole-review-package']);
@@ -7700,6 +8016,10 @@ test('CLI whole-review-package covers two committed slices', async () => {
     assert.match(reviewPackage, /src\/example\.ts/);
     assert.match(reviewPackage, /src\/consumer\.ts/);
     assert.doesNotMatch(reviewPackage, /export const context = false/);
+    const changedFiles = getSectionForTest(reviewPackage, '变更文件');
+    const gitDiff = getSectionForTest(reviewPackage, 'Git Diff');
+    assert.doesNotMatch(changedFiles, /dev-plans\//);
+    assert.doesNotMatch(gitDiff, /diff --git a\/dev-plans\//);
     assert.match(reviewPackage, /\| S1 \|/);
     assert.match(reviewPackage, /\| S2 \|/);
     assert.match(reviewPackage, /## 切片概览/);
@@ -7725,7 +8045,7 @@ test('CLI whole-review-package covers two committed slices', async () => {
   });
 });
 
-test('CLI whole-review-package rejects commit gaps between slices', async () => {
+test('CLI whole-review-package rejects a non-plan checkpoint between slices', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-whole-review-gap');
     await writeValidExecutingPlan(planDir);
@@ -7765,7 +8085,7 @@ test('CLI whole-review-package rejects commit gaps between slices', async () => 
 
     const result = runDevPlanCli(['whole-review-package', planDir]);
     assert.equal(result.status, 1, result.stderr.toString());
-    assert.match(result.stderr.toString(), /S2: baseCommit must equal previous execution slice headCommit/);
+    assert.match(result.stderr.toString(), /plan checkpoint may only change durable plan files: src\/context\.ts/);
   });
 });
 

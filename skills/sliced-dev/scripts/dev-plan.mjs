@@ -2103,6 +2103,27 @@ function commitParents(root, commit) {
   return objectIds.slice(1);
 }
 
+function validatePlanOnlyCheckpoint(root, planDir, commit, expectedParent, commandName) {
+  const parents = commitParents(root, commit);
+  if (parents.length !== 1) {
+    throw gateError(`${commandName}: checkpoint must be a normal single-parent commit`);
+  }
+  if (parents[0] !== expectedParent) {
+    throw gateError(
+      `${commandName}: baseCommit must be a direct plan-only checkpoint child of previous execution slice headCommit ${expectedParent}`,
+    );
+  }
+
+  const changedFiles = listTreeChangedFiles(root, parents[0], commit);
+  const outsideFiles = changedFiles.filter((file) => !isPathInsidePlanDir(file, planDir) && !isDevPlansGitignore(file));
+  if (outsideFiles.length > 0) {
+    throw gateError(`${commandName}: plan checkpoint may only change durable plan files: ${outsideFiles.join(', ')}`);
+  }
+  if (!changedFiles.some((file) => isPathInsidePlanDir(file, planDir))) {
+    throw gateError(`${commandName}: plan checkpoint must change a durable plan file`);
+  }
+}
+
 async function assertInitialExecutionSliceBaseline(root, planDir, sliceId, slices, plan, baseCommit) {
   const executionSliceIds = [...slices].filter(([, block]) => {
     const status = getField(getSliceHeaderBlock(block.body), '状态');
@@ -2116,9 +2137,7 @@ async function assertInitialExecutionSliceBaseline(root, planDir, sliceId, slice
     const previousBaseCommit = resolveGitCommit(root, previousBoundary.baseCommit, `plan ${previousSliceId} baseCommit`);
     const previousRange = await readExistingReviewRange(planDir, previousSliceId, root, previousBaseCommit);
     if (!previousRange.range) throw gateError(`task-brief:${sliceId}: previous execution slice ${previousSliceId} must have a Review Range`);
-    if (baseCommit !== previousRange.range.headCommit) {
-      throw gateError(`task-brief:${sliceId}: baseCommit must equal previous execution slice headCommit ${previousRange.range.headCommit}`);
-    }
+    validatePlanOnlyCheckpoint(root, planDir, baseCommit, previousRange.range.headCommit, `task-brief:${sliceId}`);
     return;
   }
 
@@ -2201,6 +2220,25 @@ function collectCommitWorktreeState(root) {
     untracked,
     dirty: uniqueSorted([...staged, ...unstaged, ...untracked]),
   };
+}
+
+async function planCommitCheck(planDir) {
+  await assertValidPlanForPackage(planDir, 'plan-commit-check');
+  const root = await resolveGitRepoRoot();
+  const state = collectCommitWorktreeState(root);
+  const isAllowed = (repoPath) => isPathInsidePlanDir(repoPath, planDir) || isDevPlansGitignore(repoPath);
+  if (state.staged.length === 0) {
+    throw gateError('plan-commit-check: staged durable plan files must not be empty');
+  }
+  const outside = state.staged.filter((repoPath) => !isAllowed(repoPath));
+  if (outside.length > 0) {
+    throw gateError(`plan-commit-check: staged path outside current plan durable allowlist: ${outside.join(', ')}`);
+  }
+  const residual = uniqueSorted([...state.unstaged, ...state.untracked]).filter(isAllowed);
+  if (residual.length > 0) {
+    throw gateError(`plan-commit-check: durable plan paths have unstaged residual: ${residual.join(', ')}`);
+  }
+  return state.staged;
 }
 
 function validateCommitWorktreeState(
@@ -5755,13 +5793,28 @@ async function readExecutionSliceRanges(planDir, slices, commandName) {
   for (let index = 1; index < entries.length; index += 1) {
     const previous = entries[index - 1].range;
     const current = entries[index].range;
-    if (current.baseCommit !== previous.headCommit) {
-      throw gateError(
-        `${commandName}:${current.sliceId}: baseCommit must equal previous execution slice headCommit ${previous.headCommit}`,
-      );
-    }
+    validatePlanOnlyCheckpoint(
+      entries[index].root,
+      planDir,
+      current.baseCommit,
+      previous.headCommit,
+      `${commandName}:${current.sliceId}`,
+    );
   }
   return entries;
+}
+
+function collectExecutionRangeChangedFiles(entries) {
+  return uniqueSorted(entries.flatMap(({ root, range }) => (
+    listTreeChangedFiles(root, range.baseCommit, range.headCommit)
+  )));
+}
+
+function renderExecutionRangeDiff(entries, render) {
+  const chunks = entries
+    .map(({ root, range }) => render(root, range.baseCommit, range.headCommit))
+    .filter((chunk) => chunk !== '无 tree diff。');
+  return chunks.join('\n\n') || '无 tree diff。';
 }
 
 async function validateWholeReviewPackageForClose(planDir) {
@@ -5806,9 +5859,9 @@ async function validateWholeReviewPackageForClose(planDir) {
         if (!isGitAncestor(root, firstRange.baseCommit, finalRange.headCommit)) {
           errors.push('close-check: whole review first baseCommit must be an ancestor of final recorded headCommit');
         }
-        const expectedFiles = listTreeChangedFiles(root, firstRange.baseCommit, finalRange.headCommit);
+        const expectedFiles = collectExecutionRangeChangedFiles(entries);
         if (!sameStringSet(parsePackageChangedFiles(content), expectedFiles)) {
-          errors.push('close-check: whole review changed files must equal recorded cumulative commit range');
+          errors.push('close-check: whole review changed files must equal recorded execution Review Ranges');
         }
       } catch (error) {
         errors.push(`close-check: invalid Cumulative Range: ${error.message}`);
@@ -6326,9 +6379,9 @@ async function buildWholeTaskReviewPackage(planDir) {
     baseCommit: firstRange.baseCommit,
     headCommit: finalRange.headCommit,
   };
-  const changedFileList = listTreeChangedFiles(root, cumulativeRange.baseCommit, cumulativeRange.headCommit);
-  const diffStat = renderTreeDiffStat(root, cumulativeRange.baseCommit, cumulativeRange.headCommit);
-  const diff = renderTreeDiff(root, cumulativeRange.baseCommit, cumulativeRange.headCommit);
+  const changedFileList = collectExecutionRangeChangedFiles(rangeEntries);
+  const diffStat = renderExecutionRangeDiff(rangeEntries, renderTreeDiffStat);
+  const diff = renderExecutionRangeDiff(rangeEntries, renderTreeDiff);
   const taskReportSummaries = await renderTaskReportSummaries(planDir, slices);
   const claimsOverview = await renderAllClaimsOverview(planDir, slices);
 
@@ -6419,6 +6472,59 @@ async function writeWholeTaskReviewPackage(planDir) {
   return target;
 }
 
+async function validateDoneSliceClosure(
+  planDir,
+  sliceId,
+  block,
+  audits,
+  decisions,
+  zeroKnownDefectsClosure,
+) {
+  const errors = [];
+  const header = getSliceHeaderBlock(block.body);
+  if (getField(header, 'Commit') !== '已提交') {
+    errors.push(`close-check:${sliceId}: done slice must have Commit：已提交`);
+  }
+  errors.push(...validateDiffCheckEvidenceForClose(planDir, sliceId, block.body));
+  errors.push(...await validateTaskHandoffForClose(
+    planDir,
+    sliceId,
+    block.body,
+    audits,
+    decisions,
+    zeroKnownDefectsClosure,
+  ));
+  errors.push(...await validateClaimsForClose(planDir, new Map([[sliceId, block]])));
+  return errors;
+}
+
+async function sliceCloseCheckPlan(planDir, sliceId) {
+  const errors = await validatePlan(planDir);
+  if (errors.length > 0) return errors.map((error) => `validate failed before slice-close-check: ${error}`);
+
+  const [plan, decisionsMarkdown, auditsMarkdown] = await Promise.all([
+    fs.readFile(path.join(planDir, 'plan.md'), 'utf8'),
+    fs.readFile(path.join(planDir, 'decisions.md'), 'utf8'),
+    fs.readFile(path.join(planDir, 'audits.md'), 'utf8'),
+  ]);
+  const slice = getBlocks(getSection(plan, '切片'), SLICE_ID_RE).get(sliceId);
+  if (!slice) throw usageError(`slice-close-check: slice ${sliceId} does not exist`);
+  const status = getField(getSliceHeaderBlock(slice.body), '状态');
+  if (status !== 'done') {
+    return [`slice-close-check:${sliceId}: target execution slice must be done, got ${status ?? '<missing>'}`];
+  }
+
+  const sliceErrors = await validateDoneSliceClosure(
+    planDir,
+    sliceId,
+    slice,
+    getBlocks(auditsMarkdown, AUDIT_ID_RE),
+    getBlocks(decisionsMarkdown, DECISION_ID_RE),
+    hasZeroKnownDefectsClosure(plan),
+  );
+  return sliceErrors.map((error) => error.replace(/^close-check:/, 'slice-close-check:'));
+}
+
 async function closeCheckPlan(planDir) {
   const errors = await validatePlan(planDir);
   if (errors.length > 0) return errors.map((error) => `validate failed before close-check: ${error}`);
@@ -6452,27 +6558,20 @@ async function closeCheckPlan(planDir) {
   for (const [id, block] of slices) {
     const header = getSliceHeaderBlock(block.body);
     const status = getField(header, '状态');
-    const commit = getField(header, 'Commit');
     if (!TERMINAL_SLICE_STATUSES.has(status)) {
       errors.push(`close-check:${id}: ${status ?? '<missing>'} slice is not closed`);
     }
-    if (status === 'done' && commit !== '已提交') {
-      errors.push(`close-check:${id}: done slice must have Commit：已提交`);
-    }
     if (status === 'done') {
-      errors.push(...validateDiffCheckEvidenceForClose(planDir, id, block.body));
-      errors.push(...await validateTaskHandoffForClose(
+      errors.push(...await validateDoneSliceClosure(
         planDir,
         id,
-        block.body,
+        block,
         audits,
         decisions,
         zeroKnownDefectsClosure,
       ));
     }
   }
-
-  errors.push(...await validateClaimsForClose(planDir, slices));
 
   return errors;
 }
@@ -7526,6 +7625,7 @@ function printUsage() {
   node <sliced-dev-skill-dir>/scripts/dev-plan.mjs init <slug> --title "<title>" [--date YYYY-MM-DD] [--upstream <value>]
   node <sliced-dev-skill-dir>/scripts/dev-plan.mjs pre-commit-check dev-plans/YYYY-MM-DD-slug S1
   node <sliced-dev-skill-dir>/scripts/dev-plan.mjs record-commit dev-plans/YYYY-MM-DD-slug S1
+  node <sliced-dev-skill-dir>/scripts/dev-plan.mjs plan-commit-check dev-plans/YYYY-MM-DD-slug
   node <sliced-dev-skill-dir>/scripts/dev-plan.mjs validate dev-plans/YYYY-MM-DD-slug
   node <sliced-dev-skill-dir>/scripts/dev-plan.mjs diff-check dev-plans/YYYY-MM-DD-slug S1
   node <sliced-dev-skill-dir>/scripts/dev-plan.mjs claims-template dev-plans/YYYY-MM-DD-slug S1
@@ -7536,6 +7636,7 @@ function printUsage() {
   node <sliced-dev-skill-dir>/scripts/dev-plan.mjs rule-repair-check dev-plans/YYYY-MM-DD-slug S1
   node <sliced-dev-skill-dir>/scripts/dev-plan.mjs whole-review-package dev-plans/YYYY-MM-DD-slug
   node <sliced-dev-skill-dir>/scripts/dev-plan.mjs review-prompt dev-plans/YYYY-MM-DD-slug S1
+  node <sliced-dev-skill-dir>/scripts/dev-plan.mjs slice-close-check dev-plans/YYYY-MM-DD-slug S1
   node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/YYYY-MM-DD-slug
   node <sliced-dev-skill-dir>/scripts/dev-plan.mjs show dev-plans/YYYY-MM-DD-slug current
   node <sliced-dev-skill-dir>/scripts/dev-plan.mjs show dev-plans/YYYY-MM-DD-slug S1
@@ -7587,6 +7688,13 @@ async function main(argv = process.argv.slice(2)) {
       return 1;
     }
     console.log('OK: dev plan is valid');
+    return 0;
+  }
+
+  if (command === 'plan-commit-check') {
+    if (!first || rest.length > 0) throw usageError('plan-commit-check requires exactly one plan directory');
+    await planCommitCheck(first);
+    console.log('OK: staged durable plan files are ready to commit');
     return 0;
   }
 
@@ -7715,6 +7823,24 @@ async function main(argv = process.argv.slice(2)) {
       return 1;
     }
     console.log('OK: dev plan is ready to close');
+    return 0;
+  }
+
+  if (command === 'slice-close-check') {
+    const [sliceId, ...extra] = rest;
+    if (!first || !sliceId || extra.length > 0) {
+      throw usageError('slice-close-check requires exactly one plan directory and one slice id');
+    }
+    await assertValidatePlanPathForCli(first);
+    const errors = await sliceCloseCheckPlan(first, sliceId);
+    if (errors.length > 0) {
+      console.error('ERROR:');
+      for (const error of errors) {
+        console.error(`- ${error}`);
+      }
+      return 1;
+    }
+    console.log(`OK: slice ${sliceId} is ready to close`);
     return 0;
   }
 

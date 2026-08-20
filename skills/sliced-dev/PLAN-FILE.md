@@ -170,7 +170,7 @@ dev-plans/
 - 条件字段 `替代切片`：只用于 `状态：split`，使用 `S1.1 / S1.2` 形式列出一个或多个真实存在的后代切片；不能引用自身、同级片或不存在的 ID。
 - 条件字段 `跳过依据`：只用于 `状态：skipped`，值必须是一个 `D*`；该 D 必须为 `decided`、在当前切片 `关联项` 中同样写为 `decided`、正文 `关联` 包含当前切片，并有非占位 `结论` 和 `证据`。
 - 条件字段 `Commit`：只用于执行型切片（`not-started` / `blocked` / `in-progress` / `done`），值为 `待提交` / `已提交`；它只记录状态，不写 commit hash；`split` / `skipped` 必须省略。
-- 条件字段 `baseCommit`：首个执行型切片在执行前 plan checkpoint P 提交时保持缺席，P 完成后写入 P 的规范 commit ID；后续执行型切片首轮派发前写入前一执行片 Review Range 的 `headCommit`。各片写入后只能读取、不得改写；返修和最终收口都沿用该值。尚未派发的执行型切片可缺席，`split` / `skipped` 必须省略。
+- 条件字段 `baseCommit`：首个执行型切片在执行前 plan checkpoint P 提交时保持缺席，P 完成后写入 P 的规范 commit ID；后续执行型切片首轮派发前写入前一执行片 `headCommit` 的直接、普通单父、plan-only 子提交 K。K 中保持该字段缺席，首次派发前才写入 K 的规范 commit ID。各片写入后只能读取、不得改写；返修和最终收口都沿用该值。尚未派发的执行型切片可缺席，`split` / `skipped` 必须省略。
 - `修复次数`：`当前次数/最大次数`，例如 `0/4`、`1/4`、`4/4`，统计本切片实际修改任务范围内文件的自动修复总次数，不按门禁分别计数，默认上限为 `4`。单纯重跑 reviewer、重生成 package、补运行证据或修 review 协议工件不计次。次数用尽后任一门禁仍失败则停止，不继续自动修。
 
 脚本只检查 `替代切片` ID 非重复、真实存在且为父片后代，不判断这些切片是否完整覆盖父片任务与验收；覆盖关系由拆分拷问 / 计划审查判断。
@@ -558,7 +558,7 @@ repair verification A* 的 `validation` 必须展示 `rule-repair-check <planDir
 
 不要把用户口令或过程说明（如 `已拷问写回`）写进 `拆分拷问` 或切片 `门禁` 字段。
 
-`Commit` 只用于执行型切片，表示本片**代码**的提交状态，不表示 `dev-plans` 自身是否已提交，也不写最终 commit hash：未提交写 `待提交`，本片代码提交边界已收口写 `已提交`；`split` / `skipped` 不进入执行，必须省略该字段。`dev-plans` 记录走自己的独立 commit：默认首个执行型切片前提交执行就绪检查点 P，收口时提交最终审计状态 F，不由切片 `Commit` 字段表达。首次派发前的固定起点写在切片 `baseCommit`，每轮最终 commit hash 的持久机器真源是 Review Range v2 的 `headCommit`；`项目规则审查：required` 时 rules-review dispatch 的 `reviewRange.boundCommit` 必须等于该值。P 后的持久 plan 状态在 F 前保持未提交，`task-briefs/**`、`task-reports/**`、`review-packages/**` 不进入 P / F；从 P 恢复时，先确认 `HEAD == P` 并把 P 的规范 commit ID 写入首个执行型切片 `baseCommit`，再重新生成这些临时产物。执行型切片无代码变更时不要创建空 commit，完成后仍写 `Commit：已提交`，并在 `验证备注` / 完成报告说明无可提交变更。
+`Commit` 只用于执行型切片，表示本片**业务代码**的提交状态，不表示 `dev-plans` 自身是否已提交，也不写最终 commit hash：未提交写 `待提交`，本片代码提交边界已收口写 `已提交`；`split` / `skipped` 不进入执行，必须省略该字段。`dev-plans` 记录走自己的独立 P / K / F commit：首个执行型切片前提交 P，每个执行型 `done` 切片最终审查后提交 K，完整收口仍有后续 durable 状态时提交 F，不由切片 `Commit` 字段表达。完整链为 `P → C1 → K1 → C2 → K2 … → Cn → Kn → [F]`；K 中不提前写下一片 `baseCommit`，`split` / `skipped` 不创建 K。首次派发前的固定起点写在切片 `baseCommit`，每轮最终业务 commit hash 的持久机器真源是 Review Range v2 的 `headCommit`；`项目规则审查：required` 时 rules-review dispatch 的 `reviewRange.boundCommit` 必须等于该值。`task-briefs/**`、`task-reports/**`、`review-packages/**` 是可重建临时产物，不进入 P / K / F；从 P 恢复时，先确认 `HEAD == P` 并把 P 写入首个执行型切片 `baseCommit`，从 K 恢复时先确认 `HEAD == K` 并在下一片首派前写入 K，再重新生成临时产物。执行型切片无代码变更时不要创建空业务 commit，完成后仍写 `Commit：已提交`，并在 `验证备注` / 完成报告说明无可提交变更。
 
 ## 维护规则
 
