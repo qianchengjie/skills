@@ -64,6 +64,12 @@ description: 审查用户写的 skill、AGENTS.md、rules、workflow、prompt �
 
 硬边界优先保护用户授权、任务范围、公共 API / 契约、数据语义、安全 / 权限 / 隐私、测试信号、提交边界和外发 / 发布 / push / merge 等不可逆动作。硬边界过多、过宽或模糊时，缩窄为可判定边界，或重分类为风险门禁、目标函数、启发式或 evidence requirement。
 
+职责归属审查先识别材料中可观察的决策权限、artifact 真源、当前执行者和 downstream consumer；只根据协议和实际调用关系判断，不根据作者背景或固定岗位清单推断 owner。ownership 链只是定位边界和责任缺口的工具，不是固定角色模型：同一主体可以合法承担多个环节；只有稳定决定或 artifact 跨主体、跨生命周期交给 downstream consumer 时，才需要 handoff。
+
+有现成 owner 时，优先建议当前执行者 stop、escalate、route 或 hand back，不要让它吸收已有职责。没有现成 owner 时，判断职责缺失是否导致无法闭环或使闭环不可信；只有产生实际影响时才列 finding，例如失效未传播、重复 ownership、越权修改、必要决定无人承担或 handoff 无法可靠传播。这些问题继续使用现有 finding taxonomy，不新增职责类 finding 类型。
+
+当一项职责长期重复、跨多个独立 workflow、具有稳定的触发 / 输入 / 输出 / 失败语义，且无法合理归属任何现有 owner 时，应建议建立独立 ownership，并把独立 skill / coordinator 明确列为候选载体。候选不等于结论：仍需比较最小可行载体，不得直接断言必须新建 skill，也不要默认引入 schema、台账、状态机或角色模型。
+
 边界内默认按以下优先级比较方案：
 
 1. 正确性；
@@ -329,6 +335,7 @@ description: 审查用户写的 skill、AGENTS.md、rules、workflow、prompt �
 2. 已区分硬边界、目标函数、启发式、流程、审计格式和 AI 的选择空间；
 3. 已检查 evidence obligation，并且没有把会话说明 + 人 review 能闭环的事项误判成脚本或 durable artifact 缺口；
 4. 已检查风险是否改变行为、审计是否有真值，以及模型 / 工具 / subagent / 重试 / 批处理的明显执行成本；
-5. 已按统一判据识别剪枝候选并输出剪枝判断；
-6. 每条真实 finding 都有具体证据、行为影响、定向建议和修复投入；没有真实问题时未制造 finding；
-7. 已使用固定结论枚举、执行后果和与风险匹配的输出深度。
+5. 已检查影响闭环或使闭环不可信的职责归属、必要 handoff 与跨生命周期错位；稳定独立职责信号成立时，已明确评估独立 skill 是否应列为候选载体；
+6. 已按统一判据识别剪枝候选并输出剪枝判断；
+7. 每条真实 finding 都有具体证据、行为影响、定向建议和修复投入；没有真实问题时未制造 finding；
+8. 已使用固定结论枚举、执行后果和与风险匹配的输出深度。
