@@ -90,7 +90,7 @@ repair 只审直接上一轮全部 open finding 和 `previousHeadCommit → head
 
 ## 项目规则审查 A*
 
-每个 TARGET 使用全新 rules-review v8 run。A* 只投影当前 run 的 fixed summary，不保存旧 run 继承关系：
+当前最终 TARGET 默认使用全新 rules-review v8 run。最终 proof closure 只验证当前最终 TARGET 的 fresh full，或严格一跳“直接前序 full + 当前 repair verification”；除该组合证明直接引用的前序 full 外，其它历史规则 A* 只保留 provenance，不读取其 run、不重验有效性，也不参与关闭条件。A* 只投影对应证明的 fixed summary，不保存递归继承关系：
 
 ```markdown
 ### A29：S2 当前项目规则审查结论

@@ -3242,7 +3242,7 @@ test('validate rejects user acceptance issues without non-placeholder reason', a
     await writeValidExecutingPlan(planDir);
     const planPath = path.join(planDir, 'plan.md');
     const plan = await fs.readFile(planPath, 'utf8');
-    for (const userAcceptance of ['issues', 'issues（<原因>）']) {
+    for (const userAcceptance of ['issues', 'issues（<原因>）', 'issues（<evidence>）']) {
       await fs.writeFile(
         planPath,
         plan.replace('- AI Review：pending', `- AI Review：pending\n- 用户验收：${userAcceptance}`),
@@ -3252,6 +3252,28 @@ test('validate rejects user acceptance issues without non-placeholder reason', a
       assert(
         errors.some((error) => error.includes('用户验收 issues requires reason')),
         userAcceptance,
+      );
+    }
+  });
+});
+
+test('validate accepts angle brackets that are not known template tokens', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-user-acceptance-angle-brackets');
+    await writeValidExecutingPlan(planDir);
+    const planPath = path.join(planDir, 'plan.md');
+    const plan = await fs.readFile(planPath, 'utf8');
+
+    for (const reason of ['<any>', 'Record<string, any>', 'Map<string, number>']) {
+      await fs.writeFile(
+        planPath,
+        plan.replace('- AI Review：pending', `- AI Review：pending\n- 用户验收：issues（${reason}）`),
+        'utf8',
+      );
+      const errors = await validatePlan(planDir);
+      assert(
+        !errors.some((error) => error.includes('用户验收 issues requires reason')),
+        `${reason}: ${errors.join('\n')}`,
       );
     }
   });
@@ -4276,7 +4298,7 @@ test('CLI claims-template writes structured slice claims and handoff renders the
     assert.equal(report.conclusion, 'blocked');
     assert.deepEqual(report.changedFiles, []);
     assert.deepEqual(report.validation, []);
-    assert.equal(report.blockedReason, '');
+    assert.equal(report.blockedReason, 'task report 尚未填写');
   });
 });
 
@@ -4864,7 +4886,8 @@ test('CLI task-report-template writes implementer report template', async () => 
     assert.equal(report.conclusion, 'blocked');
     assert.deepEqual(report.changedFiles, []);
     assert.deepEqual(report.validation, []);
-    assert.equal(report.blockedReason, '');
+    assert.equal(report.blockedReason, 'task report 尚未填写');
+    assert.deepEqual(await validatePlan(planDir), []);
   });
 });
 
@@ -4880,7 +4903,7 @@ test('CLI task-report-template resets an earlier ready report before repair disp
     assert.equal(report.conclusion, 'blocked');
     assert.deepEqual(report.changedFiles, []);
     assert.deepEqual(report.validation, []);
-    assert.equal(report.blockedReason, '');
+    assert.equal(report.blockedReason, 'task report 尚未填写');
   });
 });
 
@@ -4975,6 +4998,10 @@ test('validate requires blocked task report to include blockedReason', async () 
     const planDir = path.join('dev-plans', '2026-06-10-task-report-json-blocked-reason');
     await writeValidExecutingPlan(planDir);
     await writeTaskReportTemplateFixture('dev-plans/2026-06-10-task-report-json-blocked-reason', 'S1');
+    const reportPath = path.join(planDir, 'task-reports', 'S1.json');
+    const report = JSON.parse(await fs.readFile(reportPath, 'utf8'));
+    report.blockedReason = '';
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 
     const errors = await validatePlan(planDir);
     assert(errors.some((error) => error.includes('blocked conclusion requires blockedReason')));
@@ -6736,6 +6763,95 @@ test('CLI close-check requires project rule review A* evidence when required', a
   });
 });
 
+test('CLI close-check ignores rules proofs outside the final proof closure', async () => {
+  await withTempRepo(async () => {
+    const planDir = path.join('dev-plans', '2026-06-10-close-check-final-proof-closure');
+    await writeValidExecutingPlan(planDir);
+    const rulesReview = await prepareRulesReviewRunFixture();
+    const planPath = path.join(planDir, 'plan.md');
+    await fs.writeFile(
+      planPath,
+      withRequiredProjectRuleReview(await fs.readFile(planPath, 'utf8')),
+      'utf8',
+    );
+    await setSliceBaseCommit(planDir, 'S1', rulesReview.baseCommit);
+    await appendGeneralReviewV4Audit(planDir, {
+      id: 'A8',
+      range: {
+        baseCommit: rulesReview.baseCommit,
+        previousHeadCommit: rulesReview.baseCommit,
+        headCommit: rulesReview.baseCommit,
+      },
+      reviewPackageHash: `sha256:${'0'.repeat(64)}`,
+    });
+    await selectGeneralReviewAudit(planDir, 'A8');
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8')).replace(
+        '- AI Review：pending',
+        '- AI Review：pending\n- 用户验收：issues（内部实现调整）',
+      ),
+      'utf8',
+    );
+
+    await fs.writeFile(
+      planPath,
+      withReviewPackageReadySlice(await fs.readFile(planPath, 'utf8'), planDir),
+      'utf8',
+    );
+    await writeVerifiedClaimsFixture(planDir, 'S1');
+    await writeTaskBriefSnapshotFixture(planDir, 'S1');
+    await writeTaskReportTemplateFixture(planDir, 'S1');
+    await markTaskReportReady(planDir, 'S1');
+    execFileSync('git', ['checkout', '--detach', rulesReview.targetCommit]);
+    let result = runDevPlanCli(['record-commit', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+
+    await writeGeneratedReviewPackageFixture(planDir, 'S1');
+    await selectGeneralReviewAudit(planDir, 'A9');
+    const auditsPath = path.join(planDir, 'audits.md');
+    const audits = await fs.readFile(auditsPath, 'utf8');
+    await fs.writeFile(
+      auditsPath,
+      audits.replace(
+        '- previousReview：A8\n- baseCommit：',
+        '- previousReview：A8\n- reviewTrigger：user-acceptance-issues（内部实现调整）\n- baseCommit：',
+      ),
+      'utf8',
+    );
+    await fs.writeFile(
+      planPath,
+      (await fs.readFile(planPath, 'utf8')).replace(
+        '\n- 用户验收：issues（内部实现调整）',
+        '',
+      ),
+      'utf8',
+    );
+    result = runDevPlanCli(['rule-review-package', planDir, 'S1']);
+    assert.equal(result.status, 0, result.stderr.toString());
+    await appendProjectRuleReviewAudit(planDir, { id: 'A2', ...rulesReview });
+    await fs.writeFile(
+      planPath,
+      withPassedRequiredProjectRuleReviewVerdict(await fs.readFile(planPath, 'utf8'), {
+        ...rulesReview,
+        evidence: 'A2',
+      }),
+      'utf8',
+    );
+    await markSliceDone(planDir, 'S1');
+
+    await appendProjectRuleReviewAudit(planDir, {
+      id: 'A3',
+      runId: '20260809T000000Z-rr-00000009',
+      summary: '仅保留历史 provenance，外部 run 已不可用。',
+    });
+    await writeWholeReviewPackageFixture(planDir);
+
+    result = runDevPlanCli(['close-check', planDir]);
+    assert.equal(result.status, 0, result.stderr.toString());
+  });
+});
+
 test('sliced-dev repair verification closes a direct rules finding repair and fails closed to explicit fresh full', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-close-check-rule-repair-verification');
@@ -6951,6 +7067,13 @@ test('sliced-dev repair verification closes a direct rules finding repair and fa
 
     result = runDevPlanCli(['close-check', planDir]);
     assert.equal(result.status, 0, result.stderr.toString());
+
+    const unavailableRunDir = `${previous.runDir}.unavailable`;
+    await fs.rename(previous.runDir, unavailableRunDir);
+    result = runDevPlanCli(['close-check', planDir]);
+    assert.equal(result.status, 1, result.stderr.toString());
+    assert.match(result.stderr.toString(), /rules-review run|missing/);
+    await fs.rename(unavailableRunDir, previous.runDir);
 
     const auditsPath = path.join(planDir, 'audits.md');
     const closedAudits = await fs.readFile(auditsPath, 'utf8');

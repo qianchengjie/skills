@@ -829,8 +829,33 @@ function isPlaceholderText(item, { allowExplicitNone = false } = {}) {
   );
 }
 
+const TEMPLATE_PLACEHOLDER_TOKENS = new Set([
+  '<原因>',
+  '<evidence>',
+  '<用户原话>',
+  '<逐项结论>',
+  '<date-slug>',
+  '<S-id>',
+  '<addressed/not_addressed>',
+  '<fix diff / validation evidence>',
+  '<当前 run 的最终审查范围；无则写 无>',
+  '<dispatch.ruleSet.globallyNotApplicableRuleRefs；无则整段写一项 无>',
+  '<rule-reviewer 对最终 TARGET 的独立分类说明>',
+  '<最终 TARGET 的代码证据>',
+  '<当前切片选择的 runId>',
+  '<rules-review validate command>',
+  '<ready_for_merge / must_fix_before_merge / should_review_before_merge / manual_verification_required / review_incomplete / review_blocked>',
+  '<仅 should_review_before_merge 时填写 validator 派生值>',
+  '<integer>',
+  '<一句话说明>',
+  '<repo-relative-path:line>',
+  '<applicability expansion evidence>',
+  '<semantic impact summary>',
+]);
+
 function hasTemplatePlaceholder(item) {
-  return /<[^>\r\n]+>/.test(item ?? '');
+  return [...String(item ?? '').matchAll(/<[^>\r\n]+>/g)]
+    .some(([token]) => TEMPLATE_PLACEHOLDER_TOKENS.has(token));
 }
 
 function isContextPlaceholderItem(item, { allowExplicitNone = false } = {}) {
@@ -3342,7 +3367,7 @@ async function buildTaskReportTemplate(planDir, sliceId) {
     conclusion: 'blocked',
     changedFiles: [],
     validation: [],
-    blockedReason: '',
+    blockedReason: 'task report 尚未填写',
   };
 }
 
@@ -5108,148 +5133,6 @@ function validateAuditReviewScopeProjection(sliceId, auditId, auditBody, project
   return errors;
 }
 
-async function validateRulesReviewTargetCoverage(
-  sliceId,
-  sliceBody,
-  audits,
-  currentGeneralAuditId,
-  cachedRuns = new Map(),
-  planDir,
-) {
-  const chainResult = readGeneralReviewChain(currentGeneralAuditId, audits);
-  if (chainResult.errors.length > 0) return chainResult.errors;
-  const targets = new Map();
-  for (const review of chainResult.chain) {
-    if (!targets.has(review.headCommit)) targets.set(review.headCommit, review);
-  }
-
-  const errors = [];
-  const repoRoot = await resolveGitRepoRoot();
-  const association = new Map(parseAssociationItems(sliceBody).items.map((item) => [item.id, item.status]));
-  const coveredTargets = new Map([...targets.keys()].map((headCommit) => [headCommit, new Set()]));
-  const runTargets = new Map();
-  const seenRunIds = new Set();
-  const proofProjections = new Map();
-  for (const [auditId, audit] of audits) {
-    const runIdField = parseSingleTopLevelField(audit.body, 'rulesReviewRunId');
-    if (runIdField.values.length === 0) continue;
-    const relatesToSlice = extractIds(getListFieldValue(audit.body, '关联'), SLICE_REF_RE).includes(sliceId);
-    if (!relatesToSlice || association.get(auditId) !== 'done' || getField(audit.body, '状态') !== 'done') continue;
-    if (runIdField.values.length !== 1 || !isSafeRulesReviewRunId(runIdField.value)) {
-      errors.push(`${sliceId}: ${auditId} must bind exactly one safe rulesReviewRunId`);
-      continue;
-    }
-    const runId = runIdField.value;
-    const repairField = parseSingleTopLevelField(audit.body, 'repairVerification');
-    const isRepair = repairField.values.length === 1;
-    if (!isRepair && seenRunIds.has(runId)) {
-      errors.push(`${sliceId}: rules-review run ${runId} must not be reused by multiple A*`);
-      continue;
-    }
-    if (!isRepair) seenRunIds.add(runId);
-
-    let runResult;
-    if (isRepair) {
-      try {
-        if (!planDir) throw gateError('repair verification coverage requires planDir');
-        const checked = await checkRuleRepairVerification(planDir, sliceId);
-        if (checked.verdict !== 'repaired' || !checked.projection) {
-          throw gateError(checked.nextAction === 'fresh_full'
-            ? 'repair verification did not return repaired/complete; explicitly request fresh full'
-            : 'repair verification still has findings; return to repair');
-        }
-        if (normalizeRepoPath(repairField.value) !== checked.projection.verificationPath) {
-          throw gateError(`repairVerification must be ${checked.projection.verificationPath}`);
-        }
-        runResult = { errors: [], projection: checked.projection };
-      } catch (error) {
-        runResult = { errors: [error.message] };
-      }
-    } else {
-      runResult = cachedRuns.get(runId);
-      if (!runResult) {
-        runResult = await readRulesReviewProjectionForClose(runId);
-        cachedRuns.set(runId, runResult);
-      }
-    }
-    if (runResult.errors.length > 0 || !runResult.projection) {
-      errors.push(...runResult.errors.map((error) => `${sliceId}: ${auditId} ${error}`));
-      continue;
-    }
-    const projection = runResult.projection;
-    proofProjections.set(auditId, projection);
-    if (!validateRuleProofDisplayCommand(getListFieldValue(audit.body, 'validation'), projection)) {
-      errors.push(`${sliceId}: ${auditId} validation must display its passed rule proof`);
-    }
-    errors.push(...validateAuditReviewScopeProjection(sliceId, auditId, audit.body, projection));
-    const targetCommit = projection.reviewRange?.boundCommit;
-    const review = targets.get(targetCommit);
-    if (!review) {
-      errors.push(`${sliceId}: ${auditId} rules-review boundCommit does not match any General Review TARGET`);
-      continue;
-    }
-    let identityMatches = true;
-    if (projection.reviewRange?.baseCommit !== review.baseCommit) {
-      errors.push(`${sliceId}: ${auditId} rules-review baseCommit must match General Review TARGET ${review.auditId}`);
-      identityMatches = false;
-    }
-    if (projection.reviewRange?.baseTree !== commitTree(repoRoot, review.baseCommit)) {
-      errors.push(`${sliceId}: ${auditId} rules-review baseTree must equal baseCommit^{tree}`);
-      identityMatches = false;
-    }
-    if (projection.reviewRange?.targetTree !== commitTree(repoRoot, review.headCommit)) {
-      errors.push(`${sliceId}: ${auditId} rules-review targetTree must equal headCommit^{tree}`);
-      identityMatches = false;
-    }
-    if (!Array.isArray(projection.reviewRange?.excludedFiles) || projection.reviewRange.excludedFiles.length !== 0) {
-      errors.push(`${sliceId}: ${auditId} sliced-dev rules-review must use excludedFiles=[]`);
-      identityMatches = false;
-    }
-    const expectedFiles = listTreeChangedFiles(repoRoot, review.baseCommit, review.headCommit);
-    if (!sameStringSet(projection.changedFiles, expectedFiles)) {
-      errors.push(`${sliceId}: ${auditId} rules-review changed files must cover its complete General Review TARGET`);
-      identityMatches = false;
-    }
-    if (projection.kind !== 'repair') {
-      const snapshotFiles = new Set(projection.inputSnapshotRefs);
-      const coveredFiles = new Set(projection.changedUnitInputRefs.flat());
-      for (const file of expectedFiles.filter((item) => !isRuleReviewInternalPath(item))) {
-        if (!snapshotFiles.has(file) || !coveredFiles.has(file)) {
-          errors.push(`${sliceId}: ${auditId} rules-review snapshot/reviewItems must cover ${file}`);
-          identityMatches = false;
-        }
-      }
-    }
-    if (identityMatches) coveredTargets.get(review.headCommit).add(isRepair ? repairField.value : runId);
-    if (!isRepair) runTargets.set(runId, targetCommit);
-  }
-
-  for (const [headCommit, review] of targets) {
-    if (coveredTargets.get(headCommit).size === 0) {
-      errors.push(`${sliceId}: General Review TARGET ${review.auditId}/${headCommit} requires a full rules-review or valid repair verification proof`);
-    }
-  }
-  const selector = parseRulesReviewRunSelector(sliceBody);
-  const latestHeadCommit = chainResult.chain.at(-1)?.headCommit;
-  const projectVerdict = parseReviewVerdicts(sliceBody).items
-    .find((item) => item.verdict === PROJECT_RULE_REVIEW_VERDICT);
-  const currentAuditRefs = extractIds(projectVerdict?.evidence ?? '', AUDIT_REF_RE);
-  const currentProjection = currentAuditRefs.length === 1 ? proofProjections.get(currentAuditRefs[0]) : undefined;
-  if (!currentProjection || currentProjection.reviewRange.boundCommit !== latestHeadCommit) {
-    errors.push(`${sliceId}: current project rule proof must select the latest General Review TARGET`);
-  } else if (currentProjection.kind === 'repair') {
-    if (selector.values.length !== 1 || selector.runId !== currentProjection.previousFullRunId) {
-      errors.push(`${sliceId}: repair verification must select its previous full rules-review runId`);
-    }
-    if (runTargets.get(currentProjection.previousFullRunId) !== currentProjection.previousTargetCommit) {
-      errors.push(`${sliceId}: repair verification basis must be an audited full rules-review for the previous TARGET`);
-    }
-  } else if (selector.values.length !== 1 || selector.runId !== currentProjection.runId) {
-    errors.push(`${sliceId}: current rules-review runId must select the latest General Review TARGET`);
-  }
-  return errors;
-}
-
 function validateProjectRuleReviewScopeForClose(
   sliceId,
   projection,
@@ -5637,17 +5520,6 @@ async function validateProjectRuleReviewVerdictForClose(
         decisions,
         zeroKnownDefectsClosure,
       ));
-    }
-    const currentGeneral = resolveCurrentGeneralReviewAudit(sliceId, sliceBody, audits);
-    if (currentGeneral.errors.length === 0 && currentGeneral.auditId) {
-      errors.push(...(await validateRulesReviewTargetCoverage(
-        sliceId,
-        sliceBody,
-        audits,
-        currentGeneral.auditId,
-        new Map(),
-        planDir,
-      )).map((error) => `close-check:${error}`));
     }
   }
 

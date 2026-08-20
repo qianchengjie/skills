@@ -82,7 +82,7 @@ REPORT_AND_NEXT
 - `COMMIT_ITERATION`：首轮派发前已固定 `baseCommit`。controller 只 stage `taskReport.changedFiles`，运行 `pre-commit-check` 后创建普通单父 commit，再运行 `record-commit`；无代码轮不创建空 commit。任何 HEAD、路径集合、父子关系或 commit diff 不一致都停止。
 - `AI_REVIEW_PACKAGE_AND_REVIEW`：只从 Review Range v2 的已记录 commit 生成 package。General Review 按首次累计 `full`、finding-focused `repair`、发生 repair 后最终累计 `full` 推进；用户验收拒收或项目规则 finding 产生新 TARGET 时，以对应 `reviewTrigger` 直接重新执行累计 `full`。最终 General clean 后先写前三项 verdict，满足适用的用户验收后，active catalog 非空才生成不含 execution-time 规则分类的累计 rule package，并派发 fresh rules-review v8 run；真实空 catalog 跳过。第四项完成后才写 `AI Review：passed`。
 - `FIX_OR_STOP`：每个切片最多自动修复 4 次；次数用尽仍失败则停止并报告。
-- `USER_ACCEPTANCE`：最终 General clean 后按 [PLAN-FILE.md](PLAN-FILE.md) 的 `用户验收` 条件字段收口；自动片默认不逐片停下并直接继续规则审查，需确认片 / C 类片必须停下。用户拒收且不产生 D 分叉时，写明 `issues` 原因、重置 AI Review 并回到返修派发；新 TARGET 的 General clean 后再转回 `pending`。阻塞状态不得进入 rules-review 或标记 done；标记 done 前，当前片所有 claims 必须是 `verified` 或 `waived`。
+- `USER_ACCEPTANCE`：最终 General clean 后按 [PLAN-FILE.md](PLAN-FILE.md) 的 `用户验收` 条件字段收口；自动片默认不逐片停下并直接继续规则审查，需确认片 / C 类片必须停下。用户拒收且不产生 D 分叉时，写明 `issues` 原因、重置 AI Review 并回到返修派发；新 TARGET 的 General clean 后按现有证据判断能否带 provenance 复用原验收，不能证明时保持 `pending`。阻塞状态不得进入 rules-review 或标记 done；标记 done 前，当前片所有 claims 必须是 `verified` 或 `waived`。
 - `SLICE_CLOSE_CHECK`：最终审查通过后写回当前片 `done` 和最终状态，移动当前切片指针，再运行 `slice-close-check`；它只关闭目标执行片，不要求后续切片完成。
 - `COMMIT_PLAN_CHECKPOINT`：只 stage 当前 plan durable allowlist，运行 `plan-commit-check` 和 `git diff --cached --check` 后创建普通单父 K。K 中下一执行片 `baseCommit` 保持缺席；`split` / `skipped` 跳过本状态。最后一片是否由 Kn 兼任 F，按「dev-plans 提交」规则处理。
 
@@ -414,7 +414,9 @@ repair 中的新 finding 只能来自本轮 fix diff，统一写 `Origin=repair-
 
 最终累计 General full 通过并写回前三项 verdict 后，按执行模式处理用户验收；字段枚举、合法条件和 done 约束见 [PLAN-FILE.md](PLAN-FILE.md) 的切片字段规则。自动片默认不写 `用户验收`、不逐片停下，直接继续 rules-review；若用户明确要求逐片验收，则写 `用户验收：pending` 并停下。需确认片 / C 类片必须先写 `用户验收：pending`，报告 review-package 路径、实际改动和验证摘要，然后停下等用户验收本 slice。验收满足前不得生成 rule package。
 
-用户不满意但不改变用户授权范围 / 验收口径时，写 `用户验收：issues（<非占位原因>）`、把 `AI Review` 重置为 `pending`，并进入本片有限修复循环；task brief 必须渲染该反馈。返工提交完成后，直接引用拒收前的 clean full，生成带 `reviewTrigger：user-acceptance-issues（<同一原因>）` 的累计 full package；反馈在该轮 General clean 前保留，通过后转为 `用户验收：pending`。新 TARGET 会把旧 `passed` 重置为 `pending`，但 `skipped` 始终作为切片级 waiver 保留。用户反馈改变产品行为、验收口径、公共契约、非目标或令风险升为 C 时，不直接修，转 `D* open` 分叉并回到分叉处理协议。
+用户不满意但不改变用户授权范围 / 验收口径时，写 `用户验收：issues（<非占位原因>）`、把 `AI Review` 重置为 `pending`，并进入本片有限修复循环；task brief 必须渲染该反馈。返工提交完成后，直接引用拒收前的 clean full，生成带 `reviewTrigger：user-acceptance-issues（<同一原因>）` 的累计 full package；反馈在该轮 General clean 前保留，通过后转为 `用户验收：pending`。用户反馈改变产品行为、验收口径、公共契约、非目标或令风险升为 C 时，不直接修，转 `D* open` 分叉并回到分叉处理协议。
+
+其它新 TARGET 会把旧 `passed` 机械重置为 `pending`，但 `skipped` 始终作为切片级 waiver 保留。当前最终 General clean 后，若现有 General Review 的 Range / claims / evidence 能明确证明原验收 TARGET 到当前 TARGET 的相关 delta 没有改变该验收覆盖的用户可感知行为、acceptance criteria / scope，也未引入新的用户判断，controller 可复用原 `passed`，但必须同时引用原用户验收与当前 General 证据，不得伪装成用户对新 TARGET 的再次确认；证据不足或验收相关语义变化时保持 `pending` 并重新验收。`test-only` 既非必要条件也非充分条件，不得为了取得复用资格额外创建一轮 General Review。
 
 ## 有限修复循环
 
@@ -447,7 +449,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs slice-close-check dev-plans/<da
 node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/<date-slug>
 ```
 
-`close-check` 是最终硬门禁，不只读状态字段。它先跑 `validate`，再确认无 open D、顶部和切片拷问门禁已收口、所有切片为终态、`split` 的替代切片引用结构闭合、`skipped` 引用结构闭合的 decided D、done 切片写 `Commit：已提交` 且 `split` / `skipped` 省略 `Commit`，并依赖 `validate` 检查 done 切片四 verdict 没有 `failed` / `cannot-verify-from-package` / `critical` 阻塞项。
+`close-check` 仅在整个 plan 准备正式关闭时调用，不作为单片完成步骤。它是最终硬门禁，不只读状态字段：先跑 `validate`，再确认无 open D、顶部和切片拷问门禁已收口、所有切片均处于现有门禁接受的 `done / split / skipped` 关闭状态、`split` 的替代切片引用结构闭合、`skipped` 引用结构闭合的 decided D、done 切片写 `Commit：已提交` 且 `split` / `skipped` 省略 `Commit`，并依赖 `validate` 检查 done 切片四 verdict 没有 `failed` / `cannot-verify-from-package` / `critical` 阻塞项。
 
 `close-check` 还会检查格式闭环：
 
@@ -455,7 +457,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs close-check dev-plans/<date-slu
 - 每个 done slice 必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确；最终 claim 状态必须是 `verified` 或 `waived`。
 - 每个 done + `AI Review：passed` slice 必须有非空 task brief、`conclusion: ready-for-review` 的 task report、非空 review-package 和合法 Review Range v2；JSON report 必须 schema valid。`close-check` 使用已记录 commit、父子关系、文件集合和 task report hash 收口，不读取当前 HEAD 重建范围。当前 A* 必须是覆盖 `baseCommit..headCommit` 的 `full`；发生过 repair 时，缺少最终累计 full、旧 finding 未被唯一裁决或当前 `openFindings` 非空都拒收。
 - `split` / `skipped` 不要求 done slice 的实现证据；它们分别以 `替代切片` / `跳过依据` 作为拒收门禁。脚本只检查 `替代切片` ID 非重复、真实存在且为父片后代，不判断这些切片是否完整覆盖父片任务与验收；覆盖关系由拆分拷问 / 计划审查判断。
-- `项目规则审查：required` 时，必须有唯一安全的当前 runId 选择器和当前最终 A*。`close-check` 从当前 sliced-dev skill root 安全解析受信任 rules-review validator，对当前仓库 `.rules-review-tmp/<runId>` 重跑真实 `--mode run`，不执行 A* 的 validation 展示命令；它拒绝不安全、缺失、symlink / 逃逸路径、validator / finalReview 失败，并比较真实 runId、`reviewSelectedRuleRefs`、`reviewNotApplicable.ruleRefs`、recommendation、三个计数和仅 SHOULD recommendation 存在的 `shouldSetHash`。真实 dispatch 必须是 v8，满足 `baseCommit = sliced-dev baseCommit`、`boundCommit = headCommit`、`baseTree = baseCommit^{tree}`、`targetTree = headCommit^{tree}`、`excludedFiles = []`、`excludedRuleRefs = []`；`inputSnapshot`、changed units 及当前全部 `reviewItems` 的 shard 覆盖必须与累计 commit 范围和 rule package 一致。`dispatch.ruleSet.selectedRuleRefs` 是最终范围，shards / `finalReview` 是结果；非空 catalog 的空 selected 仍须完成 zero-item run。每个 TARGET 必须是独立 run，不接受旧 package 或结果继承字段，也不要求最终范围等于 execution-time `selectedRuleIds`。第四 verdict 默认必须等于 A* raw verdict；只有默认 SHOULD 完整 A/D/Evidence/token/confirmation 链可单独通过。`项目规则审查：not-applicable` 只允许 active catalog 真实为空，此时第四 verdict 必须为 `not-applicable`、不得有选择器且 `selectedRuleIds` 必须为空；`blocked` 阻塞 `上下文预检：ready`、`AI Review：passed` 和 `状态：done`。机器不判断 BASE 选择、execution-time rule ID 是否该选、分类 reason 是否真实、selected 义务是否已充分进入执行契约、最终不适用说明是否真实、finding 是否正确、证据是否充分或用户确认是否真实。
+- `项目规则审查：required` 时，必须有唯一安全的当前 runId 选择器和当前最终 A*。`close-check` 从当前 sliced-dev skill root 安全解析受信任 rules-review validator，对当前最终 TARGET 的 fresh full 重跑真实 `--mode run`；若当前 A* 是合法一跳 repair verification，则同时读取并重验其直接引用的前序 full。它不读取最终 proof closure 未引用的其它历史规则 A* / run。对被验证的 full，它拒绝不安全、缺失、symlink / 逃逸路径、validator / finalReview 失败，并比较真实 runId、`reviewSelectedRuleRefs`、`reviewNotApplicable.ruleRefs`、recommendation、三个计数和仅 SHOULD recommendation 存在的 `shouldSetHash`。真实 dispatch 必须是 v8，满足 `baseCommit = sliced-dev baseCommit`、`boundCommit = headCommit`（repair 基线为其直接前序 TARGET）、`baseTree = baseCommit^{tree}`、`targetTree = boundCommit^{tree}`、`excludedFiles = []`、`excludedRuleRefs = []`；`inputSnapshot`、changed units 及对应全部 `reviewItems` 的 shard 覆盖必须与累计 commit 范围和 rule package 一致。`dispatch.ruleSet.selectedRuleRefs` 是最终范围，shards / `finalReview` 是结果；非空 catalog 的空 selected 仍须完成 zero-item run。不接受 recursive repair chain、旧 package 或结果继承字段，也不要求最终范围等于 execution-time `selectedRuleIds`。第四 verdict 默认必须等于 A* raw verdict；只有默认 SHOULD 完整 A/D/Evidence/token/confirmation 链可单独通过。`项目规则审查：not-applicable` 只允许 active catalog 真实为空，此时第四 verdict 必须为 `not-applicable`、不得有选择器且 `selectedRuleIds` 必须为空；`blocked` 阻塞 `上下文预检：ready`、`AI Review：passed` 和 `状态：done`。机器不判断 BASE 选择、execution-time rule ID 是否该选、分类 reason 是否真实、selected 义务是否已充分进入执行契约、最终不适用说明是否真实、finding 是否正确、证据是否充分、验收是否仍然有效或用户确认是否真实。
 
 `close-check` 只信 `claims/<S-id>.json` 的终态，不从 task report 推断 claim 完成。`waived` 只接受 `risk` / `scope` claim 且必须有非占位 note；P0/P1 `behavior`、`scope`、`validation` claim 写 `verified` 时必须有 `ai-statement` 之外的证据。
 - `AI Review：skipped` 只允许 A 类切片，并且必须在 `AI Review` 字段中写明跳过理由。
@@ -517,7 +519,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs whole-review-package dev-plans/
   ```
 
   `record-commit` 要求 `headCommit^ == previousHeadCommit`、commit diff 路径等于 `iterationFiles`，且 `iterationFiles == taskReport.changedFiles`。返修只追加 commit，禁止重写旧提交。
-- `record-commit` 成功建立新 `headCommit` 是 TARGET 迁移点：旧当前 General selector / 三 verdict、`用户验收：passed`、项目规则 verdict / runId 立即失效；`用户验收：issues` 保留反馈，`skipped` 保留 waiver，历史 A* 继续存在。命令失败或 TARGET 未变时不清除 proof。若 range 与状态写回之间中断，validator 拒绝旧 proof，重新运行 `record-commit` 先完成迁移恢复。
+- `record-commit` 成功建立新 `headCommit` 是 TARGET 迁移点：旧当前 General selector / 三 verdict、项目规则 verdict / runId 立即失效，`用户验收：passed` 机械重置为 `pending`；`用户验收：issues` 保留反馈，`skipped` 保留 waiver，历史 A* 继续存在。命令失败或 TARGET 未变时不清除 proof。若 range 与状态写回之间中断，validator 拒绝旧 proof，重新运行 `record-commit` 先完成迁移恢复。当前最终 General clean 后是否复用原验收，按本文件「用户验收」语义判断。
 - 无代码轮不创建空 commit；`pre-commit-check` 要求 task-owned 集合为空，`record-commit` 记录 `previousHeadCommit == headCommit` 和空 `iterationFiles`。
 - Review Range v2 记录成功后才生成 review package。`项目规则审查：required` 时使用 `--target-commit <headCommit>` 自动精确绑定，不做后置绑定。
 - 每轮提交后复核 `git status --short -uall`，确认未提交内容仅为当前 `dev-plans` 产物、已记录基线脏改动或下一片待处理内容。
