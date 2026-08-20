@@ -1,5 +1,5 @@
 ---
-name: routing-development-issues
+name: route-problem
 description: 当开发执行中发现代码、拆片、验证、Spec、需求或契约分叉、项目规则问题，需要判断修正责任归属，或有人要求“顺手修掉”“直接继续”时使用。
 ---
 
