@@ -833,6 +833,17 @@ const TEMPLATE_PLACEHOLDER_TOKENS = new Set([
   '<原因>',
   '<evidence>',
   '<用户原话>',
+  '<非占位原因>',
+  '<同一原因>',
+  '<用户拒收原因>',
+  '<用户反馈>',
+  '<失败项目规则审查 A*>',
+  '<失败 A*>',
+  '<reason>',
+  '<共同 reason>',
+  '<非占位摘要>',
+  '<人工逐项记录当前每个剩余问题的具体内容、风险和接受决定>',
+  '<用户原话或可定位会话引用>',
   '<逐项结论>',
   '<date-slug>',
   '<S-id>',
@@ -1758,7 +1769,7 @@ function replaceSliceHeaderField(sliceBody, name, value) {
   return `${updatedHeader}${sliceBody.slice(header.length)}`;
 }
 
-function invalidateCurrentTargetProof(plan, sliceId, projectRuleAuditId) {
+function invalidateCurrentTargetProof(plan, sliceId, projectRuleAuditId, previousTarget) {
   return replacePlanSlice(plan, sliceId, (sliceBody) => {
     let updated = removeMarkdownHeadingSection(sliceBody, 4, SLICE_AI_REVIEW_VERDICTS_SECTION);
     updated = replaceSliceHeaderField(
@@ -1770,7 +1781,11 @@ function invalidateCurrentTargetProof(plan, sliceId, projectRuleAuditId) {
     );
     const acceptance = getField(getSliceHeaderBlock(updated), '用户验收');
     if (getStatusPrefix(acceptance) === 'passed') {
-      updated = replaceSliceHeaderField(updated, '用户验收', 'pending');
+      updated = replaceSliceHeaderField(
+        updated,
+        '用户验收',
+        `pending（前序 TARGET ${previousTarget} 的用户验收为 ${acceptance}）`,
+      );
     }
     return `${updated.trimEnd()}\n\n`;
   });
@@ -2428,7 +2443,12 @@ async function recoverInterruptedTargetMigration(planDir, sliceId) {
   await validateStoredReviewRange(planDir, sliceId);
   await atomicWriteText(
     path.join(planDir, 'plan.md'),
-    invalidateCurrentTargetProof(plan, sliceId, getFailedProjectRuleAuditId(slice.body)),
+    invalidateCurrentTargetProof(
+      plan,
+      sliceId,
+      getFailedProjectRuleAuditId(slice.body),
+      range.previousHeadCommit,
+    ),
   );
   return { rangePath, range };
 }
@@ -2489,6 +2509,7 @@ async function recordCommit(planDir, sliceId) {
         plan,
         sliceId,
         getFailedProjectRuleAuditId(currentSlice?.body ?? ''),
+        previousHeadCommit,
       ),
     };
   }

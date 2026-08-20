@@ -3242,7 +3242,22 @@ test('validate rejects user acceptance issues without non-placeholder reason', a
     await writeValidExecutingPlan(planDir);
     const planPath = path.join(planDir, 'plan.md');
     const plan = await fs.readFile(planPath, 'utf8');
-    for (const userAcceptance of ['issues', 'issues（<原因>）', 'issues（<evidence>）']) {
+    for (const userAcceptance of [
+      'issues',
+      'issues（<原因>）',
+      'issues（<evidence>）',
+      'issues（<非占位原因>）',
+      'issues（<同一原因>）',
+      'issues（<用户拒收原因>）',
+      'issues（<用户反馈>）',
+      'issues（<失败项目规则审查 A*>）',
+      'issues（<失败 A*>）',
+      'issues（<reason>）',
+      'issues（<共同 reason>）',
+      'issues（<非占位摘要>）',
+      'issues（<人工逐项记录当前每个剩余问题的具体内容、风险和接受决定>）',
+      'issues（<用户原话或可定位会话引用>）',
+    ]) {
       await fs.writeFile(
         planPath,
         plan.replace('- AI Review：pending', `- AI Review：pending\n- 用户验收：${userAcceptance}`),
@@ -5481,10 +5496,11 @@ test('validate 支持 General 前无 verdict、General 后三 verdict、最终�
   });
 });
 
-test('record-commit 失败保留 proof，成功建立新 TARGET 后失效当前 proof', async () => {
+test('record-commit 失败保留 proof，成功建立新 TARGET 后失效当前 proof 并保留验收 provenance', async () => {
   await withTempRepo(async () => {
     const planDir = path.join('dev-plans', '2026-06-10-target-proof-migration');
-    const previousRange = await establishCurrentCleanGeneral(planDir, { acceptance: 'passed' });
+    const priorAcceptance = 'passed（用户确认交互符合预期）';
+    const previousRange = await establishCurrentCleanGeneral(planDir, { acceptance: priorAcceptance });
     const planPath = path.join(planDir, 'plan.md');
     await fs.writeFile(
       planPath,
@@ -5518,7 +5534,9 @@ test('record-commit 失败保留 proof，成功建立新 TARGET 后失效当前 
     assert.equal(rangeAfter.previousHeadCommit, previousRange.headCommit);
     assert.doesNotMatch(planAfter, /#### AI Review 结论/);
     assert.match(planAfter, /- AI Review：pending/);
-    assert.match(planAfter, /- 用户验收：pending/);
+    assert.ok(planAfter.includes(
+      `- 用户验收：pending（前序 TARGET ${previousRange.headCommit} 的用户验收为 ${priorAcceptance}）`,
+    ));
     assert.match(await fs.readFile(path.join(planDir, 'audits.md'), 'utf8'), /### A2：S1 General Review v4/);
   });
 });
@@ -5608,7 +5626,9 @@ test('rules finding 的新 TARGET 以 project-rule-review-issues 直接进入累
 
     plan = await fs.readFile(planPath, 'utf8');
     assert.match(plan, /- AI Review：pending（project-rule-review-issues（A3））/);
-    assert.match(plan, /- 用户验收：pending/);
+    assert.ok(plan.includes(
+      `- 用户验收：pending（前序 TARGET ${previousRange.headCommit} 的用户验收为 passed）`,
+    ));
     assert.doesNotMatch(plan, /#### AI Review 结论/);
 
     const dispatchPath = path.join('.rules-review-tmp', runId, 'dispatch.json');

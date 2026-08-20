@@ -416,7 +416,7 @@ repair 中的新 finding 只能来自本轮 fix diff，统一写 `Origin=repair-
 
 用户不满意但不改变用户授权范围 / 验收口径时，写 `用户验收：issues（<非占位原因>）`、把 `AI Review` 重置为 `pending`，并进入本片有限修复循环；task brief 必须渲染该反馈。返工提交完成后，直接引用拒收前的 clean full，生成带 `reviewTrigger：user-acceptance-issues（<同一原因>）` 的累计 full package；反馈在该轮 General clean 前保留，通过后转为 `用户验收：pending`。用户反馈改变产品行为、验收口径、公共契约、非目标或令风险升为 C 时，不直接修，转 `D* open` 分叉并回到分叉处理协议。
 
-其它新 TARGET 会把旧 `passed` 机械重置为 `pending`，但 `skipped` 始终作为切片级 waiver 保留。当前最终 General clean 后，若现有 General Review 的 Range / claims / evidence 能明确证明原验收 TARGET 到当前 TARGET 的相关 delta 没有改变该验收覆盖的用户可感知行为、acceptance criteria / scope，也未引入新的用户判断，controller 可复用原 `passed`，但必须同时引用原用户验收与当前 General 证据，不得伪装成用户对新 TARGET 的再次确认；证据不足或验收相关语义变化时保持 `pending` 并重新验收。`test-only` 既非必要条件也非充分条件，不得为了取得复用资格额外创建一轮 General Review。
+其它新 TARGET 会把旧 `passed` 机械重置为 `pending`，并在字段说明中保留直接前序 TARGET 与原验收值；`skipped` 始终作为切片级 waiver 保留。当前最终 General clean 后，若现有 General Review 的 Range / claims / evidence 能明确证明原验收 TARGET 到当前 TARGET 的相关 delta 没有改变该验收覆盖的用户可感知行为、acceptance criteria / scope，也未引入新的用户判断，controller 可复用原 `passed`，但必须同时引用字段中保留的原用户验收与当前 General 证据，不得伪装成用户对新 TARGET 的再次确认；证据不足或验收相关语义变化时保持 `pending` 并重新验收。`test-only` 既非必要条件也非充分条件，不得为了取得复用资格额外创建一轮 General Review。
 
 ## 有限修复循环
 
@@ -519,7 +519,7 @@ node <sliced-dev-skill-dir>/scripts/dev-plan.mjs whole-review-package dev-plans/
   ```
 
   `record-commit` 要求 `headCommit^ == previousHeadCommit`、commit diff 路径等于 `iterationFiles`，且 `iterationFiles == taskReport.changedFiles`。返修只追加 commit，禁止重写旧提交。
-- `record-commit` 成功建立新 `headCommit` 是 TARGET 迁移点：旧当前 General selector / 三 verdict、项目规则 verdict / runId 立即失效，`用户验收：passed` 机械重置为 `pending`；`用户验收：issues` 保留反馈，`skipped` 保留 waiver，历史 A* 继续存在。命令失败或 TARGET 未变时不清除 proof。若 range 与状态写回之间中断，validator 拒绝旧 proof，重新运行 `record-commit` 先完成迁移恢复。当前最终 General clean 后是否复用原验收，按本文件「用户验收」语义判断。
+- `record-commit` 成功建立新 `headCommit` 是 TARGET 迁移点：旧当前 General selector / 三 verdict、项目规则 verdict / runId 立即失效，`用户验收：passed` 机械重置为 `pending`，并在字段说明中保留直接前序 TARGET 与原验收值；`用户验收：issues` 保留反馈，`skipped` 保留 waiver，历史 A* 继续存在。命令失败或 TARGET 未变时不清除 proof。若 range 与状态写回之间中断，validator 拒绝旧 proof，重新运行 `record-commit` 先完成迁移恢复。当前最终 General clean 后是否复用原验收，按本文件「用户验收」语义判断。
 - 无代码轮不创建空 commit；`pre-commit-check` 要求 task-owned 集合为空，`record-commit` 记录 `previousHeadCommit == headCommit` 和空 `iterationFiles`。
 - Review Range v2 记录成功后才生成 review package。`项目规则审查：required` 时使用 `--target-commit <headCommit>` 自动精确绑定，不做后置绑定。
 - 每轮提交后复核 `git status --short -uall`，确认未提交内容仅为当前 `dev-plans` 产物、已记录基线脏改动或下一片待处理内容。
