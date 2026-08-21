@@ -10,7 +10,7 @@
 | [`checkpoint`](skills/checkpoint/SKILL.md) | 显式保存当前讨论状态，供跨会话、工具或智能体继续讨论。 |
 | [`deliver-task`](skills/deliver-task/SKILL.md) | 在隔离 workspace 中完成一个边界明确的开发任务并返回可审计交付结果。 |
 | [`integrate-delivery`](skills/integrate-delivery/SKILL.md) | 将 `deliver-task` 的固定交付结果集成到本地目标分支，并完成经授权的 branch/worktree 收尾。 |
-| [`route-problem`](skills/route-problem/SKILL.md) | 判断开发问题的唯一责任归属，推荐下一步并停止当前执行。 |
+| [`whats-next`](skills/whats-next/SKILL.md) | 在开发中不知道下一步做什么或发现跨层问题时，判断唯一责任归属并停止。 |
 | [`rule-steward`](skills/rule-steward/SKILL.md) | 初始化和维护 `.agents/rules/` 项目规则协议。 |
 | [`rules-review`](skills/rules-review/SKILL.md) | 使用项目规则审查已提交的 Git commit。 |
 | [`sliced-dev`](skills/sliced-dev/SKILL.md) | 将中大型目标拆成多个任务，委托 `deliver-task` 并编排交付结果。 |
