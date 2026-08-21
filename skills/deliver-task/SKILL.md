@@ -152,4 +152,4 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs close-check <taskDir>
 
 机器只检查 schema、task/execution/target binding、Git target、路径边界、引用存在和明确终态；不判断实现正确性、证据强度、reviewer 判断、验收理由或规则语义。命令细节见 [SCRIPTS.md](SCRIPTS.md)。
 
-最终只向 upstream 返回：result、`delivery.json` 路径、target 摘要、task workspace 路径与 branch identity、关键 evidence refs 和需要 upstream 决定的下一步。不要替 upstream 写状态，也不要自动清理或集成 task worktree。
+最终只向 upstream 返回：result、`delivery.json` 路径、target 摘要、task workspace 路径与 branch identity、关键 evidence refs 和需要 upstream 决定的下一步。不要替 upstream 写状态，也不要自动清理或集成 task worktree；需要处理已交付结果时，交给 `$integrate-delivery`。

@@ -1,0 +1,4 @@
+interface:
+  display_name: "集成交付结果"
+  short_description: "集成 deliver-task 的固定交付结果并安全清理隔离 worktree"
+  default_prompt: "使用 $integrate-delivery 集成这个已交付任务并完成经授权的 workspace 收尾。"
