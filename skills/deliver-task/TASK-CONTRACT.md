@@ -90,7 +90,8 @@ task identity。旧 task identity 下的证据不会自动证明新合同；cont
 - `taskDir` 必须等于 `<workspacePath>/.dev-task`；locator 不能指向另一个 workspace。
 - 首次绑定的 provided workspace 必须属于 `<repo>` 的同一 Git repository、
   `HEAD == task.baseCommit`、业务区干净且不存在旧 `.dev-task/`。默认模式总是从该 base
-  在 `<repo>/.worktrees/` 下创建 worktree。
+  在 `<repo>/.worktrees/` 下创建 worktree；创建前要求 `.worktrees/` 已被 Git ignore，脚本不修改
+  ignore 配置。
 - 后续 `HEAD` 可以随着当前任务提交向前移动，但必须保持 base 祖先关系和 branch identity。
 - locator 绑定当前 task identity，却不进入 task、execution 或 target hash；绝对路径不是
   可移植交付 identity，也不形成 workspace revision、历史链或状态机。

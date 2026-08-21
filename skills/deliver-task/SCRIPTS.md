@@ -56,7 +56,8 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
 - 调用方优先使用 caller 已提供、满足边界的当前 harness linked worktree 或 harness 原生机制
   建立的 workspace，并通过 `--workspace` 显式绑定；三者都不可用时才进入默认模式。
 - 默认模式从 `task.baseCommit` 在 `<repo>/.worktrees/` 下创建 Git worktree；branch 固定为
-  `deliver-task/<taskId>-r<revision>-<taskHash前12位>`。
+  `deliver-task/<taskId>-r<revision>-<taskHash前12位>`。创建前要求 `.worktrees/` 已被 Git
+  ignore；脚本不修改 ignore 配置，未命中时 fail closed。
 - `.dev-task/` 与业务代码共享 task worktree 生命周期，包含 `task.json`、`claims.json`、
   `audits.md`、`artifacts/workspace.json` 和内容为 `*` 的 `.gitignore`；`execution.json`
   只在 preflight 后由 controller 创建。
@@ -95,6 +96,7 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
 - JSON exact schema、枚举、task hash 和 execution hash；
 - workspace locator 的 exact schema、task/base/branch 绑定、canonical Git root、初始 clean 状态和
   base 祖先关系；
+- 默认 fallback 的 `.worktrees/` 是否已被 Git ignore；
 - Git commit identity、祖先关系、worktree snapshot hash；
 - execution allowlist、两层 forbidden path 和 `.dev-task/` 写边界；
 - claim 明确终态与 evidence ref 存在；

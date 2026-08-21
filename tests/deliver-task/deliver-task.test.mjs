@@ -34,15 +34,21 @@ async function createFixture({
   commitPolicy = 'allowed',
   caller = { kind: 'direct' },
   acceptancePolicy = 'not-required',
+  ignoreWorktrees = true,
 } = {}) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'deliver-task-test-')));
   await mkdir(path.join(root, 'src'), { recursive: true });
   await mkdir(path.join(root, 'test'), { recursive: true });
   await writeFile(path.join(root, 'src/slug.mjs'), "export const slug = (value) => value.trim().toLowerCase().replaceAll(' ', '-');\n");
   await writeFile(path.join(root, 'test/slug.test.mjs'), '// fixture\n');
-  await writeFile(path.join(root, '.gitignore'), '.worktrees/\n');
+  if (ignoreWorktrees) await writeFile(path.join(root, '.gitignore'), '.worktrees/\n');
   git(root, ['init', '-q']);
-  git(root, ['add', '.gitignore', 'src/slug.mjs', 'test/slug.test.mjs']);
+  git(root, [
+    'add',
+    ...(ignoreWorktrees ? ['.gitignore'] : []),
+    'src/slug.mjs',
+    'test/slug.test.mjs',
+  ]);
   git(root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '初始基线']);
   const baseCommit = git(root, ['rev-parse', 'HEAD']);
   const task = {
@@ -265,7 +271,6 @@ test('start 是唯一 bootstrap，并在 task workspace 内原子初始化固定
     'workspacePath',
   ]);
   assert.equal(output.kind, 'git-worktree');
-  assert.equal(path.dirname(output.workspacePath), path.join(fixture.root, '.worktrees'));
   assert.equal(output.baseCommit, fixture.baseCommit);
   assert.equal(output.task.taskId, fixture.task.taskId);
   assert.equal(output.task.revision, 1);
@@ -320,6 +325,27 @@ test('默认 start 不触碰 dirty caller，只从 baseCommit 建立 task worksp
   await assert.rejects(access(path.join(fixture.root, 'dev-tasks')));
   assert.equal(git(fixture.root, ['status', '--porcelain']), '?? background-notes.md');
   assert.equal(output.taskDir, path.join(output.workspacePath, '.dev-task'));
+});
+
+test('默认 start 在 .worktrees 未被 ignore 时 fail closed 且不创建 worktree', async () => {
+  const fixture = await createFixture({ ignoreWorktrees: false });
+  const beforeWorktrees = git(fixture.root, ['worktree', 'list', '--porcelain']);
+  const beforeBranches = git(fixture.root, [
+    'for-each-ref',
+    '--format=%(refname)',
+    'refs/heads/deliver-task',
+  ]);
+
+  const result = runStart(fixture);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /fallback requires.*\.worktrees.*ignored/i);
+  assert.equal(git(fixture.root, ['worktree', 'list', '--porcelain']), beforeWorktrees);
+  assert.equal(
+    git(fixture.root, ['for-each-ref', '--format=%(refname)', 'refs/heads/deliver-task']),
+    beforeBranches,
+  );
+  await assert.rejects(access(path.join(fixture.root, '.worktrees')));
 });
 
 test('start 在 mutation 前拒绝非法 repo、stdin、exact schema 和非完整 baseCommit', async () => {

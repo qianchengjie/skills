@@ -12,7 +12,8 @@ isolated workspace、满足 base/clean/task-owned 条件的当前 harness linked
 schema、完整 `baseCommit`、repo 和 provided workspace，再原子初始化
 `<task-worktree>/.dev-task/`。只有命令返回的 `workspacePath` 是本任务的业务执行根目录，返回的
 `taskDir` 是后续证明状态入口。不得绕过可用的 harness 原生机制；没有可绑定的宿主 workspace
-时，默认模式才从 base 在 `<repo>/.worktrees/` 下创建 worktree。
+时，默认模式才从 base 在 `<repo>/.worktrees/` 下创建 worktree。创建前要求 `.worktrees/` 已被
+Git ignore；脚本不修改 ignore 配置，未命中时 fail closed。
 
 exact identity 且 `.dev-task/` 完整时幂等返回，不重写证据。同 revision 合同漂移、已有
 branch/worktree 但证明缺失或不完整、provided workspace 已有旧 identity 时 fail closed；不能从

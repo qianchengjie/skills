@@ -435,6 +435,19 @@ function gitRefExists(root, reference) {
   }
 }
 
+function isIgnoredRepoPath(root, repoPath) {
+  try {
+    execFileSync('git', ['check-ignore', '--quiet', '--', repoPath], {
+      cwd: root,
+      stdio: 'ignore',
+    });
+    return true;
+  } catch (error) {
+    if (error.status === 1) return false;
+    throw gateError(`git check-ignore failed for ${repoPath}`);
+  }
+}
+
 function worktreePathForBranch(root, branch) {
   for (const worktree of registeredWorktrees(root)) {
     if (worktree.branch === branch) {
@@ -704,6 +717,9 @@ async function startWithManagedWorkspace(repoRoot, task) {
   const shortBranch = workspaceBranch(task);
   const branch = `refs/heads/${shortBranch}`;
 
+  if (!isIgnoredRepoPath(repoRoot, '.worktrees/')) {
+    throw gateError('managed workspace fallback requires .worktrees/ to be ignored');
+  }
   const workspaceParent = path.join(repoRoot, '.worktrees');
   await fs.mkdir(workspaceParent, { recursive: true });
   const workspacePath = await fs.mkdtemp(
