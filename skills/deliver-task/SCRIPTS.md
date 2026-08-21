@@ -55,7 +55,7 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
 
 - 调用方优先使用 caller 已提供、满足边界的当前 harness linked worktree 或 harness 原生机制
   建立的 workspace，并通过 `--workspace` 显式绑定；三者都不可用时才进入默认模式。
-- 默认模式从 `task.baseCommit` 在系统临时目录创建 Git worktree；branch 固定为
+- 默认模式从 `task.baseCommit` 在 `<repo>/.worktrees/` 下创建 Git worktree；branch 固定为
   `deliver-task/<taskId>-r<revision>-<taskHash前12位>`。
 - `.dev-task/` 与业务代码共享 task worktree 生命周期，包含 `task.json`、`claims.json`、
   `audits.md`、`artifacts/workspace.json` 和内容为 `*` 的 `.gitignore`；`execution.json`

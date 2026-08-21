@@ -40,8 +40,9 @@ async function createFixture({
   await mkdir(path.join(root, 'test'), { recursive: true });
   await writeFile(path.join(root, 'src/slug.mjs'), "export const slug = (value) => value.trim().toLowerCase().replaceAll(' ', '-');\n");
   await writeFile(path.join(root, 'test/slug.test.mjs'), '// fixture\n');
+  await writeFile(path.join(root, '.gitignore'), '.worktrees/\n');
   git(root, ['init', '-q']);
-  git(root, ['add', 'src/slug.mjs', 'test/slug.test.mjs']);
+  git(root, ['add', '.gitignore', 'src/slug.mjs', 'test/slug.test.mjs']);
   git(root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '初始基线']);
   const baseCommit = git(root, ['rev-parse', 'HEAD']);
   const task = {
@@ -264,6 +265,7 @@ test('start 是唯一 bootstrap，并在 task workspace 内原子初始化固定
     'workspacePath',
   ]);
   assert.equal(output.kind, 'git-worktree');
+  assert.equal(path.dirname(output.workspacePath), path.join(fixture.root, '.worktrees'));
   assert.equal(output.baseCommit, fixture.baseCommit);
   assert.equal(output.task.taskId, fixture.task.taskId);
   assert.equal(output.task.revision, 1);

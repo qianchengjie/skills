@@ -50,7 +50,7 @@ caller、当前 linked worktree 或运行环境已经提供 isolated workspace �
 generate-task-contract | node <deliver-task-skill-dir>/scripts/deliver-task.mjs start <repo> - --workspace <workspacePath>
 ```
 
-无 `--workspace` 时，脚本从 `task.baseCommit` 在系统临时目录创建 task-scoped Git worktree。
+无 `--workspace` 时，脚本从 `task.baseCommit` 在 `<repo>/.worktrees/` 下创建 task-scoped Git worktree。
 `start` 固定返回 task binding、`taskDir`、`workspacePath`、`kind`、`branch` 和 `baseCommit`；
 其中 `taskDir == <workspacePath>/.dev-task`，`workspacePath` 是后续 preflight、实现、验证、提交、
 review 和收口的唯一业务工作目录。不得继续从 caller workspace 读取业务代码。

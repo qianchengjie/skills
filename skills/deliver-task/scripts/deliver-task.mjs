@@ -3,7 +3,6 @@
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 
 const TASK_SCHEMA = 'deliver-task.task.v1';
@@ -705,8 +704,10 @@ async function startWithManagedWorkspace(repoRoot, task) {
   const shortBranch = workspaceBranch(task);
   const branch = `refs/heads/${shortBranch}`;
 
+  const workspaceParent = path.join(repoRoot, '.worktrees');
+  await fs.mkdir(workspaceParent, { recursive: true });
   const workspacePath = await fs.mkdtemp(
-    path.join(os.tmpdir(), `deliver-task-${task.taskId}-r${task.revision}-`),
+    path.join(workspaceParent, `deliver-task-${task.taskId}-r${task.revision}-`),
   );
   try {
     git(repoRoot, ['worktree', 'add', '-q', '-b', shortBranch, workspacePath, task.baseCommit]);
