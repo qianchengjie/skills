@@ -441,19 +441,36 @@ async function snapshotTarget(context, task, execution) {
   };
 }
 
-function validateTarget(target, task, execution) {
-  if (!isPlainObject(target)) throw gateError('delivery.target must be an object');
+function validateTargetIdentity(target, label) {
+  if (!isPlainObject(target)) throw gateError(`${label} must be an object`);
   if (target.kind === 'commit-range') {
-    assertExactObject(target, ['kind', 'baseCommit', 'headCommit', 'executionHash'], [], 'delivery.target');
-    if (task.commitPolicy === 'forbidden') throw gateError('commitPolicy forbidden cannot use a commit-range target');
+    assertExactObject(target, ['kind', 'baseCommit', 'headCommit', 'executionHash'], [], label);
+    if (!GIT_OID_RE.test(target.headCommit || '')) {
+      throw gateError(`${label}.headCommit must be a full Git commit OID`);
+    }
   } else if (target.kind === 'worktree') {
-    assertExactObject(target, ['kind', 'baseCommit', 'snapshotHash', 'executionHash'], [], 'delivery.target');
-    if (task.commitPolicy === 'required') throw gateError('commitPolicy required cannot use a worktree target');
-    if (!SHA256_RE.test(target.snapshotHash || '')) throw gateError('delivery.target.snapshotHash must be sha256');
+    assertExactObject(target, ['kind', 'baseCommit', 'snapshotHash', 'executionHash'], [], label);
+    if (!SHA256_RE.test(target.snapshotHash || '')) throw gateError(`${label}.snapshotHash must be sha256`);
   } else if (target.kind === 'no-change') {
-    assertExactObject(target, ['kind', 'baseCommit', 'executionHash'], [], 'delivery.target');
+    assertExactObject(target, ['kind', 'baseCommit', 'executionHash'], [], label);
   } else {
-    throw gateError('delivery.target.kind must be commit-range, worktree, or no-change');
+    throw gateError(`${label}.kind must be commit-range, worktree, or no-change`);
+  }
+  if (!GIT_OID_RE.test(target.baseCommit || '')) {
+    throw gateError(`${label}.baseCommit must be a full Git commit OID`);
+  }
+  if (!SHA256_RE.test(target.executionHash || '')) {
+    throw gateError(`${label}.executionHash must be sha256`);
+  }
+}
+
+function validateTarget(target, task, execution) {
+  validateTargetIdentity(target, 'delivery.target');
+  if (target.kind === 'commit-range' && task.commitPolicy === 'forbidden') {
+    throw gateError('commitPolicy forbidden cannot use a commit-range target');
+  }
+  if (target.kind === 'worktree' && task.commitPolicy === 'required') {
+    throw gateError('commitPolicy required cannot use a worktree target');
   }
   if (target.executionHash !== executionHash(execution)) {
     throw gateError('delivery.target has stale execution binding');
@@ -662,6 +679,7 @@ function validateGeneralBinding(record, task, execution, target, label) {
 function validateAcceptanceShape(record, label) {
   assertExactObject(record, ['task', 'target', 'status', 'evidenceRefs'], [], label);
   validateBindingShape(record.task, `${label}.task`);
+  validateTargetIdentity(record.target, `${label}.target`);
   if (!ACCEPTANCE_RESULTS.has(record.status)) {
     throw gateError(`${label}.status must be one of ${[...ACCEPTANCE_RESULTS].join(', ')}`);
   }

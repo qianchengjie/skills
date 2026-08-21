@@ -528,6 +528,62 @@ test('同一 target 一旦有 rejected acceptance 就不能复用旧 passed 交�
   assert.match(result.stderr, /target.*rejected acceptance|acceptance.*rejected/i);
 });
 
+test('rejected acceptance 的 target identity 缺字段时 fail closed', async () => {
+  const fixture = await createFixture({ acceptancePolicy: 'required' });
+  await initTask(fixture);
+  await writeExecution(fixture);
+  const target = await snapshotTarget(fixture);
+  const generalReview = await appendGeneralReview(fixture, target);
+  const passed = await appendAcceptance(fixture, target, 'passed', { anchor: 'A3' });
+  await appendAcceptance(
+    fixture,
+    { kind: target.kind, baseCommit: target.baseCommit },
+    'rejected',
+    { anchor: 'A4' },
+  );
+  const hash = await taskHash(fixture);
+  await writeVerifiedClaims(fixture, hash);
+  await writeDelivery(fixture, { target, generalReview, acceptance: passed });
+
+  const result = run(fixture.root, ['validate-result', path.relative(fixture.root, fixture.taskDir)]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /acceptance.*target.*missing fields.*executionHash/i);
+});
+
+test('rejected acceptance 的 target identity 拒绝非规范 OID 和 hash', async () => {
+  const cases = [
+    ['baseCommit', (target) => ({ ...target, baseCommit: 'HEAD' })],
+    ['headCommit', (target) => ({
+      kind: 'commit-range',
+      baseCommit: target.baseCommit,
+      headCommit: 'HEAD',
+      executionHash: target.executionHash,
+    })],
+    ['executionHash', (target) => ({ ...target, executionHash: 'sha256:bad' })],
+  ];
+  for (const [field, malformedTarget] of cases) {
+    const fixture = await createFixture({ acceptancePolicy: 'required' });
+    await initTask(fixture);
+    await writeExecution(fixture);
+    const target = await snapshotTarget(fixture);
+    const generalReview = await appendGeneralReview(fixture, target);
+    const passed = await appendAcceptance(fixture, target, 'passed', { anchor: 'A3' });
+    await appendAcceptance(
+      fixture,
+      malformedTarget(target),
+      'rejected',
+      { anchor: 'A4' },
+    );
+    const hash = await taskHash(fixture);
+    await writeVerifiedClaims(fixture, hash);
+    await writeDelivery(fixture, { target, generalReview, acceptance: passed });
+
+    const result = run(fixture.root, ['validate-result', path.relative(fixture.root, fixture.taskDir)]);
+    assert.equal(result.status, 1, `${field} unexpectedly passed`);
+    assert.match(result.stderr, new RegExp(`acceptance.*target.*${field}`, 'i'));
+  }
+});
+
 test('delivery.json 保持薄结构并拒绝内嵌完整证据', async () => {
   const fixture = await createFixture();
   const { target } = await prepareDelivered(fixture);
