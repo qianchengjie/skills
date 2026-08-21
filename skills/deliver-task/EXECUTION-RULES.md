@@ -10,13 +10,13 @@
 - `commitPolicy`、`acceptancePolicy`、baseCommit 和 caller；
 - 当前内容是一个交付单元，或应回流的证据。
 
-路径和文件名只产生候选规则分类。读完必读代码并针对触发条件 focused search 后，才能闭合 execution-time 分类；无法用代码证据排除的候选归入 selected。selected rules 进入 task brief 和实现约束，但不替代最终 rules-review 的独立分类。
+路径和文件名只产生候选规则分类。读完必读代码并针对触发条件 focused search 后，才能闭合 execution-time 分类；无法用代码证据排除的候选归入 selected。selected rules 的可执行义务必须先进入现有验证、claims / evidence 要求和 task brief，冲突解决后才可结束 preflight；不能把 implementer 后续读取规则当作替代。不要为此新建平行义务状态机，也不要在 task 工件中复制规则正文。execution-time selected rules 不替代最终 rules-review 的独立分类。
 
 preflight 依据写入 `audits.md` 后，由 controller 创建当前 `execution.json`；caller 和 implementer 都不填写。用户没有提供文件清单时，controller 仍应根据真实代码、直接消费者、相邻测试和项目规则建立最小完整 allowlist。`execution.evidenceRefs` 引用本次判断依据，并运行 `validate-execution` 后才生成 brief。
 
 ## 实现派发
 
-controller 在 `artifacts/task-brief.md` 投影当前 task identity、execution identity、目标、验收、约束、preflight、claims、selected rules、允许/禁止路径和本轮修复依据。随后创建默认 blocked 的 task report，再派发 implementer。implementer 同时读取当前 `execution.json`，但不得修改它。
+controller 在 `artifacts/task-brief.md` 投影当前 task identity、execution identity、目标、验收、约束、preflight、claims、selected rules、允许/禁止路径和本轮修复依据。随后创建默认 blocked 的 task report，再派发 implementer。implementer 同时读取当前 `execution.json`，但不得修改它。每轮派发只以最新 task brief 为执行入口；需要新增业务取舍或返修约束时，先写回现有 task / execution / claims / audits 真源并重新生成 brief。`followup_task.message` 只要求重新读取该 brief、以其覆盖旧上下文，不承担第二份返修说明。
 
 实现返回后逐项核对：
 

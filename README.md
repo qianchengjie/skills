@@ -11,7 +11,7 @@
 | [`route-problem`](skills/route-problem/SKILL.md) | 判断开发问题的唯一责任归属，推荐下一步并停止当前执行。 |
 | [`rule-steward`](skills/rule-steward/SKILL.md) | 初始化和维护 `.agents/rules/` 项目规则协议。 |
 | [`rules-review`](skills/rules-review/SKILL.md) | 使用项目规则审查已提交的 Git commit。 |
-| [`sliced-dev`](skills/sliced-dev/SKILL.md) | 通过垂直薄片分步完成中大型编码任务。 |
+| [`sliced-dev`](skills/sliced-dev/SKILL.md) | 将中大型目标拆成多个任务，委托 `deliver-task` 并编排交付结果。 |
 | [`tell-me-first`](skills/tell-me-first/SKILL.md) | 在产生实际变更前简要说明目标并等待确认。 |
 
 ## 验证

@@ -1,138 +1,71 @@
 # 切片开发 · audits.md 文件
 
-本文只描述目录化完整档中的 `audits.md`。
+本文只描述 plan 根目录的 `audits.md`。每个 delivery task 另有自己的 `audits.md`，两者 owner 不同。
 
 ## 职责
 
-`audits.md` 承载长证据、审计矩阵、跨文件事实，以及每轮 General Review 和项目规则审查的结构化投影。普通过程日志不进入 A*。
+plan 根目录 A* 只保存：
 
-## ID 与状态
+- 计划一致性或拆分依据的长矩阵；
+- 跨切片调用链、交接和约束证据；
+- 某个下游结果对其它切片造成的计划级影响；
+- 整任务审查的计划级补充证据；
+- plan blocked 的恢复条件。
 
-- A* 使用全局顺序编号，例如 `A1`、`A27`；标题必须为 `### A27：<标题>`。
-- 不在 ID 中编码 owner、切片或层级。
-- 状态只允许 `pending / active / done`。
-- 每个 A* 必须有 `状态` 和 `关联`；General Review 当前 A* 还必须以 `done` 进入对应切片的 `关联项`。
+以下内容属于 `deliver-task`，不得复制到 plan 根目录 A*：
 
-## General Review v4
+- 单任务上下文预检、允许路径和 selected rules；
+- claims 与验证命令结果；
+- General full / repair、finding 和 target binding；
+- upstream acceptance 记录；
+- rules-review run / repair verification；
+- 单任务 residual risk 正文。
 
-每轮都新建 A*，物化本轮完整 `openFindings`，只通过 `previousReview` 引用直接上一轮。A* 不继承或复用更早结果。
+plan 通过 `delivery.json.evidenceRefs` 定位这些证据。只有它们产生跨切片影响时，才在 plan A* 记录影响结论并引用 task-owned ref，不复制正文。
 
-共同字段：
+## ID 与结构
+
+A* 使用全局顺序编号：
 
 ```markdown
-### A28：S2 General Review
+### A1：跨切片调用链核对
 
 - 状态：done
-- 关联：S2
-- reviewType：full
-- previousReview：无
-- baseCommit：<commit oid>
-- previousHeadCommit：<本轮开始时的 commit oid>
-- headCommit：<本轮结束时的 commit oid>
-- reviewPackageHash：sha256:<64 位小写十六进制>
+- 关联：S1 / S2
+
+<计划级证据正文>
 ```
 
-这些 commit 字段原样来自 Review Range v2。首次 full 使用 `baseCommit..headCommit`；repair 使用 `previousHeadCommit..headCommit`；repair 后最终 full 与直接前序 repair 保持相同 commit 三元组，通过 `reviewType` 和 `previousReview` 区分阶段。
+- 标题必须为 `### A<正整数>：<标题>`。
+- `状态` 只允许 `pending / active / done`。
+- `关联` 必须显式存在，可关联多个 slice 或写 `整体计划`。
+- 同一文件内 ID 不重复。
+- slice 的 `关联项` 引用 A 时，摘要状态必须与正文一致。
 
-clean full 通过后由用户验收拒收，或当前 TARGET 的项目规则 finding 触发返工时，新累计 full 在 `previousReview` 后额外写下列之一：
+## 下游回流引用
 
-```markdown
-- reviewTrigger：user-acceptance-issues（<用户拒收原因>）
-- reviewTrigger：project-rule-review-issues（<失败项目规则审查 A*>）
-```
-
-该字段只允许用于 `full`，直接前序必须是 verdict 全部 passed 且没有 open finding 的 clean full，当前 `previousHeadCommit` 必须等于该前序的 `headCommit`。`project-rule-review-issues` 还必须唯一引用直接前序 TARGET 的失败项目规则 A*；该 A* 与新 Review Range 只能被消费一次。字段和原因必须从 package、reviewer final summary 原样写回；其它 General Review 轮次省略。
-
-### full
-
-首次和最终累计审查都使用 `full`。它完整审查 `BASE → TARGET`，必须返回三个 verdict 和当前完整 `openFindings`：
+当 non-delivered result 影响计划时，可写：
 
 ```markdown
-#### General Review 结论
-
-| Verdict | Status | Severity | Evidence | Note |
-| --- | --- | --- | --- | --- |
-| 需求符合性 | passed | not-applicable | review-package / Claims | 需求证据充足 |
-| 切片边界 / 交接一致性 | passed | not-applicable | review-package / 本轮修复索引 | 边界与交接一致 |
-| 代码质量 / AI 污染检查 | passed | not-applicable | review-package / Git Diff | 未发现问题 |
-
-#### openFindings
-
-| Finding | Verdict | Severity | Origin | Evidence | Summary |
-| --- | --- | --- | --- | --- | --- |
-```
-
-如果首次 full 没有进入 repair，它同时就是最终 full。发生过 repair 后，最终三个 verdict 只能来自 repair 之后的新累计 full；最终 full 发现问题时重新进入 repair。用户验收拒收或项目规则 finding 返工后也重新执行累计 full，但用 `reviewTrigger` 说明它不是无触发器的跨提交 full。
-
-### repair
-
-repair 只审直接上一轮全部 open finding 和 `previousHeadCommit → headCommit` fix diff，不输出也不继承三个 verdict：
-
-```markdown
-#### Finding Results
-
-| Finding | Status | Evidence |
-| --- | --- | --- |
-| G1 | addressed | Git Diff / focused test |
-| G2 | not_addressed | 当前验证仍失败 |
-
-#### openFindings
-
-| Finding | Verdict | Severity | Origin | Evidence | Summary |
-| --- | --- | --- | --- | --- | --- |
-| G2 | 需求符合性 | major | initial | focused test | 问题仍存在 |
-| G3 | 代码质量 / AI 污染检查 | minor | repair-delta | Git Diff | fix diff 新引入问题 |
-```
-
-每个直接前序 finding 必须恰好出现一次 `addressed / not_addressed`。当前 `openFindings` 必须机械等于：旧 finding 中的 `not_addressed` 加 fix diff 新引入 finding；新 finding 使用 `repair-delta`。
-
-`G*` 在切片内稳定递增。`Verdict` 只能是三个 General Review verdict；`Severity` 只能是 `critical / major / minor`；`Origin` 只能是 `initial / repair-delta / late-discovered`。
-
-## 项目规则审查 A*
-
-当前最终 TARGET 默认使用全新 rules-review v8 run。最终 proof closure 只验证当前最终 TARGET 的 fresh full，或严格一跳“直接前序 full + 当前 repair verification”；除该组合证明直接引用的前序 full 外，其它历史规则 A* 只保留 provenance，不读取其 run、不重验有效性，也不参与关闭条件。A* 只投影对应证明的 fixed summary，不保存递归继承关系：
-
-```markdown
-### A29：S2 当前项目规则审查结论
+### A3：S2 需要重新拆片
 
 - 状态：done
-- 关联：S2
-- reviewSelectedRuleRefs: CORE-001, TEST-002
-- reviewNotApplicable：
-  - ruleRefs: UI-001, TYPE-001
-    reason: 最终 TARGET 不触发这些规则。
-    evidence: src/example.ts:1 已检查最终 TARGET。
-- rulesReviewRunId: <当前 TARGET 的 runId>
-- validation: <rules-review validate command> => passed
-- recommendation: <recommendation>
-- shouldSetHash: <仅 should_review_before_merge 时存在>
-- rulesReviewReport: <非 ready_for_merge 时为 .rules-review-tmp/<runId>/response.md>
-- issueSummary:
-  - mustFix: <非负整数>
-  - shouldFix: <非负整数>
-  - cannotVerify: <非负整数>
-- verdict: <passed / failed / cannot-verify-from-package>
-- severity: <critical / major / minor / not-applicable>
-- summary: <非占位摘要>
+- 关联：S2 / S2.1 / S2.2
+- 下游结果：needs-reslice
+- taskEvidence：deliveries/s2/audits.md#A4
+
+该结果使原 S2 无法作为一个独立交付单元；新增两个后代切片。
 ```
 
-`reviewSelectedRuleRefs` 必须机械等于当前 dispatch 的 `ruleSet.selectedRuleRefs`，是最终审查范围而不是审查结果；结果来自当前 shards / `finalReview`。`reviewNotApplicable` 的 `ruleRefs` 必须机械闭合到 `dispatch.ruleSet.globallyNotApplicableRuleRefs`，每组 `reason` / `evidence` 由 rule-reviewer 基于最终 TARGET 独立分类时产生。没有全局不适用规则时固定写：
+脚本只检查 A 的基本结构和 slice 关联表状态，不解析 `taskEvidence`，也不判断重新拆片是否合理。controller 必须先阅读真实 task evidence。
 
-```markdown
-- reviewNotApplicable：
-  - 无
-```
+## 整任务审查
 
-审查阶段不保留 `selectedRuleIds` 兼容别名。当前 run 的 `excludedRuleRefs` 必须为 `[]`；非空 active catalog 即使最终 `reviewSelectedRuleRefs` 为空，也必须保留真实 zero-item run 的 fixed summary。sliced-dev 只检查分类集合机械绑定及 `reason` / `evidence` 显式非空，不判断其语义真实性。
-
-规则 finding 产生新 TARGET 时，该失败 A* 保留 raw verdict 和 `rulesReviewReport`，并作为下一轮 `project-rule-review-issues（A*）` 的输入；不得伪造 General finding，也不得回写历史 preflight 的 execution-time `selectedRuleIds` / `notApplicable`。若 TARGET 未变，只修正 rules-review 协议或输入工件，则保留当前 General A* 和用户验收，只创建新的 rules-review run / A*。
-
-## 校验边界
-
-脚本只检查字段、枚举、直接引用、package hash、commit 父子关系、文件集合、finding 集合机械演进和终态闭合。脚本不判断 BASE 选择是否合理、finding 是否正确、证据是否充分或严重度是否恰当；这些由 controller / reviewer 负责并留下证据。
+整任务 reviewer 的固定五项 verdict 写回 `plan.md` 的 `## 整任务审查结论`，不再在 A* 建第二份 verdict 真源。A* 只在需要保留跨切片长证据或阻塞恢复条件时使用，并从 plan 结论的 Evidence 列引用。
 
 ## 维护规则
 
-- 除 General Review 快照和项目规则审查投影外，只有长证据才创建 A*。
-- A* 不是操作日志；会话问答、门禁推进和普通命令时序放在切片记录或会话回复中。
-- `plan.md` 当前前三个 verdict 只引用最终 full A*；repair A* 不能提供最终 verdict。历史 A* 永久保留，但 TARGET 迁移后不再充当当前 selector。
+- 普通过程日志、命令时序、用户寒暄和 agent 动作不建 A。
+- 能用一行稳定约束表达的结论放 `plan.md`；真正需要用户拍板的分叉放 `decisions.md`。
+- A* 一旦被引用不重写历史含义；新事实创建新 A。
+- 机器只检查 ID、字段、状态和直接引用闭合，不判断证据充分性、内容真实性或语义结论。

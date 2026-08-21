@@ -1,35 +1,39 @@
 # 切片开发 · plan.md 文件
 
-本文主要描述目录化完整档中的 `plan.md`，以及与切片状态绑定的结构化 sidecar。`decisions.md` 见 [DECISIONS-FILE.md](DECISIONS-FILE.md)，`audits.md` 见 [AUDITS-FILE.md](AUDITS-FILE.md)。
+本文定义 `sliced-dev` 的计划真源。单任务合同和交付状态见 `deliver-task` 的 `TASK-CONTRACT.md`，不在 plan 中复制。
 
-## 命名
-
-完整档默认使用目录：
+## 目录
 
 ```text
 dev-plans/
-  .gitignore
+  .gitignore                         # */review-packages/**
   YYYY-MM-DD-<slug>/
-    plan.md
-    decisions.md
-    audits.md
-    claims/          # 每个切片的结构化 Claim / Evidence / Status 真源，提交入库
-      S1.json
-    task-briefs/      # 生成文件，gitignore
-    task-reports/     # implementer 结构化交付报告，默认 S*.json，gitignore
-    review-packages/  # 生成文件，gitignore；含 S*.md、S*-rules.md 和 S*-range.json
+    plan.md                          # 多任务状态、切片、依赖与当前指针
+    decisions.md                     # 需要用户拍板的稳定分叉
+    audits.md                        # 计划级 / 跨切片长证据
+    deliveries/
+      <taskId>/
+        task.json                    # sliced-dev 写；immutable caller contract
+        execution.json               # deliver-task 写
+        claims.json                  # deliver-task 写
+        audits.md                    # deliver-task 写；单任务证据与验收
+        delivery.json                # deliver-task 写；薄结果
+        .gitignore                   # deliver-task 写；忽略 /artifacts/
+        artifacts/                   # 可重建，不提交
+    review-packages/
+      whole-task.md                  # 可重建，不提交
 ```
 
-`<slug>` 只使用小写字母、数字和连字符。新建目录优先使用 [SCRIPTS.md](SCRIPTS.md) 的 `init` 命令；脚本会确保 `dev-plans/.gitignore` 至少包含 `*/review-packages/**`、`*/task-briefs/**`、`*/task-reports/**`。
+`<slug>` 和 task directory 使用小写字母、数字、连字符。`S1` 映射为 `s1`，`S2.1` 映射为 `s2-1`。
 
-## plan.md 模板
+## 计划模板
 
 ```markdown
 # <任务标题>
 
 > 档位：完整
 > 状态：draft
-> 上游依据：无 / OpenSpec:<change-name> / PRD:<path> / issue:<id> / 设计文档:<path> / 待确认
+> 上游依据：无 / OpenSpec:<change-name> / PRD:<path> / issue:<id> / 设计文档:<path>
 > 计划一致性预检：pending
 > 拆分拷问：pending-grill
 
@@ -44,12 +48,12 @@ dev-plans/
 | 文件 | 职责 |
 | --- | --- |
 | [decisions.md](./decisions.md) | 分叉正文 |
-| [audits.md](./audits.md) | 长审计、证据矩阵、diff inventory |
-| [claims/S*.json](./claims/) | 每个切片的结构化 Claim / Evidence / Status 真源 |
+| [audits.md](./audits.md) | 计划级长审计与跨切片证据 |
+| [deliveries/](./deliveries/) | deliver-task 的任务合同与交付结果 |
 
 ## 目标
 
-<一句话目标>
+<一句话整体目标>
 
 ## 全局约束
 
@@ -60,513 +64,173 @@ dev-plans/
 待拆分。
 ```
 
-## 切片块模板
+顶部字段：
+
+- `状态`：`draft / executing / paused / done`。
+- `计划一致性预检`：`pending / passed / blocked`。
+- `拆分拷问`：`pending-grill / grilling / grilled / no-grill`。
+- `阶段`：`slicing / executing / blocked / closing / done`。
+- `当前切片`：`待定 / 无 / 当前存在的 S-id`。
+
+进入 `executing / done` 前，计划一致性预检必须为 `passed`，拆分拷问必须为 `grilled / no-grill`，且至少存在一个切片。`状态：done` 要求 `阶段：done`、`当前切片：无`，且所有切片都是 `done / split / skipped`。
+
+## 切片模板
 
 ```markdown
-### S1：<标题>
+### S1：<切片标题>
 
 - 状态：not-started
 - 门禁：pending-grill
 - 候选：候选需确认
 - 风险：待判定
 - 执行：待判定
-- 上下文预检：pending
-- 硬门禁：pending
-- AI Review：pending
-- 修复次数：0/4
 - 依赖：无
-- Commit：待提交
-- 验证：pending
 
 #### 关联项
 
 暂无。
 
-#### 上下文预检
+#### 委托合同
 
-- 需理解：待执行前补充。
-- 必读上下文：待执行前补充。
-- 项目规则审查:
-  - 状态：not-applicable
-  - rules-review：not-checked
-  - 规则获取：不适用
-  - 规则校验：skipped（未检查规则仓）
-  - selectedRuleIds：
-    - 无
-  - notApplicable：
-    - 无
-- 允许修改：
-  - 待执行前补充。
-- 禁止修改：
-  - 待执行前补充。
-- 禁止词：
-  - 无
-- 基线脏文件：
+- 验收策略：not-required
+- 约束：
   - 无
 - 非目标：
-  - 待执行前补充。
-- 停止条件：上下文不足、命中禁止修改、用户授权边界变化、风险升为 C、新增命中需确认面或需要新的执行确认时停止；仅执行清单不足时先按拟扩范围重跑受影响的上下文预检。
+  - 无
+- 禁止修改：
+  - 无
 
 #### 切片交接
 
 - 输入:
   - 无
 - 输出:
-  - 无
-
-#### 门禁记录
-
-| Gate | Command | Status | Evidence |
-| --- | --- | --- | --- |
-| diff-check | pending | pending | pending |
-
-- 失败处理：修复次数用尽仍失败则停止并报告。
+  - <留给后续切片的稳定结果>
 
 #### 任务内容
 
-...
+<一个明确的单任务目标>
 
 #### 验收
 
-...
+- <可观察验收条件>
 ```
 
-`S*` 使用数字路径：`S1`、`S2.1`、`S2.1.4`。不要使用 `S4a`、`切片 4a` 或中文编号。
+只允许以上六个常规头部字段、`split / skipped` 各自的条件字段和五个四级小节。`上下文预检 / 硬门禁 / AI Review / 用户验收 / 修复次数 / Commit / baseCommit / headCommit / 验证` 以及旧 `Claims / 门禁记录 / AI Review 结论` 都是已迁出的单任务执行状态，plan exact schema 会拒绝它们。
 
-## 执行控制字段
+### ID 与状态
 
-顶部元信息和每个切片必须显式记录执行控制字段；条件字段只在触发对应流程时记录。它们的目的不是描述代码实现，而是给自动化流程提供状态机和拒收依据。
+`S*` 使用数字路径：`S1`、`S2.1`、`S2.1.4`。
 
-顶部 `计划一致性预检` 只允许：
+- `状态`：`not-started / blocked / in-progress / done / split / skipped`。
+- `门禁`：`pending-grill / grilling / grilled / no-grill / not-applicable`。
+- `候选`：`候选自动 / 候选需确认`；只是切片阶段预测，不替代正式执行模式。
+- `风险`：`待判定 / A / B / C`；`C` 不允许 `执行：自动`。
+- `执行`：`待判定 / 自动 / 需确认`。
+- `依赖`：`无` 或 `/` 分隔的已有 S-id。形成环时 validator 拒绝。
 
-- `pending`：尚未完成整计划一致性预检；只能停在 `状态：draft`、`阶段：slicing`、`拆分拷问：pending-grill`，不能进入拆分拷问或执行。
-- `passed`：切片清单、全局约束、D/A、依赖、候选风险和验证口径没有发现内部冲突。
-- `blocked（D1 / D2）`：发现计划内部冲突或需要用户拍板的分叉；必须引用至少一个 `open` D，且不能进入拆分拷问或执行。正文写到 `decisions.md`，长证据写到 `audits.md`。
+`in-progress` 以及 `done / split / skipped` 终态必须有闭合门禁。`done` 的风险和执行不得为 `待判定`。只有依赖片均为 `done / skipped` 时才能委托当前片；`split` 片不算依赖完成，后续任务应依赖实际后代片。
 
-计划一致性预检不设独立 `##` 章节；通过结果只更新顶部字段，分叉和长证据分别走 D/A。
+### 委托合同
 
-整任务审查默认不启用。只有用户明确要求整体验收 / 跨切片审查 / 发布就绪度，或控制器 / reviewer 判断单切片 AI Review 无法覆盖全局约束、跨切片交接、非目标回归、需求闭合或残余风险时，才添加顶部 `整任务审查` 字段和 `## 整任务审查结论` 章节。
+本节是生成 `task.json` 的 plan 投影：
 
-顶部 `整任务审查` 只允许：
+| task.json 字段 | 来源 |
+| --- | --- |
+| `taskId` | S-id 小写并把 `.` 替换为 `-` |
+| `caller` | 固定 delegated / sliced-dev / `<plan>/plan.md#<S-id>` |
+| `objective` | `#### 任务内容` |
+| `acceptanceCriteria` | `#### 验收` 的列表 |
+| `constraints` | 顶层 `全局约束` + 本片 `约束` |
+| `nonGoals` | 本片 `非目标` |
+| `forbiddenPaths` | 本片 `禁止修改` |
+| `baseCommit` | 初次委托或合同变化时的当前 HEAD |
+| `commitPolicy` | 固定 `required` |
+| `acceptancePolicy` | 本片 `验收策略` |
 
-- `package-generated`：已生成 `review-packages/whole-task.md`，等待把整任务审查结论写回。
-- `passed`：整任务审查已通过，且 `## 整任务审查结论` 有完整固定 verdict 表。
-- `blocked`：整任务审查阻塞；`## 整任务审查结论` 表的 Evidence 填写 review-package 章节名、文件路径或固定不适用标记，阻塞说明写在正文说明中，不写入 Evidence。
+`验收策略` 只允许 `required / not-required`。风险 `C`、执行 `需确认` 或用户明确要求逐片验收时使用 `required`；前两种情况不得写 `not-required`。
 
-顶部 `整任务审查` 字段和 `## 整任务审查结论` 必须成对出现；缺席表示未启用整任务审查。是否需要整任务审查由控制器 / reviewer 判断，脚本不按切片数量、交接或风险自动推断。
+caller 只写用户 / 上游禁止范围，不写执行 allowlist。deliver-task 读取真实代码和项目 rules 后自行生成 `execution.json`。禁止范围的语义是硬边界，不能通过下游扩大 `allowedPaths` 绕过。
 
-以下切片头部字段枚举、状态语义和完成态约束是文档真源；其它规则文件只引用本段，不重复维护完整枚举。
+`delegate-task` 比较除 `revision / baseCommit` 外的 immutable 投影：
 
-- `风险`：`待判定` / `A` / `B` / `C`。
-  - `A`：低风险机械任务，可自动跑到底。
-  - `B`：普通业务切片，必须做上下文预检、硬门禁和 AI Review。
-  - `C`：核心业务 / 状态机 / 权限 / 架构边界等高风险切片，上下文预检和方案后必须停下等人工确认。
-- `候选`：`候选自动` / `候选需确认`。它只记录切片阶段的预测标签，不是最终执行模式；正式执行模式以 `执行` 字段为准，候选标签无需随重判同步改名。
-- `执行`：`待判定` / `自动` / `需确认`。正式执行模式在切片前分叉审查通过、上下文预检完成后写回；`风险：C` 不允许 `执行：自动`。
-- `上下文预检`：`pending` / `ready` / `blocked` / `skipped` 开头，可追加中文说明。
-- `硬门禁`：`pending` / `passed` / `failed` / `blocked` / `skipped` 开头，可追加中文说明。
-- `AI Review`：`pending` / `passed` / `issues` / `blocked` / `skipped` 开头，可追加中文说明；`issues` / `blocked` 必须有非占位头部摘要 / 原因，或在 `#### AI Review 结论` 中有带非占位 Note 的 `failed` / `cannot-verify-from-package` / `Severity=major|critical` verdict。
-- 条件字段 `用户验收`：`pending` / `passed` / `issues` / `skipped` 开头，可追加中文说明；只用于 `执行：需确认`、`风险：C`、用户明确要求逐片验收，或用户实际反馈 issue 的切片；`issues` 必须写明用户拒收原因，`skipped` 必须写明用户明确跳过原因。
-- 条件字段 `替代切片`：只用于 `状态：split`，使用 `S1.1 / S1.2` 形式列出一个或多个真实存在的后代切片；不能引用自身、同级片或不存在的 ID。
-- 条件字段 `跳过依据`：只用于 `状态：skipped`，值必须是一个 `D*`；该 D 必须为 `decided`、在当前切片 `关联项` 中同样写为 `decided`、正文 `关联` 包含当前切片，并有非占位 `结论` 和 `证据`。
-- 条件字段 `Commit`：只用于执行型切片（`not-started` / `blocked` / `in-progress` / `done`），值为 `待提交` / `已提交`；它只记录状态，不写 commit hash；`split` / `skipped` 必须省略。
-- 条件字段 `baseCommit`：首个执行型切片在执行前 plan checkpoint P 提交时保持缺席，P 完成后写入 P 的规范 commit ID；后续执行型切片首轮派发前写入前一执行片 `headCommit` 的直接、普通单父、plan-only 子提交 K。K 中保持该字段缺席，首次派发前才写入 K 的规范 commit ID。各片写入后只能读取、不得改写；返修和最终收口都沿用该值。尚未派发的执行型切片可缺席，`split` / `skipped` 必须省略。
-- `修复次数`：`当前次数/最大次数`，例如 `0/4`、`1/4`、`4/4`，统计本切片实际修改任务范围内文件的自动修复总次数，不按门禁分别计数，默认上限为 `4`。单纯重跑 reviewer、重生成 package、补运行证据或修 review 协议工件不计次。次数用尽后任一门禁仍失败则停止，不继续自动修。
+- 投影未变：保留原 `task.json`、revision、base 和 task hash。
+- 投影变化：revision 加一，base 更新为当前 HEAD，完整新结构形成新 task hash。
+- 同一语义合同只有在 caller 明确运行 `delegate-task ... --refresh-base` 时才更新 base，并创建新 revision；普通重跑不会因为 HEAD 前进而改变 identity。
+- 当前指针、下一步、状态、风险标签或其它编排文本变化不会单独改 task identity。
 
-脚本只检查 `替代切片` ID 非重复、真实存在且为父片后代，不判断这些切片是否完整覆盖父片任务与验收；覆盖关系由拆分拷问 / 计划审查判断。
+脚本只检查投影与 identity 是否一致，不判断目标、验收或约束内容是否合理。
 
-终态约束：`done` / `split` / `skipped` 切片的 `门禁` 必须是 `grilled` / `no-grill` / `not-applicable`；`状态：done` 的计划还要求顶部 `拆分拷问` 为 `grilled` / `no-grill`。`状态：done` 的切片必须满足 `上下文预检：ready/skipped`、`硬门禁：passed/skipped`、`AI Review：passed/skipped`，且 `风险` / `执行` 不得为 `待判定`；`风险：B/C` 的切片三项机器门禁不允许 `skipped`，`skipped` 仅限 A 类；`执行：需确认` 或 `风险：C` 的 done 切片必须有 `用户验收：passed/skipped`，`执行：自动` 且未启用逐片验收时可缺席 `用户验收`；一旦写入 `用户验收：pending/issues`，不得标记完成。仍为 `issues / failed / blocked / pending` 时不得标记完成。只要写 `AI Review：passed`，无论切片状态是否 `done`，都必须有完整 `#### AI Review 结论` 四 verdict；前三项 Status 不得为 `not-applicable`，Status / Severity 必须满足下文固定组合，且不得出现 `failed` / `cannot-verify-from-package` / `critical`。
+### 切片交接
 
-## 全局约束
+`输入 / 输出` 都必须显式存在，可写 `无`。它只记录跨切片消费的稳定语义，不写改动文件、实现步骤、命令、General 结果或 review package。
 
-`全局约束` 记录本次任务中所有切片都必须继承、不可违反的全局需求约束；来源可以是用户明确口径、上游 spec、项目规则或已决定的 D 结论，但只写会影响本任务执行和 review 判断的精确规则。
+### 关联项
 
-- 不复制全部仓库规则，只写本次任务不可违反的约束。
-- 不写流程机制、审计证据、问答流水或实现方案。
-- D 的结论只有影响后续多个切片时才提炼进本节；只影响单片的口径留在 D 和切片关联项。
-- 上下文预检和 AI Review 必须把本节作为当前切片默认继承的约束。
-
-用户明确要求“零已知缺陷收口”或明确说明 `SHOULD` 缺陷也必须修复时，写固定 token：
+本节只引用 plan 根目录的 `D* / A*`，并与正文状态一致：
 
 ```markdown
-- 零已知缺陷收口：enabled
-```
-
-该约束缺席即表示未启用；写入时只允许固定值 `enabled`。启用后，所有执行型切片都必须完成 AI Review，A 类也不能使用 `AI Review：skipped`；本次变更引入或加重的所有 finding（无论 `must_fix` / `should_fix`）必须修复，所有 `cannot_verify` 必须补证清零，不接受用风险接受、claim waiver 或 follow-up 关闭缺陷。既有且未被本次变更加重的 observation 不自动扩入范围；合法失效的 claim 仍可使用 `waived`，但不能用它豁免 finding。规则审查当前 A* 还必须记录真实 run 投影；`close-check` 要求 `recommendation = ready_for_merge` 且三个计数均为 `0`，不允许借用默认 SHOULD 接受例外。机器不判断代码是否“完美”或 observation 是否应该升级。
-
-## 上下文预检
-
-每个切片必须有 `#### 上下文预检`。该块在切片执行前更新，目标是让 agent 先暴露“需要看什么、允许改什么、不能改什么、何时停止”，而不是直接进入实现。
-
-必需字段：
-
-- `需理解`：本片必须理解的业务、调用链、项目风格或旧行为。
-- `必读上下文`：执行前必须读取的文件、搜索关键词或证据；只列必要上下文，不复述全项目。
-- `项目规则审查`：记录 execution-time rule set 和最终是否需要独立 rule-reviewer。`状态` 只允许 `required` / `not-applicable` / `blocked`；同时记录 `rules-review` 可用性、resolved `规则获取` 命令、`规则校验` 结果，以及 `selectedRuleIds` / `notApplicable` 两个显式 execution-time 分类。两类字段只供 controller / implementer 执行使用，不是最终 rules-review 范围；它们在任何状态都必须存在且结构可解析。`selectedRuleIds` 条目写成 `<RULE-ID>：<reason>`，`notApplicable` 条目写成 `<RULE-ID>[, <RULE-ID>...]：<共同 reason>`，空类写 `无`。路径、变更范围和 catalog 只能产生候选分类；完成本片必读代码与针对规则触发条件的 focused search 后，才能确定执行分类，此前写入的分类必须重新校准，无法用代码证据明确排除的候选归入 selected。`pending` / `blocked` 阶段允许分类尚未覆盖完整 catalog。写 `ready` 时，active catalog 真实为空才写 `not-applicable`；catalog 非空且 `rules-review` 可用、规则校验通过时写 `required`，即使 `selectedRuleIds` 为空也不改写为 `not-applicable`，此时 `规则获取` 可写 `不适用`；catalog 非空但 `rules-review` 不可用时写 `状态：blocked`、`rules-review：unavailable`，有 selected 规则时保留 `规则获取` 命令，`规则校验` 写 `skipped`，并把切片头部 `上下文预检` 同步写为 `blocked` 后停止。
-- `允许修改`：控制器维护的可审计执行清单，列出本片当前允许改动的文件、目录或 glob；它不是用户授权范围，`diff-check` 会读取更新后的列表。
-- `禁止修改`：本片不可自动进入的硬边界，列出禁止改动的文件、目录或 glob；`diff-check` 会读取该列表。命中时必须停止确认，不能通过更新 `允许修改` 绕开。
-- `禁止词`：可选的禁止新增词 / 命名同义词 / 高风险模式；无则写 `无`。
-- `基线脏文件`：可选的切片开始前已存在的无关脏文件 / 目录；`diff-check` 会跳过这些路径，无则写 `无`。与本片混改的文件不要列入，由 scoped staging 拆分。
-- `非目标`：本片明确不处理的边界。
-- `停止条件`：出现哪些情况必须停止并回到分叉确认或人工裁决。
-
-`允许修改` 不允许长期写宽泛的“全部”。若执行中发现当前清单不足，先停止改代码并说明原因，再按 [EXECUTION-RULES.md](EXECUTION-RULES.md) 的授权边界规则处理：控制器先按拟扩范围重跑受影响的上下文预检，补读新增路径所需上下文，重新判断项目规则适用性、风险 / 执行和 claims；仍服务于既有授权目标、未命中 `禁止修改`、风险为 A/B、未新增命中「需确认」面且无需新的执行确认时，更新 `允许修改` 和相关验证 / task brief，在 `#### 门禁记录` 留下依据后继续，否则创建 / 更新 D 并等待确认。
-
-当切片头部写 `上下文预检：ready` 时，`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 必须是已填写内容，不得仍为 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规则审查` 必须显式存在且不能是 `blocked`，`禁止修改` 也必须显式存在但可以写 `无`。validator 会对当前 plan 绑定项目根目录执行一次 `get-rules.mjs --root <repo> --catalog --optional-source`，只用 `rules[].ruleRef` 构造 actual catalog：空 catalog 要求 `状态：not-applicable`，非空 catalog 要求 `状态：required` 且允许 `selectedRuleIds` 为空；同时要求 `selectedRuleIds` 与 `notApplicable` 无内部重复、互斥、无 unknown、完整覆盖 actual catalog，且每条 reason 非空、非占位。
-
-控制器还必须在写 `ready` 前按 `规则获取` 读取每条 selected 规则，把其中可执行义务映射进当前已有的执行契约字段，例如 `允许修改` / `禁止修改`、验证命令、claims、停止条件或门禁记录；解决冲突并完成写回后才能继续。义务尚未进入执行契约或规则冲突未解决时保持 `pending` / `blocked`。该判断属于内容审查，不由 validator 根据 reason 文本推断，也不要求在 plan 中复制规则正文。
-
-## 切片交接
-
-`#### 切片交接` 是切片内可选小节，用于记录当前切片跨切片消费的稳定输入，以及留给后续切片消费的稳定输出。它不是接口注册表；普通执行顺序依赖只写切片头部 `依赖`，不强制补交接小节或“无契约原因”。
-
-触发条件：
-
-- 当前切片消费前序切片的稳定产出。
-- 当前切片会给后续切片留下稳定产出。
-
-不触发：普通执行顺序依赖、单片内部 helper、局部变量、样式、文案、纯实现步骤、验证输出或改动文件清单。
-
-若出现 `#### 切片交接`，必须包含：
-
-```markdown
-#### 切片交接
-
-- 输入:
-  - S1 已完成旧结构清理，当前片只能基于新入口继续改调用方。
-- 输出:
-  - `normalizeImageKey(input): string | null`，供后续保存图片 key 前调用。
-```
-
-只有输入或只有输出时，另一侧显式写 `无`：
-
-```markdown
-#### 切片交接
-
-- 输入:
-  - 无
-- 输出:
-  - 商品图片保存时只持久化 key，不持久化 URL。
-```
-
-规则：
-
-- `输入` / `输出` 可写真实函数名、字段名、路由名、状态语义或纯文本。
-- validator 只检查小节存在时有 `输入` / `输出`，且每项显式写 `无` 或至少一条非占位内容。
-- validator 不解析 `S*` 引用、函数名、消费关系或全局唯一性。
-- 无内容可写 `无`，但 `无` 不得和真实条目同时出现。
-
-`切片交接` 只写稳定跨切片交接，不写实现步骤；当前切片执行和 AI Review 必须覆盖本节声明的输入和输出。交接是否一致由 reviewer 在 `切片边界 / 交接一致性` 中判断，不由脚本做语义推断。
-
-## 门禁记录
-
-每个切片必须有 `#### 门禁记录`，记录 diff-check 结果、接收门禁和门禁执行摘要（如每次修复改了什么、为何更新执行清单）。硬门禁、AI Review、修复次数的状态唯一真源是切片头部字段，不在本小节重复记录同名状态行；详细失败信息仍放在本切片 `验证备注` 或 `audits.md` 的长证据中。`状态：done` 时，`close-check` 要求 diff-check 记录为结构化表格，且 command / evidence 非空、非占位；command 中的 `diff-check <planDir> <S-id>` 必须指向当前计划目录和当前切片。
-## Claims / Evidence / Status
-
-`claims/S*.json` 是每个切片的 Claim / Evidence / Status 结构化真源。`plan.md` 继续承载切片叙事、上下文预检、门禁状态和 AI Review 结论；不要把完整 claims 状态双写进 Markdown 表格，也不要在 `plan.md` 双写完整 task report 状态。task brief、review-package 和 whole-review-package 会渲染 claims 信息；task report 只记录 implementer handoff。
-
-每个可执行切片建议在实现前生成 claims 文件：
-
-```bash
-node <sliced-dev-skill-dir>/scripts/dev-plan.mjs claims-template dev-plans/YYYY-MM-DD-<slug> S1
-```
-
-最小结构：
-
-```json
-{
-  "schemaVersion": "sliced-dev.claims.v1",
-  "sliceId": "S1",
-  "claims": [
-    {
-      "id": "C1",
-      "type": "behavior",
-      "priority": "P0",
-      "text": "S1 的可观察业务行为已实现。",
-      "status": "proposed",
-      "evidence": [],
-      "note": ""
-    }
-  ]
-}
-```
-
-Claim 字段规则：
-
-- `id`：使用 `C1`、`C2`、`C3`，在当前切片内唯一。
-- `type`：推荐使用 `behavior` / `scope` / `validation` / `risk`。
-- `priority`：推荐使用 `P0` / `P1` / `P2`。
-- `text`：必须是可验证声明，不写实现步骤，不写“完成本片”这类粗声明。
-- `status`：只允许 `proposed` / `implemented` / `verified` / `failed` / `blocked` / `waived`。
-- `evidence`：证据数组，优先使用机器证据。
-- `note`：用于 waiver 原因、阻塞说明或必要补充。
-
-Evidence 字段规则：
-
-- `kind`：推荐使用 `test` / `command` / `diff-check` / `code` / `ci` / `manual` / `ai-statement`。
-- `status`：推荐使用 `passed` / `failed` / `blocked` / `skipped` / `not-applicable`。
-- 可选字段：`command`、`file`、`symbol`、`uri`、`summary`、`artifact`；其中 `symbol` 只能作为辅助定位，不能单独满足证据明细要求。
-- 脚本只校验 evidence 是数组，条目是对象，已知可选字段为字符串；证据是否足够由控制器和 reviewer 判断。
-
-状态职责边界：
-
-- `proposed`：实现前声明。
-- `implemented`：实现者建议已完成，但尚未被控制器验证。
-- `verified`：控制器依据测试、命令、diff-check、CI、代码证据或人工验证确认成立。
-- `failed`：有证据证明声明不成立。
-- `blocked`：无法验证或需要人工裁决。
-- `waived`：明确豁免，只允许用于 `risk` / `scope` claim；必须有非占位 `note`，引用用户明确豁免、D* decided 或 reviewer verdict。`behavior` / `validation` claim 不允许 waive。
-- P0/P1 的 `behavior`、`scope`、`validation` claim 写 `verified` 时，必须至少有一条 `ai-statement` 之外的 evidence；`ai-statement` 只能作为补充说明，不能单独支撑 verified。
-
-`done` 切片的 claims 格式约束由 `close-check` 执行：必须存在 `claims/<S-id>.json`，且是可解析 JSON、字段形状正确，最终状态必须是 `verified` 或合法 `waived`。`validate` 会校验已有 claims 文件的 JSON / 字段形状和孤儿文件，但为了兼容草稿 / 未执行切片，不强制每个非 done 切片提前存在 claims 文件。
-
-
-`close-check` 不读取当前 git dirty 状态；边界检查由显式 `diff-check` 门禁记录承载。
-
-建议字段：
-
-```markdown
-#### 门禁记录
-
-| Gate | Command | Status | Evidence |
-| --- | --- | --- | --- |
-| implementer-acceptance | task-reports/<S-id>.json | passed | ready-for-review; changed files within 允许修改; no 禁止修改 hit |
-| diff-check | node /absolute/path/to/sliced-dev/scripts/dev-plan.mjs diff-check dev-plans/2026-06-30-example S1 | passed | changed files within 允许修改; no 禁止修改 hit |
-
-- 失败处理：修复次数用尽仍失败则停止并报告。
-```
-
-## Task Brief / Task Report
-
-`task-briefs/<S-id>.md` 和 `task-reports/<S-id>.json` 由脚本生成，是实现与审查的注意力收束视图，不写入 `plan.md` 正文。task brief 限制 implementer 的默认上下文；task report 是 implementer 的最小结构化 handoff，不是 Claim / Evidence / Status 的最终真源。
-
-- task brief 从当前切片、`全局约束`、`上下文预检`、`切片交接`、关联 D/A、门禁记录和 `claims/<S-id>.json` 提取窄上下文；其中 `项目规则审查` 只把 execution-time `selectedRuleIds` 及 `规则获取` 投影给 controller / implementer，不投影 `notApplicable` 或最终审查状态账务，也不约束最终 rules-review 范围。修改运行时逻辑时，implementer subagent 必须补直接相关测试，或在 task report 说明不适用原因。
-- `允许修改`、相邻测试或验证命令需要调整时，控制器先按拟扩范围重跑受影响的上下文预检，补读新增路径所需上下文，重新判断项目规则适用性、selectedRuleIds、规则校验、风险 / 执行和 claims。仍在既有用户授权边界内、未命中 `禁止修改`、风险为 A/B、未新增命中「需确认」面且无需新的执行确认时，更新 plan 后重新生成 task brief，不创建 open D、不要求用户重新确认；若 implementer 需要继续写文件，再按新 brief 重新派发。否则停止确认。
-- 自动更新只适用于 implementer 写入前以 `blocked` 报告清单不足，或硬门禁 / AI Review 提出后续修复；实际 diff 已越过旧 brief 时先判接收门禁失败并确认归属，只有确认由本轮 implementer 写入越界文件时才记录接收违约，不得回填 `允许修改` 使本轮通过。派发前已脏但漏记的文件无法仅靠路径状态排除 implementer 继续写入，按共享工作区冲突停止并报告，不得事后补入 `基线脏文件`；派发后出现且无法归属本轮 implementer 的改动同样停止并报告。
-- task report 由 implementer subagent 填写 `conclusion`、`changedFiles`、`validation` 和 `blockedReason`；控制器不得代写 ready report。
-- task report 不写 claim 状态建议；claims 更新由控制器依据实现、硬门禁、diff-check、测试 / 命令结果和必要回源检查直接写入 `claims/<S-id>.json`。
-- `conclusion: ready-for-review` 时，`validation` 必须非空，`blockedReason` 必须为空；无代码轮允许 `changedFiles: []`。`conclusion: blocked` 时，`blockedReason` 必须非空。
-- `review-package` 只接受 `conclusion: ready-for-review` 的 task report；同时 P0/P1 claims 必须已由控制器写成 `implemented` / `verified` / 合法 `waived`，并带 evidence 或 note。
-- `review-package` 是 general reviewer 的注意力入口，不是事实真源；它不包含 `项目规则审查` 信息。首轮 `full` 审查 `baseCommit..headCommit`；存在开放 finding 时，`repair` 只审查 `previousHeadCommit..headCommit`；发生过 repair 且开放 finding 清零后，再对相同最终提交执行 `baseCommit..headCommit` 的最终累计 `full`。用户验收拒收后的新 TARGET 以 `reviewTrigger：user-acceptance-issues（<用户反馈>）`，项目规则 finding 修复后的新 TARGET 以 `reviewTrigger：project-rule-review-issues（<失败项目规则审查 A*>）`，直接引用上一轮 clean full 并重新执行累计 `full`；两者都不得伪造 General finding。若 P0/P1 claim、边界或证据无法从 package 判断，reviewer 必须 focused 回源检查，或输出 `cannot-verify-from-package`。
-- `review-packages/<S-id>-range.json` 是当前 `sliced-dev.reviewRange.v2` Git 记录，字段仅为 `schemaVersion / sliceId / iteration / baseCommit / previousHeadCommit / headCommit / iterationFiles / taskReportHash`。`record-commit` 成功写入新的 `headCommit` 才建立新 TARGET，并同时清除旧 TARGET 的当前 General selector / 三 verdict、项目规则 verdict / runId，把 `用户验收：passed` 机械重置为以 `pending` 开头的值，并在其说明中保留直接前序 TARGET 的 commit 和原验收值；`issues` 保留反馈，`skipped` 作为切片级 waiver 保留，历史 A* 不删除。命令失败或 `headCommit` 未变时不失效仍绑定同一输入的 proof。当前最终 General clean 后，若现有 General Review 的 Range / claims / evidence 能明确证明原验收 TARGET 到当前 TARGET 的相关 delta 没有改变该验收覆盖的用户可感知行为、acceptance criteria / scope，也未引入新的用户判断，controller 可带 provenance 复用原 `passed`：必须同时引用字段中保留的原用户验收与当前 General 证据，不得记录成用户对新 TARGET 的再次确认；证据不足或验收相关语义变化时保持 `pending` 并重新验收。`test-only` 既非必要条件也非充分条件，不得为了取得复用资格额外创建一轮 General Review。package 只能读取该 sidecar 指向的 commit / blob；不得从当前文件、真实 index、当前 HEAD 或同名路径重建输入。若 range 已写入而状态失效尚未完成，validator 拒绝“新 TARGET + 旧 proof”，恢复时先完成失效迁移。
-- `rule-review-package` 只在 `项目规则审查：required`、当前最终 TARGET 的累计 General full 已通过，且适用的用户验收为 `passed / skipped` 时生成，路径为 `review-packages/<S-id>-rules.md`；自动且未启用逐片验收的切片可在 General 后直接继续。默认 fresh full 包复制同一 Review Range、累计文件快照和 `baseCommit..headCommit` diff，但完全不包含 execution-time `项目规则审查` 块、`selectedRuleIds`、`notApplicable`、`规则获取` 或嵌有这些字段的 task brief，也不内联 general reviewer 三 verdict、旧项目规则 A* 或旧 SHOULD 接受 D*。rule-reviewer 必须基于当前最终 TARGET 和完整 active catalog 独立分类；最终 proof closure 只验证该 fresh full，或 [SKILL.md 的「规则返修复验」](SKILL.md#第一原则)限定的“直接前序 full + 当前一跳 repair verification”。除组合证明直接引用的前序 full 外，其它历史规则 A* 只保留 provenance，不读取其 run、不重验有效性，也不参与关闭条件。同一 TARGET 只修正规则协议或输入工件时仅重做 rules-review，保留仍有效的 General 和用户验收。
-- Rule Repair Verification 的资格、输入、证明义务、结果派生和组合证明语义以 [SKILL.md 的「规则返修复验」](SKILL.md#第一原则)为准；本文件只定义对应工件和 A* 如何记录。工件固定为 `review-packages/<S-id>-rule-repair-task.json` 与 `review-packages/<S-id>-rule-repair-verification.json`。
-
-## AI Review 结论
-
-`#### AI Review 结论` 是 AI Review 的结构化状态真源。执行和 General 前可省略；最终累计 General full 完成后先写当前 General A* selector 与前三项 verdict，第四项尚不存在，`AI Review` 保持 `pending`。适用的用户验收满足后才进入项目规则审查路径；最终规则结果写入第四项后，才能把 `AI Review` 写为 `passed`。因此合法阶段只有“无 verdict → 三项 General verdict → 最终四项 verdict”，不得提前声明下游 General、用户验收或 rules-review 已通过。`AI Review：issues` / `AI Review：blocked` 必须在头部写非占位摘要 / 原因；若头部未写原因，当前表必须提供对应 `failed` / `cannot-verify-from-package` / `Severity=major|critical` 且 Note 非空、非占位的说明。A* 只是审计证据，不取代本表真源。自然语言说明写 Note。
-
-本节是固定 verdict 名称、`Status` / `Severity` 枚举及组合的唯一文档真源；其它 sliced-dev 文档只说明各自调用方式并引用本节，不重复维护这些枚举。运行时 `review-prompt` 和校验器共同读取 `dev-plan.mjs` 中的状态枚举常量。
-
-General Review 固定为三阶段累计协议：
-
-- 首次 `full` 审查 `baseCommit..headCommit`，完整给出三个 verdict 和当前完整 `openFindings`。若没有进入 repair，它同时是最终 full。
-- `repair` 只审查 `previousHeadCommit..headCommit`。它直接引用上一轮 A*，对每个旧 finding 恰好返回一次 `addressed` 或 `not_addressed`，并报告 fix diff 新引入的 finding。当前 `openFindings` 机械派生为旧 finding 中的 `not_addressed` 加 `Origin=repair-delta` 的新 finding；repair 不生成也不继承三个最终 verdict。
-- 发生过 repair 后，开放 finding 清零也不能收口；必须对当前最终 `headCommit` 再执行 `baseCommit..headCommit` 的累计 `full`。最终 full 与直接前序 repair 使用相同 commit 三元组，通过 `reviewType` 和 `previousReview` 区分。最终三个 verdict 只能来自这次 full；发现新问题时重新进入 repair。
-- 用户在 clean full 通过后拒收且不改变授权范围 / 验收口径时，不创建虚假 finding，也不进入 finding-focused repair。先写 `用户验收：issues（<原因>）`、重置 `AI Review：pending`，把反馈渲染进 task brief；返工提交的 package / reviewer final summary / 新 A* 必须原样绑定 `reviewTrigger：user-acceptance-issues（<原因>）`，并直接对 `baseCommit..headCommit` 执行新的累计 `full`。该轮 `previousHeadCommit` 必须等于直接前序 clean full 的 `headCommit`；缺少触发器、原因或 clean full 前序时 fail closed。该返工 full 若发现问题，保留 `用户验收：issues（<原因>）`，但不得再次消费同一触发器；后续按当前 A* 进入普通 repair。通过后再次进入 `用户验收：pending`。
-- 当前 TARGET 的项目规则 finding 产生新 TARGET 时，不创建虚假 General finding。`record-commit` 使旧当前 proof 失效并把失败规则 A* 记录为 `project-rule-review-issues（A*）`；新累计 full 必须绑定该直接前序 TARGET、失败 A* 和新 Review Range，且该 A* 只能消费一次。General clean 后，原 `用户验收：issues` 转为 `pending`；`passed` 已在 TARGET 迁移时转为 `pending`，`skipped` 保留。随后按适用的用户验收状态进入上述 repair verification；不满足限定条件时显式回到 fresh full。
-
-每轮 General Review 都新建 reviewer，只消费当前 package 和其中显式引用的直接上一轮 A*，不依赖 reviewer 会话记忆。`previousReview` 只能引用直接上一轮；每个 A* 都物化当前完整 `openFindings`，不递归继承结果。A* 缺失、多义、非 `done`，旧 finding 未被唯一裁决，range / package hash / commit identity 不一致，或 Git object 缺失时 fail closed，不得静默重建、回退当前文件或改用开放式 full 绕过协议错误。
-
-`项目规则审查：required` 时，本节还必须在表外写且只写一个当前选择器：
-
-```markdown
-- 项目规则审查 runId：<runId>
-```
-
-`runId` 必须匹配 `^[A-Za-z0-9][A-Za-z0-9_-]*$`：以字母或数字开头，后续只含字母、数字、`_`、`-`；fresh full 时它选择当前仓库的 `.rules-review-tmp/<runId>`。`not-applicable` 时不得写该选择器。一般规则审查修复、重跑或 finding 内容变化后必须使用新 runId 和新 A*，不能用旧 A* 覆盖或继续消费旧 run；唯一例外是合法 repair verification：选择器保留被引用的前序 full runId 作为组合证据基线，当前新 A* 另以 `repairVerification` 绑定本轮结果。若 TARGET 未变，只重做 rules-review，前三项 General verdict 和已满足的用户验收继续有效。
-
-固定四项 verdict：
-
-- `需求符合性`：需求与验收是否被当前 diff 满足。
-- `切片边界 / 交接一致性`：是否遵守上下文预检、非目标、禁止修改、全局约束与切片交接。
-- `代码质量 / AI 污染检查`：是否覆盖 maintainability、test quality、unnecessary complexity、project style consistency、performance footguns、error handling consistency，以及无领域语义 helper、无证据 fallback、新同义词、过早抽象、吞非法状态等 AI 污染。
-- `项目规则审查`：由 controller 根据 `项目规则审查` 预检和 rule-reviewer fixed summary 写入；general reviewer 不输出这一项。
-
-表格格式：
-
-```markdown
-#### AI Review 结论
-
-| Verdict | Status | Severity | Evidence | Note |
-| --- | --- | --- | --- | --- |
-| 需求符合性 | passed | not-applicable | A28 | 覆盖验收 |
-| 切片边界 / 交接一致性 | passed | not-applicable | A28 | 遵守边界 |
-| 代码质量 / AI 污染检查 | passed | not-applicable | A28 | 没有新增依赖 |
-| 项目规则审查 | not-applicable | not-applicable | 上下文预检 / 项目规则审查 | active catalog 为空 |
-```
-
-Evidence 必须非空。前三项必须各引用且只引用同一个当前 general review A*；第四项按项目规则审查协议填 A* 或固定不适用标记（`N/A` / `NA` / `not applicable` / `不适用`）。自然语言判断说明写入 Note。
-
-前三项 verdict 的 `Status` 只允许：
-
-- `passed`
-- `failed`
-- `cannot-verify-from-package`
-
-第四项 `项目规则审查` 仅在上下文预检为 `not-applicable` 时额外允许 `not-applicable`。
-
-`Severity` 只允许：
-
-- `critical`
-- `major`
-- `minor`
-- `not-applicable`
-
-`Status` / `Severity` 固定组合：`passed` / `not-applicable` 只能搭配 `not-applicable`；`failed` / `cannot-verify-from-package` 只能搭配 `critical` / `major` / `minor`。
-
-`项目规则审查：required` 时，第四 verdict 不能是 `not-applicable`，Evidence 必须引用当前最终 A*；A* 必须以 `done` 关联当前切片，并投影 `reviewSelectedRuleRefs`、`reviewNotApplicable`、`rulesReviewRunId`、`validation`、`recommendation`、`issueSummary.mustFix / shouldFix / cannotVerify`、`verdict`、`severity` 和 `summary`。不得保留审查阶段 `selectedRuleIds` 兼容别名。
-
-fresh full A* 的 `validation` 必须展示 `<rules-review validate command> => passed`；`reviewSelectedRuleRefs` 必须机械等于 `dispatch.ruleSet.selectedRuleRefs`，`reviewNotApplicable` 的每项 `ruleRefs` 必须机械闭合到 `dispatch.ruleSet.globallyNotApplicableRuleRefs`，对应 `reason` / `evidence` 由 rule-reviewer 对最终 TARGET 独立分类时产生，sliced-dev 只校验字段显式存在且非空，不判断其语义真实性。`shouldSetHash` 仅在 `recommendation = should_review_before_merge` 时存在；recommendation 非 `ready_for_merge` 时还必须投影 `.rules-review-tmp/<runId>/response.md`，下一轮 task brief 通过该路径把 finding 交给 implementer。`validation` 是审计展示，不是执行入口；`close-check` 不执行该命令，而是从当前 sliced-dev skill root 定位受信任 rules-review validator，对选择器指定的当前 v8 run 重跑 `--mode run`，再比较 runId、最终分类投影、recommendation、三个计数和条件性 hash。真实 dispatch 必须满足 `baseCommit = sliced-dev baseCommit`、`boundCommit = headCommit`、`baseTree = baseCommit^{tree}`、`targetTree = headCommit^{tree}`、`excludedFiles = []`、`excludedRuleRefs = []`，其 `inputSnapshot`、changed units 和 rule package 必须覆盖完整累计 commit 范围。`dispatch.ruleSet.selectedRuleRefs` 只是最终审查范围，不是审查结果；结果来自当前 shards 和 `finalReview`。非空 active catalog 即使最终 selected 为空，也必须完成真实 zero-item run；每个当前 `reviewItem` 都必须由该 run 的当前 shard 返回。路径不安全、对象缺失、symlink / 逃逸、validator 不可用或失败、finalReview 不可读或投影不一致都拒收。
-
-repair verification A* 的 `validation` 必须展示 `rule-repair-check <planDir> <S-id> => passed`，并额外且只写一个 `repairVerification: <review-packages/...-rule-repair-verification.json>`；仅当 `applicabilityExpansion.verdict=none` 时，`rulesReviewRunId`、`reviewSelectedRuleRefs` 和 `reviewNotApplicable` 才投影前序 full 基线，`recommendation=ready_for_merge` 且三个计数均为 `0`，不得写 `rulesReviewReport` / `shouldSetHash`。这些规则分类投影表示前序 full 基线，不声明当前 TARGET 的完整 partition 双向不变。`close-check` 重建当前 repair task、重验其前序 full v8 run，再核对直接父子 TARGET、BASE、规则身份、task hash、完整 delta 文件集、applicability expansion 结论、全部前序失败项 disposition、结果枚举、A* 和第四 verdict；它不把组合证据伪装成当前 TARGET 的新 full run，也不判断 reviewer 的 expansion 或语义影响分析是否正确。
-
-默认模式下，`ready_for_merge` 只有三个计数均为 `0` 才能直接投影 `passed`。`should_review_before_merge` 的 A* 必须保留原始 `failed` 与原始 severity；只有真实用户接受当前完整 SHOULD 集合，且 `mustFix=0`、`shouldFix>0`、`cannotVerify=0` 时，controller 才可让第四 verdict 单独写 `passed + not-applicable`。此时第四 verdict Evidence 必须同时且各一次引用当前 A* 与 decided D*，Note 必须包含固定文本 `用户接受当前 run 全部剩余 SHOULD`；D* 必须关联当前切片并包含：
-
-```markdown
-- 状态：decided
-- 关联：<当前 S-id>
-- 结论：<人工逐项记录当前每个剩余问题的具体内容、风险和接受决定>
-- 证据：<当前 A-id>
-- SHOULD 接受：<runId>#<A-id>#<shouldSetHash>
-- 确认记录：<用户原话或可定位会话引用>
-```
-
-真实用户接受后，controller 必须人工把当前每个剩余问题的具体内容、风险和接受决定逐项记录到 `结论`，并把用户原话或可定位会话引用保存到 `确认记录`；controller、reviewer 或机器不得代替真实用户生成该 D*。机器只校验 token、状态、引用和字段非占位，不通过自然语言关键词或充分性启发式判断记录内容、用户理解或确认真实性。部分修复不等于部分接受：必须重跑得到新 runId / A*，若仍接受再绑定新的当前完整集合。启用 `零已知缺陷收口` 或 recommendation 为其它值时不得使用该例外，第四 verdict 必须与 A* 原始 verdict / severity 一致。
-
-`项目规则审查：not-applicable` 只允许 active catalog 真实为空，此时第四 verdict 必须为 `not-applicable`，`selectedRuleIds` 必须为空且不创建 rules-review run。`项目规则审查：blocked` 时不得写 `上下文预检：ready` 或 `AI Review：passed`，也不得把切片标记为 `done`。最终规则 finding 只向前返修，不回写历史 preflight 的 execution-time 分类。`close-check` 不判断 execution-time rule ID 是否该选、分类 reason 是否真实、selected 义务是否已充分进入执行契约、最终 `reviewNotApplicable` 的 reason / evidence 是否语义正确、规则 finding / repair disposition / 影响范围判断是否正确，或用户确认是否真实。
-
-`cannot-verify-from-package` 必须由 controller 补证：补测试结果、代码证据、调用链、D/A 引用或重新生成 package；补证后仍无法判断时，切片写 `AI Review：blocked（原因）` 或转 `D* open`。`failed`、`critical`、未解决的 `cannot-verify-from-package` 都阻塞 `AI Review：passed` 和 `状态：done`。
-
-增量复核中，修复 delta 直接引入的新 finding 标记 `Origin=repair-delta`，进入当前有限修复循环。其它新 finding 标记 `Origin=late-discovered`：`critical / major` 写 `Disposition=blocked`，保留证据并停止；`minor` 写 `Disposition=parked`，不进入当前修复循环，但必须在完成报告暴露为残余风险。启用 `零已知缺陷收口` 时，当前切片引入或加重的 finding 不得 parked，必须修复或 blocked。
-
-## 整任务审查结论
-
-`## 整任务审查结论` 是整任务收口审查的结构化输出。`整任务审查：passed` 或 `整任务审查：blocked` 时必须填写完整固定表；`整任务审查：package-generated` 可先保留占位。
-
-固定五项 verdict：
-
-```markdown
-## 整任务审查结论
-
-| Verdict | Status | Severity | Evidence |
-| --- | --- | --- | --- |
-| 全局约束符合性 | passed | not-applicable | 全局约束 / 切片概览 |
-| 跨切片交接一致性 | passed | not-applicable | 切片交接 / Task Reports |
-| 非目标 / 边界回归 | passed | not-applicable | 非目标 / Git Diff |
-| 需求闭合性 | passed | not-applicable | Claims 概览 / AI Review |
-| 残余风险 / 发布就绪度 | passed | not-applicable | D/A 摘要 / 残余风险 |
-```
-
-整任务五项 verdict 的 `Status` 只允许 `passed` / `failed` / `cannot-verify-from-package` / `blocked`，不得为 `not-applicable`；`passed` 只能搭配 `Severity=not-applicable`，其余 Status 只能搭配 `critical` / `major` / `minor`。`整任务审查：passed` 时不得出现 `failed`、`cannot-verify-from-package`、`blocked` 或 `critical`；Evidence 必须非空。`整任务审查：blocked` 时必须保留完整表，阻塞说明写在正文说明中。`close-check` 会拒绝 `package-generated` 和 `blocked`，只有缺席或 `passed` 可继续收口；`passed` 仍必须通过整任务审查包结构校验。
-
-## 关联项
-
-每个切片必须有 `#### 关联项`：
-
-- 无关联项时写 `暂无。`
-- 有关联项时使用两列表，只列 `D*` 和 `A*`
-
-```markdown
-#### 关联项
-
 | ID | 状态 |
 | --- | --- |
-| D27 | open |
+| D1 | decided |
 | A1 | done |
 ```
 
-`D*` 正文在 `decisions.md`，`A*` 正文在 `audits.md`。关联项只是摘要，状态真源是对应正文块。
+单任务 `audits.md#A*` 不加入这里；它通过 `delivery.json.evidenceRefs` 定位。
 
-## 候选与验证字段
+## result 与 slice 状态
 
-`候选` 必须写在每个切片块中，只允许：
+| delivery result | 合法 plan 状态 | 说明 |
+| --- | --- | --- |
+| `delivered` | `done` | 当前 task binding 已由 deliver-task validator 接受 |
+| `needs-upstream` | `blocked / in-progress` | caller 取得判断后继续同一 task 或更新合同 |
+| `needs-reslice` | `split` | 必须填写真实后代 `替代切片` |
+| `blocked` | `blocked` | 保留 evidence refs 与恢复条件 |
 
-- `候选自动`
-- `候选需确认`
-
-候选标签只表达切片阶段的预判。正式 `自动 / 需确认` 结论必须在切片前分叉审查通过后按 [EXECUTION-RULES.md](EXECUTION-RULES.md) 的风险判定重新确认。
-
-不维护 `verification.md`，也不使用 `V*`。
-
-`验证` 只表达功能 / 测试验证；`硬门禁` 和 `AI Review` 单独表达拒收门禁。不要把 lint / type-check / test 的失败全部塞到 `AI Review`，也不要用 `验证：passed` 替代门禁通过。
-
-- 标准验证通过：`- 验证：passed（标准流程）`
-- 未执行：`- 验证：pending`
-- 失败、阻塞、跳过或非标准替代命令：在本切片写一行摘要，并在切片内补 `#### 验证备注`
-- 父项拆分：父项 `状态：split`，头部用 `替代切片：S1.1 / S1.2` 绑定存在且为父片后代的切片，省略 `Commit`，写 `验证：skipped（父项拆分，无代码变更）`，并在 `验证备注` 说明父项无单独代码提交
+`split` 额外写：
 
 ```markdown
-- 验证：blocked（标准 test 脚本缺 `vitest.mjs`；替代 config 直跑相关测试 passed）
-
-#### 验证备注
-
-- `<项目规则中的测试命令>`：blocked，缺少目标环境配置
-- `<focused test command>`：passed
+- 替代切片：S1.1 / S1.2
 ```
 
-## 状态枚举
+后代必须真实存在并以父 ID 开头。validator 检查 ID 和 `needs-reslice` 绑定，不判断后代是否完整覆盖原任务。
 
-- 顶部 `状态`：`draft` / `executing` / `paused` / `done`
-- `阶段`：`slicing` / `executing` / `blocked` / `closing` / `done`
-- 顶部 `计划一致性预检`：`pending` / `passed` / `blocked` 开头；`blocked` 必须引用 open D，例如 `blocked（D1）`
-- 顶部 `整任务审查`：缺席 / `package-generated` / `passed` / `blocked`
-- `拆分拷问` 和切片 `门禁`：`pending-grill` / `grilling` / `grilled` / `no-grill` / `not-applicable`
-- 切片 `状态`：`not-started` / `blocked` / `in-progress` / `done` / `split` / `skipped`
-- 切片 `风险`：`待判定` / `A` / `B` / `C`
-- 切片 `执行`：`待判定` / `自动` / `需确认`
-- 切片 `上下文预检`：`pending` / `ready` / `blocked` / `skipped` 开头，可追加中文说明
-- 切片 `硬门禁`：`pending` / `passed` / `failed` / `blocked` / `skipped` 开头，可追加中文说明
-- 切片 `AI Review`：`pending` / `passed` / `issues` / `blocked` / `skipped` 开头，可追加中文说明
-- 条件字段 `用户验收`：`pending` / `passed` / `issues` / `skipped` 开头，可追加中文说明；只用于 `执行：需确认`、`风险：C`、用户明确要求逐片验收，或用户实际反馈 issue 的切片；`issues` 必须写明用户拒收原因，`skipped` 必须写明用户明确跳过原因
-- AI Review verdict `Status`：前三项为 `passed` / `failed` / `cannot-verify-from-package`；第四项 `项目规则审查` 在预检不适用时额外允许 `not-applicable`
-- AI Review verdict `Severity`：`critical` / `major` / `minor` / `not-applicable`
-- AI Review verdict 组合：`passed` / `not-applicable` 只能搭配 `Severity=not-applicable`；`failed` / `cannot-verify-from-package` 只能搭配 `critical` / `major` / `minor`
-- `上下文预检：ready`：必填预检字段不得是占位内容；`项目规则审查` 必须写明确状态，`禁止修改` 可显式写 `无`
-- `AI Review：issues/blocked`：必须有非占位头部摘要 / 原因，或有带非占位 Note 的阻塞 verdict 说明
-- `AI Review：passed`：必须有完整四 verdict，前三项不得为 `not-applicable`，各项必须满足 Status / Severity 固定组合，且不得出现 `failed` / `cannot-verify-from-package` / `critical`
-- `用户验收：pending/issues`：阻塞切片 `done`；`issues` 必须有非占位原因；`执行：需确认` / `风险：C` 的 done 切片必须有 `用户验收：passed/skipped`；用户不满意且不改变用户授权范围 / 验收口径时重置 `AI Review：pending` 并进入本片有限修复，返工提交以带原因的 `reviewTrigger：user-acceptance-issues（...）` 直接进入累计 full；改变产品行为、验收口径、公共契约、非目标或令风险升为 C 时转 D 分叉
-- `整任务审查：package-generated/blocked`：阻塞 `close-check`；`blocked` 仍必须有完整五 verdict 和整任务审查包结构证据
-- `整任务审查：passed`：必须有完整五 verdict，五项不得为 `not-applicable`，各项必须满足 Status / Severity 固定组合，且不得出现 `failed` / `cannot-verify-from-package` / `blocked` / `critical`
-- 切片 `修复次数`：`当前次数/最大次数`，最大次数只允许 `2` / `4`，当前次数不能超过最大次数；默认 `0/4`
-- 切片 `验证`：`pending` / `passed` / `failed` / `blocked` / `skipped` 开头，可追加中文说明
-- `done` / `split` / `skipped` 切片的 `门禁` 必须已收口；完成计划的顶部 `拆分拷问` 也必须已收口
+`skipped` 不需要 task/delivery，但额外写一个已决定分叉：
 
-当前状态写入规则：
+```markdown
+- 跳过依据：D3
+```
 
-- 未切片草稿才允许 `阶段：slicing` + `当前切片：待定` + `## 切片` 为 `待拆分。`。
-- 切片产出后，`当前切片` 必须指向一个可执行切片；不能指向 `done` / `skipped` / `split`。
-- `状态：paused` 不能停在 `阶段：slicing`；暂停前必须记录到具体执行 / 阻塞 / 收口阶段。
-- 收口完成时写 `状态：done`、`阶段：done`、`当前切片：无`。
+该 D 必须为 `decided` 并出现在本片 `关联项`。跳过理由是否充分由 controller / reviewer 判断。
 
-门禁状态写入规则：
+## 整任务审查
 
-- `pending-grill`：门禁待问。
-- `grilling`：用户选择 `拷问`，拷问进行中；已发“拷问收口候选”但尚未收到 `结束拷问` 时也保持该状态，用户回复 `继续拷问` 或直接提问不改变该状态。
-- `grilled`：用户回复 `结束拷问`，且结论已写回。
-- `no-grill`：用户回复 `不拷问`。
-- `not-applicable`：该门禁确实不适用，例如低风险候选自动片跳过切片前拷问门禁。
+默认不写。启用后增加：
 
-`提前全部拷问` / `全量提前拷问` 不新增顶部字段；进行中时用 `当前状态` 的 `下一步` 记录提前全量拷问及完成条件，进度由每片 `门禁` 承载。候选自动片预筛清楚时可写 `门禁：not-applicable`；需要拷问的切片收口后写 `门禁：grilled`。提前全量拷问一次只处理一个可执行切片，进入某片拷问时 `当前切片` 必须指向该片，同一计划中最多一个可执行切片为 `门禁：grilling`；续跑时先恢复 `grilling` 切片，没有 `grilling` 时再按顺序处理下一个 `pending-grill` 切片。所有可执行切片 `门禁` 都不再是 `pending-grill / grilling` 且无 open D 后，默认写 `状态：paused`、`阶段：executing`、`当前切片：<按计划顺序选择的首个未终态、依赖已满足的可执行切片；不得沿用最后一个 grilling 指针>`、`下一步：提前全量拷问已完成；等待用户审查 / 提交计划，或明确继续执行 <S*>（<S*> 为正常执行顺序中的首个可执行片）`；若用户在触发时已明确要求完成后继续执行，可不暂停，但仍不得跳过后续上下文预检和风险判定。
+```markdown
+> 整任务审查：package-generated
 
-切片状态写入规则：
+## 整任务审查结论
 
-- `split` 只用于已拆成子切片、父项不再直接执行的审计壳；它是终态，但不能作为续跑 `当前切片`。
-- `split` 父项必须写 `替代切片`，每个引用都必须存在且为父片后代；省略 `Commit`，验证用 `skipped` 开头，并在 `验证备注` 说明无单独代码提交。
-- `skipped` 只用于已由稳定决策明确不再执行的切片；必须写 `跳过依据：D*`，让该 decided D 同时出现在当前切片 `关联项`；省略 `Commit`，并写 `验证：skipped（<原因>）` 和非占位 `验证备注`。
-- `split` / `skipped` 不生成 claims、task brief、task report 或 review-package；它们用结构化关闭依据而不是 `done` 的实现证据收口。
+- reviewPackageHash：sha256:<whole-task.md hash>
 
-不要把用户口令或过程说明（如 `已拷问写回`）写进 `拆分拷问` 或切片 `门禁` 字段。
+| Verdict | Status | Severity | Evidence | Note |
+| --- | --- | --- | --- | --- |
+| 全局约束符合性 | passed | not-applicable | review package | ... |
+| 跨切片交接一致性 | passed | not-applicable | review package | ... |
+| 非目标 / 边界回归 | passed | not-applicable | review package | ... |
+| 需求闭合性 | passed | not-applicable | review package | ... |
+| 残余风险 / 发布就绪度 | passed | not-applicable | review package | ... |
+```
 
-`Commit` 只用于执行型切片，表示本片**业务代码**的提交状态，不表示 `dev-plans` 自身是否已提交，也不写最终 commit hash：未提交写 `待提交`，本片代码提交边界已收口写 `已提交`；`split` / `skipped` 不进入执行，必须省略该字段。`dev-plans` 记录走自己的独立 P / K / F commit：首个执行型切片前提交 P，每个执行型 `done` 切片最终审查后提交 K，完整收口仍有后续 durable 状态时提交 F，不由切片 `Commit` 字段表达。完整链为 `P → C1 → K1 → C2 → K2 … → Cn → Kn → [F]`；K 中不提前写下一片 `baseCommit`，`split` / `skipped` 不创建 K。首次派发前的固定起点写在切片 `baseCommit`，每轮最终业务 commit hash 的持久机器真源是 Review Range v2 的 `headCommit`；`项目规则审查：required` 时 rules-review dispatch 的 `reviewRange.boundCommit` 必须等于该值。`task-briefs/**`、`task-reports/**`、`review-packages/**` 是可重建临时产物，不进入 P / K / F；从 P 恢复时，先确认 `HEAD == P` 并把 P 写入首个执行型切片 `baseCommit`，从 K 恢复时先确认 `HEAD == K` 并在下一片首派前写入 K，再重新生成临时产物。执行型切片无代码变更时不要创建空业务 commit，完成后仍写 `Commit：已提交`，并在 `验证备注` / 完成报告说明无可提交变更。
+顶部状态只允许 `package-generated / passed / blocked`。`passed` 时五项必须明确为 `passed`；脚本检查字段、hash 和终态，不判断证据强度或 reviewer 结论正确性。
 
-## 维护规则
+## 持久与临时边界
 
-- `当前状态` 只做续跑指针；切片状态以切片块为准。
-- `plan.md` 只记录当前状态、计划一致性预检状态、门禁状态、切片状态和下一步，不写对话流水、agent 动作流水或审计结论；需要留痕时更新对应状态字段或在会话完成报告说明。
-- 切片相关的分叉和长审计只放在该切片 `关联项`，不要在顶部维护全局 D/A 索引。
-- 一旦已产出切片，`decisions.md` 中仍为 `open` 的 D 必须挂到至少一个切片 `关联项`；任务级 open D 不应和已切片状态并存。
-- open decision、长审计和正文模板分别按 [DECISIONS-FILE.md](DECISIONS-FILE.md)、[AUDITS-FILE.md](AUDITS-FILE.md) 维护。
-- 目标和全局约束留在 `plan.md`；只保留仍约束后续执行和 review 的全局规则，不复制证据和问答。
-- 不设独立 `待确认问题`、`验证记录` 或 `变更记录` 章节；这些信息分别由 D/A、切片验证字段、门禁记录和当前状态承载。
-- 除固定 `## 当前状态`、`## 文件索引`、`## 目标`、`## 全局约束`、可选 `## 整任务审查结论`、`## 切片` 和 `### S*：...` 切片块标题外，`plan.md` 不允许出现其他二级或三级标题；计划一致性预检不新增章节。
+P/K/F 允许提交：
+
+- 当前 plan 的 `plan.md / decisions.md / audits.md`；
+- `deliveries/<taskId>/` 下 `task.json / execution.json / claims.json / audits.md / delivery.json / .gitignore`；
+- 确有变化的 `dev-plans/.gitignore`。
+
+`deliveries/*/artifacts/**` 和 `review-packages/**` 是可重建工件，禁止提交。业务文件只进入下游 C，不进入 plan commit。

@@ -1,303 +1,168 @@
 ---
 name: sliced-dev
-description: 中大型编码任务的垂直薄片分步开发流程，支持续跑 dev-plans、跨 context 恢复、subagent 上下文隔离实现、独立 review-package、逐 claim 证据闭环 / close-check，以及 requests 契约、路由、构建、CI 等高风险变更。
+description: 当一个中大型软件开发目标需要拆成多个可独立验收、按依赖顺序交付的任务时使用；负责澄清分叉、维护 dev-plan、委托 deliver-task 并收口跨任务结果。
 disable-model-invocation: true
 ---
 
 # 切片开发
 
-## 第一原则
+## 职责边界
 
-先清分叉，再确认执行。
+`sliced-dev = decomposition + multi-task orchestration`。
 
-- **决策分叉**：需求、产品行为、用户授权范围、术语、上游、验收口径或记录语义不唯一。用户回答只确认口径，不授权执行；实现文件、测试落点和验证命令由控制器在授权边界内判断。
-- **拷问选择**：两类门禁触发——拆任务层在切片清单产出后问整体拆分，执行分片层在候选需确认 / 跨模块片审查前问该片；一律默认“推荐：拷问”。发问前必须按「拷问展示协议」先展示当前已识别的分叉主体，让用户知道将拷问什么，但不提前展开细节。必须要求用户若要作出门禁选择，只回复 `拷问` 或 `不拷问`；只有去掉首尾空白后完全等于这两个口令之一才有效。`是 / 确认 / 继续 / 好的` 等普通确认词无效，必须重问，不能结合上下文推断。用户提出问题、补充事实或指出流程问题时，先回答 / 处理，门禁状态不推进，再重问同一门禁。
-- **拷问收口**：用户进入拷问后，不能因为答完一个问题就自动结束拷问。用户回答形成当前分叉的唯一结论时，立即写回对应 D，但保持 `grilling`，继续处理其它已识别问题。无更多拷问问题时，必须发“拷问收口候选”，并告知用户可回复 `结束拷问` / `继续拷问`，也可以直接提出其他问题；只有 `结束拷问` 会结束拷问。若只压实选项但未形成结论，结束拷问后转入单点分叉确认。用户回复 `继续拷问`、提出问题、补充事实或指出流程问题时，先回答 / 处理，保持 `grilling`，再重问同一收口门禁。
-- **执行确认**：切片无开放分叉但命中高风险。发执行预告并问“确认执行切片 N 吗？”。用户确认授权控制器在已说明的用户授权边界内派发 implementer subagent，不把 task brief 的文件 / 验证清单固化为用户责任；若确认后未派发即中断，续跑时必须重新预告和确认。
-- **授权边界与执行边界**：用户授权边界由已确认的产品行为、验收口径、API / 数据契约、非目标、明确禁止范围、新增依赖和不可逆外部操作组成；风险和「需确认」面是独立执行门禁。`允许修改`、task brief、相邻测试、mock、验证命令和证据载体是控制器维护的可审计执行边界。调整前先按拟扩范围重跑受影响的上下文预检；仍在既有授权目标内、未命中 `禁止修改`、风险仍为 A/B、未新增命中「需确认」面且无需新的执行确认时，控制器可记录依据后自动更新执行边界，不创建 D、不重新询问用户。用户授权边界变化、风险升为 C、新增命中「需确认」面、需要新的执行确认或存在真正需要产品裁决的多个方案时确认。实际 diff 已越过旧 brief 时先判接收门禁失败并确认归属，不得回填清单使本轮通过；派发前脏文件漏记时不得事后补入 `基线脏文件`。细则见 [EXECUTION-RULES.md](EXECUTION-RULES.md)。
-- **术语约定**：除明确写作 `候选需确认片` 外，本文的 `自动片` / `需确认片` 均指正式 `执行：自动` / `执行：需确认` 的切片，不指 `候选` 标签。
-- **分叉审查阶段**：每个切片执行前必须先单独证明“没有决策分叉”。审查阶段禁止发执行预告、禁止请求执行确认、禁止展开实现方案。
-- **全局约束**：本次任务所有切片都必须继承、不可违反的全局需求约束，写入 `plan.md` 顶层 `## 全局约束`；执行和 AI Review 必须读取。
-- **零已知缺陷收口**：用户明确要求“零已知缺陷收口”或明确说明 `SHOULD` 缺陷也必须修复时，在全局约束写固定 token `- 零已知缺陷收口：enabled`。启用后，所有执行型切片都必须完成 AI Review；本次变更引入或加重的所有 finding（无论 `must_fix` / `should_fix`）都必须修复，`cannot_verify` 必须补证清零；缺陷不能靠风险接受、claim waiver 或 follow-up 收口。既有且未被本次变更加重的 observation 不自动扩入范围。修复超出当前 `允许修改` 时先按授权边界规则重跑受影响的上下文预检；无需新的执行确认时更新执行边界并继续，命中 `禁止修改`、改变用户授权边界、风险升为 C 或新增命中「需确认」面时停止，不能把切片标 `done`。
-- **规则审查结论绑定**：active catalog 真实为空时，`项目规则审查：not-applicable` 并跳过 rules-review；catalog 非空时，无论 execution-time `selectedRuleIds` 是否为空，都写 `required`。默认在当前最终 TARGET 的累计 General full clean 且适用的用户验收满足后创建 fresh rules-review v8 run；rule-review package 完全不携带 execution-time `selectedRuleIds` / `notApplicable` / `规则获取`，rule-reviewer 基于最终 TARGET 和完整 active catalog 独立分类。`dispatch.ruleSet.selectedRuleRefs` 是最终审查范围，`excludedRuleRefs` 固定为空，shards / `finalReview` 才是 full run 的审查结果；非空 catalog 若最终 `selectedRuleRefs` 为空，仍执行真实 zero-item run。最终 proof closure 只验证当前最终 TARGET 的 fresh full，或下一条限定的“直接前序 full + 当前一跳 repair verification”；除被该组合证明直接引用的前序 full 外，General lineage 中其它历史规则 A* 只保留 provenance，不读取其 run、不重验有效性，也不产生关闭义务。同一 TARGET 只修正规则协议或输入工件时仅重做 rules-review。sliced-dev 以 `--target-commit <headCommit>` 提交完整 commit 范围并保持 `excludedFiles: []`，不传 `--rules-commit`。规则 finding 只向前返修，不回写历史 preflight。
-- **规则返修复验**：Rule Repair Verification 是 `sliced-dev` 对“前序完整 rules-review 未闭合问题 + 直接返修 delta”的一跳规则复验；它不属于 rules-review run。本条是其证明义务、结果派生和组合证明的语义真源。
-  - 仅当前序完整 rules-review 因 finding / `cannot_verify` 返修、当前 TARGET 是其直接子提交、BASE 和规则身份未变、当前累计 General full clean 且适用用户验收满足时可构造；规则身份固定为 active catalog 的 index hash 与封印规则文件路径 / content hash。
-  - 输入只包括前序 full 的失败项、前序 selected rules、前序 globally-not-applicable rules、完整 repair delta，以及 `currentTargetCommit` 对应 Git tree / blob 中按需展开的上下文。reviewer 只能以当前 task 和这些 Git 对象为事实输入，未写入工件的会话记忆不是证据；是否复用 reviewer 会话不属于协议语义。
-  - reviewer 只证明三件事：逐项裁决旧 finding / `cannot_verify`；在前序 selected rules 下审查整个 repair delta 及其语义影响且确认范围 bounded；判断是否有前序 globally-not-applicable rule 因 delta 新变得 applicable。
-  - `applicabilityExpansion.verdict=none` 只表示没有审查范围扩张，不表示完整 applicability partition 双向不变；前序 selected rule 变得不适用属于安全的 scope contraction。发现扩张时不在本复验内审查新 applicable rule。
-  - 未修改上下文不得从工作区、index 或当前 HEAD 读取。共享 helper / type 改动必须检查所有可静态发现的调用方 / consumer；无法证明静态影响范围闭合时写 `scope_unbounded`。
-  - 它不调用或修改 rules-review，不创建 run / `finalReview`，也不继承旧 `passed` / `observation`。
-  - 结果派生优先级为：applicability expansion `detected / cannot_verify`、非返修功能改动、`scope_unbounded` 或其它 `cannot_verify` → `cannot_verify / fresh_full`；否则任一 `not_addressed` 或新 finding → `finding / repair`；否则仅 `applicabilityExpansion.verdict=none + bounded + 全部 addressed + 无新 finding` → `repaired / complete`。
-  - 只有“前序 full + 本轮 `repaired / complete` repair verification”共同构成当前 TARGET 的规则证明；repair verification 自己不是当前 TARGET 的 full rules-review。
-  - 派生为 `repair` 时，controller 把 `issueDispositions` 中的 `not_addressed` 与 `newFindings` 写入当前审计 / 返修依据，并通过下一轮 task brief 交给 implementer；形成新 TARGET 后直接执行 fresh full，不复用本 verification。
-  - 构造失败或派生为 `fresh_full` 时，controller 必须显式重新请求现有 fresh full，不得静默降级；该路径不递归继承 repair verification。
-- **默认 SHOULD 接受**：未启用“零已知缺陷收口”时，只有当前 run 为 `should_review_before_merge`、`mustFix=0`、`shouldFix>0`、`cannotVerify=0`，且当前 A*/真实用户 decided D*/Evidence/关联项/`<runId>#<A-id>#<shouldSetHash>`/非占位确认记录完整绑定，第四 verdict 才可单独写 `passed`；A* 仍保留 rules-review 原始 `failed`。`ready_for_merge` 仍要求三个计数均为 `0`；零已知缺陷收口和其它 recommendation 不借用该例外。机器只校验结构绑定，不判断风险说明是否充分、用户是否理解或确认记录是否真实。
-- **计划一致性预检**：切片清单产出后、拆分拷问门禁前，先检查整份计划内部是否一致；只写顶部 `计划一致性预检` 状态，分叉进 `decisions.md`，长矩阵进 `audits.md`，不新增 plan 章节。
-- **上下文预检**：动手前先暴露需要理解的上下文、必读上下文、项目规则审查、允许 / 禁止修改、非目标和停止条件；读完上下文前不得实现。路径、变更范围和 catalog 只能产生候选分类；完成本片必读代码与针对规则触发条件的 focused search 后，才能确定 execution-time `selectedRuleIds` / `notApplicable`。此前写入的分类必须重新校准，无法用代码证据明确排除的候选归入 selected。两类字段只约束 controller / implementer，不是最终 rules-review 范围；它们在任何状态都显式存在并附 reason，`selectedRuleIds` 每项只写一个 ID，`notApplicable` 可用逗号分隔多个 ID 共用一个 reason，`pending` / `blocked` 允许分类尚未闭合。写 `ready` 时必填字段不得仍是占位内容，两类必须对 actual catalog 构成完整互斥分区；active catalog 为空才写 `not-applicable`，非空则写 `required` 且 `selectedRuleIds` 允许为空，rules-review unavailable 时写 `blocked` 并停止。控制器还必须读取 selected 规则，并把每条可执行义务纳入现有执行契约、解决冲突；未完成时不得写 `ready`。`允许修改` 是可更新的执行清单，`禁止修改` 是硬边界且可显式写 `无`。完整档写回当前切片块，轻量档在会话输出短版。
-- **拒收门禁**：实现后必须跑硬门禁和 package-first AI Review；每个切片最多自动修复 4 次，只在实际修改任务范围内文件时计次。结构合法的负审查结论进入修复或阻塞，不能靠重派洗掉；只有未返回、越界或格式无法归属时才允许同一输入最多 fresh 重派一次，仍失败即 blocked。重生成 package 或修协议工件不计修复次数。次数用尽仍失败则停止。
-- **Claims / Evidence / Status**：完整档每个执行切片用 `claims/<S-id>.json` 记录可验证声明、证据和状态；Claim 是执行约束，不是事后总结，只能声明当前证据支持的阶段事实，不得提前宣称下游 General、用户验收、rules-review 或 close-check 已通过。控制器按证据判断 claim 状态；脚本只校验 JSON / 字段形状，`close-check` 只信 claims 的最终状态。
-- **计划检查点**：完整档在首个执行型切片首次生成 task brief 前，先让执行就绪的 `plan.md`、`decisions.md`、`audits.md`、`claims/*.json` 通过 `validate`，保持该片 `baseCommit` 缺席并独立提交一次纯 `dev-plans` 检查点 P，再把 P 写入 `baseCommit`。`task-brief` 只机器校验 P 是普通单父、只含持久 plan 文件、所需真源存在，且当前持久 plan 除 `baseCommit` 自绑定外未漂移；不判断计划语义是否正确。完整执行链为 `P → C1 → K1 → C2 → K2 … → Cn → Kn → [F]`：每个执行型 `done` 切片最终审查通过后创建普通单父、plan-only 的 K；K 中保持下一执行片 `baseCommit` 缺席，下一片首次派发前再把 K 写入该字段。`split` / `skipped` 不创建 K。
-- **Subagent 隔离**：当前运行时只提供上下文 / 角色隔离，不提供 workspace 隔离。完整档首轮用 `spawn_agent(fork_turns: "none")` 派发 implementer；同一切片安全返修优先 `followup_task` 原 implementer，只有原 agent 不可用、接收门禁确认其越界 / 输出与实际 diff 冲突，或用户授权边界、任务目标、Claims 契约实质变化时 fresh fallback。既有授权内扩展执行 allowlist 不单独触发新建。所有 agent 共享当前工作区，同一时间只允许一个 implementer 写业务文件，控制器和其他写入型 agent 在 implementer 返回前不得修改业务文件。
-- **交接文件**：完整档每轮派发固定先把失败门禁或当前 A* / open G* 修复依据写回，再按 `task-brief` → `task-report-template` → subagent 的顺序执行；最新 brief 覆盖 implementer 旧上下文，subagent 记忆不是真源。`task-briefs/<S-id>.md` 是窄上下文入口并渲染当前片 claims；`task-reports/<S-id>.json` 每轮先重置为默认 `blocked`、空变更和空验证，再由 implementer 填写最小结构化 handoff。`task-briefs/**`、`task-reports/**`、`review-packages/**` 是可重建临时产物，保持忽略，不进入 P / K / F；从 P 恢复时，先确认 `HEAD == P` 并把 P 的规范 commit ID 写入首个执行型切片 `baseCommit`，再按持久真源重新生成；从 K 恢复时，先确认 `HEAD == K`，在下一执行片首次派发前写入该 K，再重新生成。只有本轮报告为 `conclusion: ready-for-review`，且 P0/P1 claims 已由控制器写入可审查状态，才能生成 review-package。
-- **审查包与 TARGET**：`record-commit` 成功写入不同的新 `headCommit` 才迁移 TARGET，并立即清除旧当前 General selector / 三 verdict、规则 verdict / runId，把 `用户验收：passed` 机械重置为 `pending`，同时在该字段说明中保留直接前序 TARGET 与原验收值；`issues` 保留反馈，`skipped` 和历史 A* 保留。失败或 TARGET 未变时不清除仍绑定同一输入的 proof；中断造成“新 range + 旧 proof”时 validator 拒绝并由 `record-commit` 先完成恢复。General Review 仍按首次累计 `full`、finding-focused `repair`、repair 后最终累计 `full` 推进。用户拒收新 TARGET 使用 `user-acceptance-issues`；规则 finding 新 TARGET 使用唯一、一次性的 `project-rule-review-issues（A*）`，两者都直接进入累计 `full` 且不伪造 General finding。
-- **产物角色边界**：`plan.md` 是任务状态、边界、风险和执行位置真源；`claims/<S-id>.json` 是声明 / 证据 / 状态真源；task brief、task report、review-package、rule-review-package、rule-repair task / verification 和 whole-review-package 是注意力收束视图或审查工件，不是真源。收束视图限制 implementer / reviewer 的默认注意力；当 P0/P1 claim、边界、证据或 verdict 无法从视图判断时，必须 focused 回源到代码、测试、diff 或真源状态，并把证据写回 plan / D/A / claims，不能用 package 完整性替代事实判断。
-- **用户验收**：最终累计 General full 通过并写回前三项 verdict 后，按 [PLAN-FILE.md](PLAN-FILE.md) 的条件字段验收；自动片默认不写该字段并直接继续，需确认片 / C 类片必须停下。用户拒收时写 `issues`、重置 `AI Review` 并返工，返工 clean 后保持 `pending`。其它新 TARGET 的 `passed` 被机械重置后，字段说明保留直接前序 TARGET 与原验收值；若现有 General Review 的 Range / claims / evidence 能明确证明原验收 TARGET 到当前 TARGET 的相关 delta 没有改变该验收覆盖的用户可感知行为、acceptance criteria / scope，也未引入新的用户判断，controller 可复用原 `passed`，但必须同时引用该原用户验收与当前 General 证据，不得伪装成用户对新 TARGET 的再次确认；证据不足或验收相关语义变化时保持 `pending` 并重新验收。`test-only` 既非必要条件也非充分条件，不得为了取得复用资格额外创建一轮 General Review。验收满足后才进入项目规则审查路径，第四 verdict 完成后才写 `AI Review：passed`。
-- **整任务审查**：默认不启用。用户明确要求整体验收 / 跨切片审查 / 发布就绪度，或控制器 / reviewer 判断单切片 AI Review 覆盖不了全局约束、跨切片交接、非目标回归、需求闭合或残余风险时，才运行 `whole-review-package` 并在 plan 顶部添加 `整任务审查：package-generated` 与 `## 整任务审查结论`；最终只允许写 `passed` / `blocked`，`blocked` 和 `package-generated` 都阻塞 `close-check`。整任务包合并各业务 Review Range，允许相邻范围之间恰有一枚合法 K，且不把 plan 文件纳入变更文件或 diff。
-- **最终收口**：`slice-close-check` 只检查一个目标执行型切片的 claims、diff-check、task handoff、General Review、项目规则审查和终态，允许其它切片未完成；`close-check` 才是完整计划最终硬门禁。无整任务审查时，只有在最后 K 创建前完整 `close-check` 已通过，Kn 才兼任 F；有整任务审查时先提交 Kn，再审查、完整 `close-check`、提交 F。Kn 后若还有 `split`、`skipped`、决策或其它 durable plan 变化，也另建 F；全部切片均为 `split` / `skipped` 时，完整 `close-check` 后仍创建 F。
-- **切片提交**：业务切片仍先提交、后审查。首轮 `pre-commit-check` 要求 `HEAD == baseCommit`，返修轮要求 `HEAD == previousHeadCommit`；同时要求排除当前 plan 产物和已记录基线脏文件后的全部 task-owned staged / unstaged / untracked 路径、`taskReport.changedFiles` 与 staged 集合精确一致，且不存在未暂存残余、rename 逃逸、越过 allowlist、命中 forbidden path 或基线脏文件重叠。controller 只 stage 报告文件并创建普通单父业务 commit，`record-commit` 再验证父提交和 commit diff 文件集合；无代码轮不创建空业务 commit，HEAD 保持不变。最终审查通过后写回切片、移动当前指针，运行 `slice-close-check`，scoped stage 持久 plan 真源并运行 `plan-commit-check`、`git diff --cached --check`，再创建 K。K / F 只允许当前 plan 的 `plan.md`、`decisions.md`、`audits.md`、`claims/*.json` 和确有变化的 `dev-plans/.gitignore`；提交消息服从当前仓库适用的 commit message 规范，sliced-dev 不规定 type、scope、subject 或 body。提交边界见 [EXECUTION-RULES.md](EXECUTION-RULES.md)。
+- 输入是一个需要拆成多个独立交付单元的软件开发目标。
+- 输出是已闭合的多任务计划，或一个明确的计划级阻塞 / 上游分叉。
+- `sliced-dev` 拥有切片、依赖、分叉、当前指针、P/K/F 检查点和整任务审查。
+- 每个单任务的上下文预检、项目规则读取、执行范围、claims、实现、验证、业务 commit、General Review、验收证据、rules-review 和单任务结果全部由 `deliver-task` 拥有。
+- `sliced-dev` 不读取业务代码来替下游确定 `allowedPaths`，不创建 `execution.json`，不派发自己的 implementer / reviewer，也不复制下游审计正文到 plan。
 
-发现决策分叉时，禁止发执行确认；执行确认不能替代需求澄清。用户回答“继续 / 保持 / 确认”时，只按刚刚提出的问题解释，不能跨阶段当作分叉结论或执行授权；若刚刚提出的是拷问选择，这类普通确认词无效，必须重问固定口令；若刚刚提出的是拷问收口，只有 `结束拷问` 会收口，`继续拷问` 或直接提问都保持拷问态。
+如果目标本身已经是一个边界明确的单任务，直接使用 `deliver-task`，不要为了调用本 skill 创建单切片计划。执行中的 `deliver-task` 返回 `needs-reslice` 时，才由本 skill 接回并拆成多个任务。
 
-## 档位
+## 真值 owner
 
-- **轻量**：当前 context 内可完成、全为「自动」片，且不需要跨 context 恢复、subagent 上下文隔离、独立 review-package、逐 claim 证据闭环或 close-check（如单文件 / 文案 / 局部样式 / 明确小 bug）→ 先在会话输出短版上下文预检，再直接做 + 修改后验证；B 类必跑 AI Review；不切片、不记录、不走门禁状态机、不自动 commit。判出 C、命中「需确认」面或同一任务第二次越界时，停下转完整档。细则见 [EXECUTION-RULES.md](EXECUTION-RULES.md) 的「轻量档执行」。
-- **完整**：命中任一控制需求时走完整流程：用户显式发起 `/sliced-dev`、续跑已有 `dev-plans`、含任一「需确认」/ C 类 / 高风险契约片、预计跨 context、需要 subagent 上下文隔离实现、需要独立 review-package、需要逐 claim 证据闭环或 close-check。单纯“中大型 / 跨模块”不是充分条件；只有它导致上述控制需求时才进入完整档。
+| 真值 | Owner | 载体 |
+| --- | --- | --- |
+| 整体目标、全局约束、切片、依赖、当前状态 | `sliced-dev` | `plan.md` |
+| 需要用户拍板的稳定分叉 | `sliced-dev` | `decisions.md` |
+| 跨切片或计划级长证据 | `sliced-dev` | plan 根目录 `audits.md` |
+| 单任务 immutable contract | caller=`sliced-dev` | `deliveries/<taskId>/task.json` |
+| 单任务执行边界与全部交付证据 | `deliver-task` | 同一 task directory |
+| 单任务结果 | `deliver-task` | `delivery.json` |
 
-## 拷问分层
+`sliced-dev` 只能根据 `delivery.json` 的结构化结果推进自己的状态；不得把 plan 字段当作第二份 General、acceptance、rules-review 或 target 状态。
 
-拷问分两层，互不替代，各管各的产出物：
+## 开始与续跑
 
-- **拆任务层**：针对“任务怎么理解、整体怎么切”。清单成型**前**的需求 / 范围 / 术语 / 上游口径分叉，走「分叉处理协议」的拷问选择；清单成型**后**的整体拆分结构，走「拆分拷问门禁」。
-- **执行分片层**：针对“选定的某一片具体怎么做、有没有分叉”。候选需确认 / 跨模块片的拷问入口是「切片前拷问门禁」；`候选需确认` 只是切片阶段的风险预测，不等于最终 `执行：需确认`。低风险候选自动片可跳过该门禁，但若审查首次发现分叉，必须先补问该片拷问选择。已问过该片拷问门禁后，审查阶段发现分叉才直接进分叉确认，不重问拷问。
+1. 读取用户目标、适用的项目规则和明确上游依据。
+2. 若已有 `dev-plans/YYYY-MM-DD-<slug>/`，先读取 `plan.md`、`decisions.md`、plan 根目录 `audits.md`，再运行：
 
-## 分叉处理协议
+   ```bash
+   node <sliced-dev-skill-dir>/scripts/dev-plan.mjs validate dev-plans/YYYY-MM-DD-<slug>
+   node <sliced-dev-skill-dir>/scripts/dev-plan.mjs show dev-plans/YYYY-MM-DD-<slug> current
+   ```
 
-任务级门禁、切片、切片前分叉审查发现决策分叉时，共用查证、写回、重跑这套骨架，不在各阶段各写一套问法：
+3. 状态不闭合时从持久检查点继续；压缩前对话、旧 agent 记忆和临时 review package 都不是真源。
+4. 新计划使用 `init`，按 [PLAN-FILE.md](PLAN-FILE.md) 补齐目标、全局约束和切片。
 
-1. 先查证，收敛成一个最小分叉；能靠代码、文件、git 状态或上游材料解决的不要问用户。
-2. 写入 `decisions.md` 的 `D*`，只记录“状态 / 关联 / 证据 / 推荐 / 问题”；这里的“问题”是后续可能要问的分叉结论，不是立即抛给用户；长证据用 `A*` 写入 `audits.md`。
-3. 是否先问拷问选择，按所在层决定：
-   - **拆任务层**（任务级门禁 / 切片）：先按「拷问展示协议」输出选择预览，再停下问“是否进入拷问？请回复：拷问 / 不拷问。”。
-   - **执行分片层**（切片前分叉审查）：若该片拷问门禁已问过，不重问拷问，直接进第 5 步；若低风险候选自动片跳过门禁后首次发现分叉，先补问该片拷问选择。
-4. 用户回复 `拷问` 时，按「拷问执行方式」选择工具压实分叉；进入拷问后必须经过收口门禁，只有 `结束拷问` 会结束拷问，`继续拷问` 或直接提问都保持拷问态。每个具体分叉形成唯一结论后立即进入第 6 步写回，但不结束拷问；若结束拷问时仍只压实选项而未形成结论，进入第 5 步。
-5. 用户回复 `不拷问`、处于不重问拷问的执行分片层，或结束拷问后仍未形成唯一结论时，才按「拷问展示协议」的具体问题格式问一个分叉结论。
-6. 写回结论后，把 D 状态改为 `decided` 并同步相关切片关联项；仍处于 `grilling` 时继续下一个已识别问题，没有更多问题时发“拷问收口候选”，否则回到触发该分叉的阶段重跑门禁（切片阶段发现的分叉回到任务级分叉门禁）。分叉未清零前，不切片、不判风险、不发执行预告。
+## 分叉与拷问
 
-## 拷问展示协议
+先清分叉，再确认执行。完整规则见 [EXECUTION-RULES.md](EXECUTION-RULES.md)。
 
-每次用户可见的拷问输出都必须先用独立引用行标明拷问对象：
+- 决策分叉是需求、产品行为、公共契约、用户禁止范围、非目标、上游或验收口径不唯一；写入 `decisions.md`，`open` 时阻塞关联切片。
+- 文件落点、执行 allowlist、测试位置、验证命令和规则适用性不是默认用户分叉；这些由下游读取真实代码后判断。
+- 计划一致性预检通过后，先处理整体拆分拷问；每个候选需确认或高风险切片在委托前还要处理本片拷问。
 
-- 清单成型前的任务级分叉：`> 拷问对象：任务口径`
-- 拆分拷问：`> 拷问对象：整体拆分方案`
-- 切片拷问：`> 拷问对象：切片 <S-id>「<切片标题>」`
-
-拷问选择预览、每轮具体问题和拷问收口候选都必须重复显示当前对象；不能让用户根据问题内容、会话顺序或 `当前切片` 指针猜测所处入口。该行只标识用户正在审查的对象，不展示 D 编号、门禁状态或拷问进度。
-
-拷问选择前只展示当前已识别的分叉主体，不展开每个问题的证据、选项和影响细节：
-
-```markdown
-> 拷问对象：<按当前入口填写>
-
-### 可能需要确认的内容
-
-- <分叉主体的一句话概括>
-
-### 推荐选择
-
-建议拷问。<一句推荐理由>。选择 `不拷问` 只跳过拷问式展开；无法自行查证的未决分叉仍会逐个直接确认。
-
-### 请确认
-
-是否进入拷问？请回复：拷问 / 不拷问。
-```
-
-分叉主体从当前 open D、计划一致性预检或切片预筛中已查证的具体问题提炼；只写用户理解拷问对象所需的主体内容，不展示 D 编号、状态、分类、证据索引、问题总数或拷问进度，也不把尚未识别的问题写成已知问题。当前没有明确分叉时，如实说明“当前未识别到明确分叉”，并用一句话写明拷问将继续检查的具体对象。
-
-进入拷问或直接确认分叉后，每轮只展示一个自包含问题，固定使用：
-
-```markdown
-> 拷问对象：<沿用当前入口>
-
-### 背景与分歧
-
-<说明相关事实，以及为什么仍需确认。>
-
-### 选择影响
-
-<说明各个实际选择会改变什么。>
-
-### 推荐方案
-
-<给出推荐答案和理由。>
-
-### 请确认
-
-<只问一个具体问题。>
-```
-
-用户侧不展示 D 编号、状态、分类、证据索引或拷问进度；这些只写入 `dev-plans`。完整证据继续留在 D/A，问题正文只带理解和回答当前问题所需的最短事实。
-
-## 拷问执行方式
-
-用户选择拷问后，优先使用已有拷问 skill，不用普通问答替代：
-
-1. 用户明确指定 `grill-me`、`grill-with-docs` 或其他审查方式时，按用户指定执行。
-2. 未指定但需要同步写回文档、计划、上游依据、ADR 或语义记录时，优先使用 `grill-with-docs`。
-3. 未指定且只需要压实设计 / 需求 / 行为分叉时，优先使用 `grill-me`。
-4. 只有这两个 skill 不适用或不可用时，才使用当前 skill 内的普通拷问追问。
-
-拷问执行期间：
-
-- 每轮按「拷问展示协议」只问一个具体问题；用户回答只解释为该问题的回答，不代表拷问结束、其它分叉清零或授权执行。
-- 还存在未压实问题时，继续下一轮拷问。
-- 进入拷问后，若当前入口有对应门禁字段，把 `拆分拷问` / 切片 `门禁` 写为 `grilling`。
-- 用户回答形成当前分叉的唯一结论时，立即写回对应 D 并同步相关切片关联项，但保持 `grilling`；答案产生子分叉时继续处理当前问题。
-- 判断没有更多问题时，保持 `grilling`，输出“拷问收口候选”，列出已压实结论和剩余风险，然后停下问：“是否结束拷问？可回复：结束拷问 / 继续拷问；如果还有其他问题，也可以直接提问。结束拷问只结束拷问方式，不关闭未决分叉。”
-- 用户回复 `结束拷问` 后，按当前入口收口：拆分拷问写 `拆分拷问：grilled` 并进入首个切片流程；切片前拷问写该片 `门禁：grilled` 并进入切片前分叉审查；分叉处理里的拷问若仍有未形成唯一结论的 D，则按具体问题格式转入单点分叉确认。`结束拷问` 不重复确认已写回的 D。
-- 用户回复 `继续拷问` 后，保持 `grilling`，继续拷问。
-- 用户直接提出问题、补充事实或指出流程问题时，先回答 / 处理，保持 `grilling`，再重问收口门禁。
-- 用户回复其他无明确含义内容时，不更新门禁状态、不进入分叉审查或执行确认，只重问收口门禁。
-
-## 拆分拷问门禁
-
-切片清单产出并通过计划一致性预检后、进入第一个切片前，先用 `> 拷问对象：整体拆分方案` 标明当前入口，再按「拷问展示协议」展示整体拆分中当前可能需要确认的内容并问一次（完整档触发，轻量档不问；整个任务只问一次）：“是否进入拷问？请回复：拷问 / 不拷问。”
-
-- 对象是成型拆分方案的**结构**：切片边界、片间依赖、候选标签是否合理；不重问清单成型前已处理的口径分叉。
-- 这是审查方式选择，不是分叉结论，也不是执行授权。
-- 用户回复 `拷问` 时，按「拷问执行方式」压实拆分；通过 `结束拷问 / 继续拷问` 收口门禁后，把 `拆分拷问` 写为 `grilled`，结论写回 `dev-plans` 的切片清单，再进入首个切片流程。
-- 用户回复 `不拷问` 时，把 `拆分拷问` 写为 `no-grill`，再进入首个切片流程；若该片命中「切片前拷问门禁」，按该门禁处理，低风险候选自动片可跳过。
-- 用户回复不是 `拷问` 或 `不拷问` 时，不更新门禁状态、不进入下一阶段；若用户在提问、补充事实或指出流程问题，先回答 / 处理，再重问同一个拷问选择。
-- 若清单成型前的拷问已覆盖整体结构，agent 可标注原因，但仍要求用户回复 `不拷问` 后才跳过本门禁。
-
-## 切片前拷问门禁
-
-选定候选需确认片、跨模块片或用户要求的切片后，进入切片前分叉审查前，先用 `> 拷问对象：切片 <S-id>「<切片标题>」` 标明当前入口，再按「拷问展示协议」展示该片当前可能需要确认的内容并问一次：“是否进入拷问？请回复：拷问 / 不拷问。”这是执行分片层拷问的**唯一入口**，发生在 agent 判定“无分叉”之前。
-
-- 这是审查方式选择，不是分叉结论，也不是执行授权。
-- 用户回复 `拷问` 时，按「拷问执行方式」先压实边界；通过 `结束拷问 / 继续拷问` 收口门禁后，把该切片 `门禁` 写为 `grilled`，只写回会影响范围、风险、验证或交接的稳定结论，再进入切片前分叉审查。
-- 用户回复 `不拷问` 时，把该切片 `门禁` 写为 `no-grill`，才由 agent 进入切片前分叉审查并输出无分叉 / 发现分叉结论。
-- 门禁收口后不得直接把 `候选需确认` 当成 `执行：需确认`；正式执行模式只在切片前分叉审查无开放分叉、上下文预检完成并重判风险后写回。若重判为 A/B 且未命中需确认面，可写 `执行：自动`；若重判为 C 或命中需确认面，写 `执行：需确认`。
-- 用户回复不是 `拷问` 或 `不拷问` 时，不更新门禁状态、不进入分叉审查或执行确认；若用户在提问、补充事实或指出流程问题，先回答 / 处理，再重问同一个拷问选择。
-- 已问过本门禁的切片，审查阶段发现分叉时直接进分叉确认（按「分叉处理协议」问分叉结论），不再重问拷问。
-- 低风险候选自动片可跳过本门禁；若维护 `dev-plans`，把该片 `门禁` 写为 `not-applicable`。随后直接输出简短分叉审查；若审查首次发现分叉，先补问该片拷问选择。
-
-## 提前全量拷问
-
-用户明确要求 `提前全部拷问` / `全量提前拷问` 时，拆分拷问收口后、执行首片前，先按切片顺序预筛所有可执行切片，并提前拷问需要拷问的切片：
-
-- 这是执行前的分叉收敛模式，不新增 plan 字段；进行中时把 `当前状态` 的 `下一步` 写成提前全量拷问及完成条件，续跑时用它识别该模式，但只按每片 `门禁` 决定恢复动作。
-- 候选自动片先预筛；无分叉、边界清楚、验证口径清楚时写 `门禁：not-applicable`，不进入真实拷问。
-- 候选需确认片默认提前拷问；候选自动片预筛发现分叉、风险不清或验证不清时，先改为 `候选：候选需确认`，再提前拷问。
-- 对需要拷问的切片，用户的提前全量拷问要求等价于已选择 `拷问`，不再逐片询问 `拷问 / 不拷问`；但每片拷问收口仍必须等待 `结束拷问 / 继续拷问`。
-- 提前全量拷问一次只处理一个可执行切片；进入某片拷问时，`当前切片` 必须指向该片，同一计划中最多一个可执行切片为 `门禁：grilling`。续跑时若存在 `grilling` 切片，先恢复该片拷问收口；若不存在 `grilling`，再按切片顺序处理下一个 `pending-grill` 切片。
-- 提前阶段只做预筛、拷问、稳定结论写回和必要的分叉处理；不得生成 task-brief、claims，不得进入上下文预检或实现。
-- 提前拷问收口后，若已无开放分叉、边界清楚且未命中高风险，允许把 `候选需确认` 改成 `候选自动`；后续执行该片时，仍按上下文预检和风险判定写正式 `执行：自动 / 需确认`。
-- 若提前拷问发现切片过大或边界不清，允许拆片；父片标 `split` 并用 `替代切片` 绑定存在且为父片后代的切片，新增和受影响切片重新进入提前全量拷问队列，未受影响且已收口的切片不重跑。
-- 全部可执行切片的 `门禁` 都不再是 `pending-grill / grilling` 且无 open D 后，默认暂停在计划确认检查点：写 `状态：paused`、`阶段：executing`、`当前切片：<按计划顺序选择的首个未终态、依赖已满足的可执行切片；不得沿用最后一个 grilling 指针>`、`下一步：提前全量拷问已完成；等待用户审查 / 提交计划，或明确继续执行 <S*>（<S*> 为正常执行顺序中的首个可执行片）`，用户侧明确说明“提前全量拷问已完成”，汇报已确认的稳定结论、残余风险和建议下一片，不展示中间门禁状态、候选标签、D 标识、问题数量或逐片拷问进度；若仍有需要用户裁决的主体，保持或新建 open D，不进入该完成检查点。只有用户明确要求继续执行时，才回到当前切片的正常执行流程；若用户在触发提前全量拷问时已明确要求完成后继续执行，可汇报摘要后继续。后续执行时若代码事实或上游变化导致新分叉，仍按「分叉处理协议」处理。
-
-## 完整流程
-
-1. **开场审计**
-   - 读已有 `dev-plans/`、`git status --short -uall`、当前切片代码和上游。
-   - 完整档续跑优先用 `roster` 看切片概览、`show current` 加载计划头与当前切片块，而不是整篇读 `plan.md`；输出中的 `下一步记录（未校验）` 只作定位提示，不是合法动作证明，续跑动作以当前阶段、当前切片、门禁和 open D 为准；关联项中的 D/A 仍按规则读取正文（命令见 [SCRIPTS.md](SCRIPTS.md)）。
-   - 同时扫描 `decisions.md` 中仍为 `open` 的 D；若已产出切片但 open D 未挂到任一切片 `关联项`，先修记录或回到任务级分叉门禁，不能直接续跑当前切片。
-   - 识别 `计划一致性预检`、`拆分拷问` 与各片 `门禁` 状态；计划一致性预检未 `passed` 时，不能进入拆分拷问或执行。
-   - `当前切片` 只能指向可执行切片；若指向 `split` 父项、`done` / `skipped` 终态、`待定` 或不存在的 ID，先修记录再继续。
-   - 报告档位和是否维护 `dev-plans`。
-2. **任务级分叉门禁**
-   - 判断任务级 `任务内容`、影响范围、排除范围、上游和验收是否足够进入切片。
-   - 还要判断是否存在会改变用户授权边界、验收口径或风险标签的未确认点。
-   - 能靠搜索、读代码、检查文件 / git 状态解决的先查；不要把可查问题抛给用户。
-   - 仍有任务级分叉时，调用「分叉处理协议」；任务级分叉清零前不进入切片。
-3. **切片**
-   - 只细化已确认目标，不用切片补需求口径。
-   - 每片端到端、可独立验证；记录 `任务内容`、验收、依赖、候选标签和执行控制字段。
-   - 稳定跨切片输入 / 输出只写当前切片可选 `#### 切片交接`；不建立顶层接口注册表。普通 `依赖：S*` 不强制触发交接小节。
-   - 按业务结果拆，不按代码形状拆；不要把切片写成“抽 helper / 加 fallback / 新公共 utils / normalize”。
-   - 若切片时发现上游模糊、冲突、遗漏，或用户授权边界 / 验收口径 / 风险标签不唯一，调用「分叉处理协议」并回到任务级分叉门禁。
-   - 若执行前或执行中发现单片过大导致用户授权边界、验收口径或风险不清，先停下建议拆小；这些内容变化时重新进入分叉门禁。仅调整实现文件、相邻测试或验证命令时，按授权边界规则更新执行边界。
-   - 父片拆分后写 `状态：split` 和结构化 `替代切片` 引用；稳定决策明确本片不再执行时写 `状态：skipped` 和指向 decided D 的 `跳过依据`。两种终态都必须先收口本片门禁，不能用自由文本备注替代结构引用。
-   - 切片阶段只给候选标签；正式 `自动 / 需确认` 结论必须在切片前分叉审查通过后判定。
-   - 候选标签：
-     - **候选自动**：预期低风险，后续可自动做 + 自动验证。
-     - **候选需确认**：预期可能命中需确认面，后续必须先过切片前拷问门禁和分叉审查；它不是最终执行模式。
-4. **计划一致性预检**
-   - 切片清单产出后、拆分拷问门禁前执行；检查总目标 / 非目标、全局约束、术语、旧行为覆盖、片间依赖、切片交接、候选风险、验证口径、D/A 关联和依赖图是否互相一致。
-   - 无问题时写 `计划一致性预检：passed`；发现需要用户拍板的冲突时写 `blocked（D*）` 并按「分叉处理协议」处理；长证据或矩阵写 `A*`。
-   - 预检是门禁动作，不是 plan 章节；禁止把检查流水、问答过程或完整矩阵写进 `plan.md`。
-5. **拆分拷问门禁**
-   - `计划一致性预检：passed` 后、进首片前，对整体拆分方案问一次（完整档；整个任务一次），详见「拆分拷问门禁」。
-   - 清单成型前拷问已覆盖整体结构时，可标注原因，但仍要求用户回复 `不拷问` 后才跳过。
-   - 用户要求提前全部拷问时，拆分拷问收口后先进入「提前全量拷问」，完成后默认停在计划确认检查点；用户明确继续执行后才进入首片执行。
-6. **切片前分叉审查**
-   - 选定当前切片后，先停在「分叉审查阶段」；候选需确认片 / 跨模块片先通过「切片前拷问门禁」。
-   - 即使当前切片 `关联项` 为空，也必须按当前代码和上游重判。
-   - 输出形态、审查项、发现分叉后的回流见 [EXECUTION-RULES.md](EXECUTION-RULES.md)。
-   - 审查无分叉后，进入上下文预检。
-7. **上下文预检与 Claims**
-   - 只更新当前切片 `#### 上下文预检`、执行控制字段和 `claims/<S-id>.json`，不改业务代码。
-   - 写明风险 A/B/C、必读上下文、项目规则审查、允许修改、禁止修改、非目标、停止条件，并核对 `全局约束` 与当前切片 `切片交接`。
-   - 路径、变更范围和 catalog 先形成候选；读完 must-read 并完成针对规则触发条件的 focused search 后，重新校准 execution-time 分类，无法用代码证据明确排除的候选归入 selected。随后才能更新 `上下文预检：ready`；`需理解`、`必读上下文`、`允许修改`、`非目标`、`停止条件` 不得仍是 `待执行前补充`、`TBD`、`TODO`、`待补充`、`未填写` 等占位内容；`项目规则审查` 必须按 active catalog 基数写明确状态及完整互斥分类：空 catalog 才是 `not-applicable`，非空 catalog 是 `required` 且 `selectedRuleIds` 可为空，rules-review unavailable 时是 `blocked`。按 `规则获取` 读取 selected 规则，把可执行义务映射到现有 `允许修改` / `禁止修改`、验证、claims、停止条件或门禁记录并解决冲突后，才可写 `ready`；不要复制规则正文。上下文不足、义务尚未消费或冲突未解决时写 `pending` / `blocked` 并停止；当前执行清单不足时，先按授权边界规则决定自动更新还是停止确认。
-   - 生成 task brief 前创建或细化 `claims/<S-id>.json`；claims 至少覆盖行为、边界、验证和残余风险中的关键项。
-   - 若当前片是计划顺序中的首个执行型切片，先让执行就绪 plan 通过 `validate`，保持该片 `baseCommit` 缺席，只 stage 持久 plan 真源并创建检查点 P；随后把 P 写入该片 `baseCommit`。首片首次派发前计划实质变化时，重新提交 P 并以最新 P 为准。后续执行型切片保持 `baseCommit` 缺席到首次派发前，再验证当前 `HEAD` 是前一执行片 `headCommit` 的直接、普通单父、plan-only 子提交 K，并写入该 K；首派前产生的当前片 plan 更新保持未提交，由当前片最终 K 持久化，不额外插入 plan commit。
-   - C 类切片在输出方案后必须停下等人工确认；方案并入执行预告，方案确认与执行确认是同一次停顿。
-8. **执行与门禁**
-   - 自动片：准备 claims → 首片提交 P 并记录 `baseCommit`，后续片在首派前记录 K → task-brief → implementer → 接收 / 硬门禁 → 更新 claims → 业务 commit / `record-commit` → General 首次 full / 必要 repair / 最终累计 full → 写 General A* selector 与前三 verdict → 自动且未启用逐片验收时直接继续 → 非空 active catalog 执行项目规则审查（默认 fresh full；仅直接规则返修 TARGET 尝试内部 repair verification），真实空 catalog 才跳过 → 写第四 verdict → `AI Review：passed` → 写回 `done` 并移动指针 → `slice-close-check` → `plan-commit-check` / staged diff check → K → 报告 → 下一片。
-   - 需确认片：按相同实现和 General 流程完成前三 verdict 后写 `用户验收：pending` 并停下；用户通过、按已有证据带 provenance 复用原 `passed`，或用户明确 skipped 后，才进入项目规则审查路径、写第四 verdict、`AI Review：passed`，再按相同的 `slice-close-check` 与 K 提交流程收口。用户拒收且不改变授权范围 / 验收口径时写 `issues` 并返工；新 TARGET 以 `user-acceptance-issues` 直接进入累计 full，clean 后保持 `pending`。执行预告后若授权边界或需确认面变化，必须重新预告并重新确认。
-   - implementer 返修先写回当前失败门禁、General Review A* / open G*、`用户验收：issues（<原因>）` 或项目规则审查 A* / `rulesReviewReport`，再刷新 task brief、重置 task report，并优先 `followup_task` 原 implementer。规则 finding 产生新 TARGET 后，以 `project-rule-review-issues（A*）` 直接执行新累计 General full；随后优先尝试 sliced-dev 内部 repair verification，不能可靠构造或界定影响范围时显式请求 fresh full。同 TARGET 的规则协议 / 输入工件修正只重做 rules-review。
-   - `AI Review：passed` 必须满足 [PLAN-FILE.md 的「AI Review 结论」](PLAN-FILE.md#ai-review-结论)定义的完整四 verdict、`Status` / `Severity` 组合和完成态约束。任一阻塞项存在、`项目规则审查` 仍为 `blocked`、claims 未全部 `verified` / `waived`、需确认 / C 类切片的用户验收未达到该节完成态约束、自动修复次数用尽仍有门禁失败、风险升为 C、命中 `禁止修改`、执行清单扩展会改变用户授权边界、新增命中「需确认」面或需要新的执行确认时，不能把切片标 `done`，必须停止并报告。
-9. **收口**
-   - 每个执行型切片写回终态后先运行 `slice-close-check`，再按 K allowlist scoped stage、运行 `plan-commit-check` 与 `git diff --cached --check` 并提交 K；`split` / `skipped` 不创建 K。
-   - 普通任务最终收口前运行完整 `close-check`；它会重新检查顶部和切片拷问终态、`split` / `skipped` 的结构化关闭依据、done 切片的 diff-check gate evidence、claims JSON 形状、task brief / task report / review-package、required 规则审查的 commit 绑定和已启用的整任务审查包，不接受只手写终态字段。
-   - 需要整任务审查的任务由控制器生成 `whole-review-package` 做跨切片审查，并把 `整任务审查` 先更新为 `package-generated`；审查通过后写 `整任务审查：passed` 和固定五 verdict 表，阻塞时写 `整任务审查：blocked`，Evidence 写 review-package 章节或文件路径，阻塞说明写正文。
-   - 跨 slice 规则审查不塞进单片 rule-reviewer；需要时转整任务审查或独立 rules-review。
-   - 无整任务审查时，最后一个执行片只有在提交前完整 `close-check` 已通过，Kn 才兼任 F；否则在完整 `close-check` 后另建 F。有整任务审查时固定为 Kn → whole-review → 完整 `close-check` → F。Kn 后新增任何 durable plan 变化都另建 F；没有 K 的全 `split` / `skipped` 计划也在完整 `close-check` 后创建 F。
-   - 验证命令、失败 / 跳过说明、完成报告和 `dev-plans` 提交边界见 [EXECUTION-RULES.md](EXECUTION-RULES.md)。
-
-## 分叉速查
-
-命中任一条 = 存在决策分叉，按「分叉处理协议」处理，不发执行预告：
-
-- 旧实现有可观察行为，新计划未明确是否纳入。
-- 旧实现的可观察行为没有追到调用链、异步等待、失败传播或副作用边界。
-- 一个词可能指向不同业务概念、入口、宿主、页面或能力。
-- request、类型、状态、路由、入口或公共导出存在多个会改变外部语义的合理方案；仅内部文件落点不同由控制器判断。
-- 同一句失败语义可能对应不同可观察结果（如局部 reject、阻断入口初始化、静默降级）。
-- 上游文档、计划、全局约束与当前代码冲突。
-- 用户授权的影响范围 / 排除范围无法明确到产品行为、契约、非目标或硬边界；实现文件清单由控制器维护。
-- 验收口径不唯一，或验证需要改变已确认的验收口径 / 风险标签；只补直接相关测试或验证命令不构成分叉。
-- `dev-plans` 的记录状态影响跨会话审计语义。
-
-## 记录
-
-命中完整档控制需求时维护目录化 `dev-plans/`；否则只用会话 Task 列表。完整档默认结构：
+发起整体拆分拷问时先展示：
 
 ```text
-dev-plans/
-  .gitignore
-  YYYY-MM-DD-<slug>/
-    plan.md
-    decisions.md
-    audits.md
-    claims/          # 每片结构化 Claim / Evidence / Status 真源，提交入库
-      S1.json
-    task-briefs/      # 生成文件，gitignore
-    task-reports/     # implementer 结构化交付报告，默认 S*.json，gitignore
-    review-packages/  # 生成文件，gitignore
+> 拷问对象：整体拆分方案
 ```
 
-新建完整档优先使用 `node <sliced-dev-skill-dir>/scripts/dev-plan.mjs init ...`；结构或状态修改后、切片提交前运行 `validate`。
+发起切片拷问时先展示：
 
-记录只分三类：状态机过程、证据、分叉结论。状态机过程只写当前状态、计划一致性预检状态、门禁状态、切片状态和下一步；证据写代码事实、调用链、矩阵和命令结果；分叉结论只写会约束后续执行的稳定口径。禁止把“用户回复了什么、什么时候 validate、什么时候进入 / 结束拷问、agent 做了什么动作”写成分叉结论或审计结论；这些是过程，只能由状态字段、门禁字段、验证摘要或会话回复承载。判据：一条结论删掉后若不改变后续边界、范围、风险或验证方式，就不写成结论。
+```text
+> 拷问对象：切片 <S-id>「<切片标题>」
+```
 
-### 规则文件路由
+然后要求用户只回复 `拷问` 或 `不拷问`。`继续`、`确认`、`是`、`好的` 等都不是有效口令，不能据此跳过 `pending-grill`。即使没有 `open D`，`pending-grill` 也仍是未完成的门禁。
+
+进入 `grilling` 后逐个压实真实分叉。没有更多问题时展示同一拷问对象并发送“拷问收口候选”，要求用户回复 `结束拷问` 或 `继续拷问`；只有 `结束拷问` 将门禁写为 `grilled`。用户在门禁问题之外补充事实或提问时，先处理内容，再重问当前门禁。
+
+## 形成切片
+
+切片必须是可独立验收的纵向交付单元，而不是按文件层、技术层或 agent 数量拆分。
+
+- 一个切片只有一个明确目标和一组可观察验收条件。
+- 切片之间用 `依赖` 和 `切片交接` 表达顺序与稳定输入 / 输出。
+- 所有切片继承顶层 `全局约束`；单片约束、非目标和用户禁止范围写在 `委托合同`。
+- 多个实现步骤共同完成同一验收结果时仍是一个切片；能独立验收、独立发布或失败后不阻塞其它部分时才拆开。
+- 脚本只检查结构、依赖和明确状态，不判断拆分质量；拆分质量由 controller 在计划一致性预检与拷问中负责。
+
+## 委托单任务
+
+切片门禁闭合、风险 / 执行模式明确且依赖已 `done / skipped` 后：
+
+1. 如风险为 `C`、执行为 `需确认` 或新增不可逆外部操作，先向用户展示目标、验收、约束、非目标和禁止范围，取得本片执行确认。普通 `自动` 片无需重复确认。
+2. 运行：
+
+   ```bash
+   node <sliced-dev-skill-dir>/scripts/dev-plan.mjs delegate-task <planDir> <S-id>
+   ```
+
+3. 该命令只创建或更新 `deliveries/<taskId>/task.json`：
+   - `caller.kind=delegated`
+   - `caller.name=sliced-dev`
+   - `caller.ref=<planDir>/plan.md#<S-id>`
+   - `commitPolicy=required`
+   - `acceptancePolicy` 原样来自切片合同
+4. 立即把该 task directory 交给 `deliver-task` controller。第一位下游执行者必须是 `deliver-task`，不是 `sliced-dev implementer`。
+5. caller 不创建 `execution.json`，也不预填允许路径、selected rules、claims 或审查包。用户没有给文件清单不是回流条件；`deliver-task` 会在 preflight 后自行建立执行边界。
+
+计划层普通措辞、当前指针或编排状态变化不会改变 task identity。目标、验收、约束、非目标、禁止范围、caller、commit policy 或 acceptance policy 变化时，重新运行 `delegate-task` 创建新 revision；明确需要把同一语义合同移到当前 HEAD 时使用 `--refresh-base`，base 变化同样创建新 revision。旧 task evidence 不自动证明新 revision。
+
+## 消费 delivery
+
+下游返回后先运行：
+
+```bash
+node <sliced-dev-skill-dir>/scripts/dev-plan.mjs delivery-status <planDir> <S-id>
+```
+
+只按当前 task binding 下的 `result` 推进：
+
+| result | sliced-dev 动作 |
+| --- | --- |
+| `delivered` | 将切片更新为 `done`，运行 `slice-close-check`，再创建 plan checkpoint K |
+| `needs-upstream` | 保持未完成；根据 `upstreamRequest.kind` 取得 caller / 用户判断，之后让 `deliver-task` 在同一任务继续，或合同变化时新建 revision |
+| `needs-reslice` | 将原片更新为 `split`，新增后代切片并重新走计划一致性与拷问；不得把原片写成 `done` |
+| `blocked` | 将切片和计划置为 `blocked`，公开 task-owned evidence refs 与可恢复条件 |
+
+`upstreamRequest.evidenceRefs` 是定位入口，不是理由正确性的机器证明。controller 必须阅读引用证据后再作语义判断。
+
+需要用户验收时，`deliver-task` 先返回 `needs-upstream / user-acceptance`。`sliced-dev` 负责把绑定当前 target 的验收内容呈现给用户，并把回复交回同一 `deliver-task`；由 `deliver-task` 在 task-owned `audits.md` 写 acceptance A 条目并重新产出 delivery。验收状态不进入 task identity；同一 target 的 General evidence 不因新增验收记录而 stale。用户拒收但 immutable contract 未变时保持同一 revision 返修，形成新 target 后旧验收自动失效。
+
+`slice-close-check` 只验证当前 plan 的 `done` 与下游 `delivered` 结构 / identity 闭合，不重做下游 review，也不解释证据内容。单任务 `close-check` 应由 `deliver-task` 在返回前完成；caller 随后的 plan 修改不属于单任务 target。
+
+## P / C / K / F
+
+完整链路是：
+
+```text
+P → C1 → K1 → C2 → K2 … → Cn → Kn → [F]
+```
+
+- `P`：首个委托前的 plan-only 检查点。
+- `C`：`deliver-task` 按 `commitPolicy=required` 创建的业务 commit 或 commit range；无变化任务不创建空 commit。
+- `K`：caller 消费本片 delivery 后的 plan-only 检查点，包含当前 plan 真源和 task-owned durable state。
+- `F`：需要整任务审查或 Kn 后仍有计划级变化时的最终 plan-only 检查点；否则最终 Kn 可兼任 F。
+
+每次 plan commit 前 scoped stage 持久文件，再运行：
+
+```bash
+node <sliced-dev-skill-dir>/scripts/dev-plan.mjs plan-commit-check <planDir>
+git diff --cached --check
+```
+
+不得把业务文件、`deliveries/*/artifacts/` 或 `review-packages/` 放进 P/K/F。提交消息服从当前仓库规则；本 skill 不另造 type / scope 规范。
+
+## 整任务收口
+
+单任务 General Review 已由各自 `deliver-task` 完成。只有用户明确要求整体验收 / 跨切片审查 / 发布就绪度，或跨切片约束无法由单片 review 覆盖时，才生成整任务包：
+
+```bash
+node <sliced-dev-skill-dir>/scripts/dev-plan.mjs whole-review-package <planDir>
+```
+
+整任务 reviewer 只检查全局约束、跨切片交接、非目标回归、需求闭合和残余风险，不重做单任务 General 或 rules-review。把 package hash 和五项 verdict 写回 `plan.md` 后运行 `close-check`。`close-check` 只接受明确 `passed` 且绑定当前 package 的结论；不根据文本强度猜测通过。
+
+## 文件路由
 
 | 当前动作 | 必读 |
 | --- | --- |
-| 新建 / 续跑完整档 dev-plan | [PLAN-FILE.md](PLAN-FILE.md) |
-| 新建 / 修改切片块、当前状态、验证摘要 | [PLAN-FILE.md](PLAN-FILE.md) |
-| 新建 / 修改整任务审查结论 | [PLAN-FILE.md](PLAN-FILE.md) |
-| 新建 / 修改 `claims/S*.json` | [PLAN-FILE.md](PLAN-FILE.md)、[SCRIPTS.md](SCRIPTS.md) |
-| 新建 / 修改 / 确认 `D*` | [DECISIONS-FILE.md](DECISIONS-FILE.md) |
-| 新建 / 修改 / 引用 `A*` | [AUDITS-FILE.md](AUDITS-FILE.md) |
-| 新建计划目录或检查结构 | [SCRIPTS.md](SCRIPTS.md) |
-| 续跑加载当前切片 / 看切片概览（`show` / `roster`） | [SCRIPTS.md](SCRIPTS.md) |
-| 执行切片、上下文预检、claims 准备、task brief / task report、硬门禁、review-package、AI Review、提交、验证 | [EXECUTION-RULES.md](EXECUTION-RULES.md) |
-| 派发 implementer subagent 或接收实现结果 | [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) |
-| 派发 reviewer subagent 或写回 AI Review 结论 | [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md) |
+| 新建 / 修改 / 续跑 plan | [PLAN-FILE.md](PLAN-FILE.md) |
+| 新建 / 修改 / 确认 D | [DECISIONS-FILE.md](DECISIONS-FILE.md) |
+| 新建 / 引用计划级 A | [AUDITS-FILE.md](AUDITS-FILE.md) |
+| 拷问、委托、结果回流、P/C/K/F、整任务收口 | [EXECUTION-RULES.md](EXECUTION-RULES.md) |
+| CLI 命令与机器门禁 | [SCRIPTS.md](SCRIPTS.md) |
 
-涉及上游依据判断、建议或修改时，必须先读取项目规则和对应上游材料，再按该材料的层级约束处理。
-
-## 补充规则
-
-切片前分叉审查摘要项、上下文预检、轻量档执行、风险边界、硬门禁、review-package、AI Review、有限修复循环、上游衔接、执行预告与完成报告细则、验证命令见 [EXECUTION-RULES.md](EXECUTION-RULES.md)。
+涉及单任务内部动作时切换到 `deliver-task` 并遵循它自己的文档；不要把 `deliver-task` 的内部规则复制回本目录。
