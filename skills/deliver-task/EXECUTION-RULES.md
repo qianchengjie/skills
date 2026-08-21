@@ -3,9 +3,13 @@
 ## Workspace 建立
 
 读取并校验 `task.json`、固定 `task.baseCommit` 后，在读取任何业务代码、项目规则或执行
-preflight 之前运行 `prepare-workspace`。caller/运行环境已提供适合当前任务的 isolated
-workspace 时显式绑定该路径；否则从 base 创建 task-scoped Git worktree。只有命令返回的
-`workspacePath` 是本任务的业务执行根目录。
+preflight 之前建立 workspace。依次使用 caller 已提供的 isolated workspace、满足 base/clean/
+task-owned 条件的当前 harness linked worktree、harness 原生 worktree 机制；三者都不适用时，
+才运行 `prepare-workspace` 的仓库内 `.worktrees/` 手工 fallback。native 或已有 workspace 用
+`--workspace` 显式绑定。只有命令返回的 `workspacePath` 是本任务的业务执行根目录。
+
+不得为了省事绕过 harness 原生机制。手工 fallback 要求 `.worktrees/` 已被 Git ignore；创建
+被 sandbox 拒绝时不得提权硬干、改用系统临时目录或退回未隔离主 checkout，按环境阻塞收口。
 
 task workspace 建立后使用 snapshot-at-start 语义：caller workspace 后续出现 dirty、修改
 同一逻辑文件、产生新 commit 或切换分支，都不改变当前 base、execution、target 或已有

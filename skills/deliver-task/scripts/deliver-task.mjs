@@ -3,7 +3,6 @@
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 
 const TASK_SCHEMA = 'deliver-task.task.v1';
@@ -322,6 +321,34 @@ function currentBranchRef(root) {
   }
 }
 
+async function canonicalGitDirectory(root, argument) {
+  const gitDirectory = git(root, ['rev-parse', argument]).trim();
+  return fs.realpath(path.resolve(root, gitDirectory));
+}
+
+async function isLinkedWorktree(root) {
+  const superprojectRoot = git(root, ['rev-parse', '--show-superproject-working-tree']).trim();
+  if (superprojectRoot) return false;
+  const [gitDirectory, commonDirectory] = await Promise.all([
+    canonicalGitDirectory(root, '--git-dir'),
+    canonicalGitDirectory(root, '--git-common-dir'),
+  ]);
+  return gitDirectory !== commonDirectory;
+}
+
+function isIgnoredRepoPath(root, repoPath) {
+  try {
+    execFileSync('git', ['check-ignore', '--quiet', '--', repoPath], {
+      cwd: root,
+      stdio: 'ignore',
+    });
+    return true;
+  } catch (error) {
+    if (error.status === 1) return false;
+    throw gateError(`git check-ignore failed for ${repoPath}`);
+  }
+}
+
 async function validateWorkspaceRecord(record, task) {
   assertExactObject(
     record,
@@ -450,6 +477,15 @@ async function prepareWorkspace(context, task, providedPath) {
       throw gateError(`new provided workspace must be clean outside taskDir: ${dirtyPaths.join(', ')}`);
     }
     branch = currentBranchRef(workspacePath);
+  } else if (
+    await isLinkedWorktree(context.repoRoot)
+    && resolveCommit(context.repoRoot, 'HEAD', 'current linked workspace HEAD') === task.baseCommit
+    && changedPathsFrom(context.repoRoot, task.baseCommit)
+      .filter((repoPath) => !isInsideTaskDir(repoPath, context)).length === 0
+  ) {
+    kind = 'provided';
+    workspacePath = context.repoRoot;
+    branch = currentBranchRef(workspacePath);
   } else {
     kind = 'git-worktree';
     const shortBranch = workspaceBranch(task);
@@ -467,7 +503,13 @@ async function prepareWorkspace(context, task, providedPath) {
           throw gateError('existing task workspace branch does not descend from task.baseCommit');
         }
       }
-      workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), `deliver-task-${task.taskId}-`));
+      const workspaceName = shortBranch.replace('/', '-');
+      const repoWorkspacePath = path.posix.join('.worktrees', workspaceName);
+      if (!isIgnoredRepoPath(context.repoRoot, repoWorkspacePath)) {
+        throw gateError('manual worktree fallback requires .worktrees/ to be ignored');
+      }
+      await fs.mkdir(path.join(context.repoRoot, '.worktrees'), { recursive: true });
+      workspacePath = path.join(context.repoRoot, repoWorkspacePath);
       try {
         git(context.repoRoot, gitRefExists(context.repoRoot, branch)
           ? ['worktree', 'add', '-q', workspacePath, shortBranch]

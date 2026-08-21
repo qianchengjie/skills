@@ -25,24 +25,57 @@ disable-model-invocation: true
 - 上游委托：使用 caller 提供的 task directory；caller 写 `task.json`，使用通用 `{ "kind": "delegated", "name", "ref" }`，本 skill 不修改 caller 状态文件。
 - caller 只提供 immutable task contract，不填写 `execution.json`。deliver-task 在 preflight 后创建和维护该文件。
 
-开始时运行：
+开始时先校验任务：
 
 ```bash
 node <deliver-task-skill-dir>/scripts/deliver-task.mjs validate-task <taskDir>
-node <deliver-task-skill-dir>/scripts/deliver-task.mjs prepare-workspace <taskDir>
-node <deliver-task-skill-dir>/scripts/deliver-task.mjs init <taskDir>
 ```
 
-如果 caller 或运行环境已经提供从 `task.baseCommit` 开始、业务区干净且只属于当前任务的 isolated workspace，第二条命令改为：
+随后按以下优先级建立 workspace，命中后停止选择：
+
+1. caller 已提供从 `task.baseCommit` 开始、业务区干净且只属于当前任务的 isolated
+   workspace：直接绑定该路径。
+2. 当前 workspace 已是运行环境提供的 linked worktree：比较 canonical Git directory 与
+   common directory，并排除 submodule；仅当 `HEAD == task.baseCommit`、taskDir 外业务区干净且
+   当前 workspace 只属于本任务时，直接绑定当前 Git root，不再创建第二个 worktree。
+
+   ```bash
+   GIT_DIR=$(cd "$(git rev-parse --git-dir)" && pwd -P)
+   GIT_COMMON=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
+   git rev-parse --show-superproject-working-tree
+   ```
+
+3. 运行环境提供 `EnterWorktree`、`WorktreeCreate`、`--worktree` 等原生机制：必须先让 harness
+   从 `task.baseCommit` 创建并切入 task workspace，再绑定返回的路径。原生能力拥有路径、
+   sandbox 权限和生命周期；不能因为默认脚本更快而跳过它。
+4. 以上都不适用：运行不带 `--workspace` 的命令，让脚本在当前 Git root 的
+   `.worktrees/deliver-task-...` 创建手工 fallback。`.worktrees/` 必须已被 Git ignore；创建因
+   sandbox 权限失败时不提权硬干，也不退回未隔离的主 checkout，而是保留证据并返回
+   `blocked`。
+
+绑定 caller、当前 linked worktree 或 native workspace 时运行：
 
 ```bash
 node <deliver-task-skill-dir>/scripts/deliver-task.mjs prepare-workspace <taskDir> --workspace <workspacePath>
 ```
 
-否则脚本从 `task.baseCommit` 创建 task-scoped Git worktree。`prepare-workspace` 输出的
+手工 fallback 时运行：
+
+```bash
+node <deliver-task-skill-dir>/scripts/deliver-task.mjs prepare-workspace <taskDir>
+```
+
+最后运行：
+
+```bash
+node <deliver-task-skill-dir>/scripts/deliver-task.mjs init <taskDir>
+```
+
+`prepare-workspace` 输出的
 `workspacePath` 是后续 preflight、实现、验证和提交的唯一业务工作目录；不得继续从 caller
 workspace 读取业务代码。`init` 只初始化 task-owned 合同/证据文件；若调用方漏掉显式
-prepare，它会先建立默认隔离 worktree，但正常流程不得依赖这个兜底来延后 workspace 切换。
+prepare，它只会复用满足条件的当前 linked worktree 或执行仓库内手工 fallback，无法调用
+harness 原生机制；正常流程不得依赖这个兜底来延后 workspace 选择。
 任何 caller 状态变化都由 caller 在收到结果后决定。
 
 ## 开始前判断

@@ -78,8 +78,9 @@ task identity。旧 task identity 下的证据不会自动证明新合同；cont
 }
 ```
 
-- `kind` 只允许 `provided / git-worktree`。运行环境或 caller 提供的 isolated workspace
-  使用 `provided`；脚本 fallback 使用 `git-worktree`。
+- `kind` 只允许 `provided / git-worktree`。caller 提供、当前满足条件的 harness linked
+  workspace 或 harness 原生机制创建的 workspace 使用 `provided`；脚本仓库内 fallback 使用
+  `git-worktree`。
 - `workspacePath` 是 canonical absolute Git root。`branch` 是完整 `refs/heads/...` 或
   `null`；脚本创建的 Git worktree 必须有 branch。
 - 首次绑定的 provided workspace 必须 `HEAD == task.baseCommit`，且 taskDir 之外没有

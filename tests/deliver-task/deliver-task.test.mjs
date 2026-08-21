@@ -7,6 +7,7 @@ import {
   mkdir,
   readFile,
   realpath,
+  rmdir,
   unlink,
   writeFile,
 } from 'node:fs/promises';
@@ -42,14 +43,21 @@ async function createFixture({
   commitPolicy = 'allowed',
   caller = { kind: 'direct' },
   acceptancePolicy = 'not-required',
+  ignoreWorktrees = true,
 } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'deliver-task-test-'));
   await mkdir(path.join(root, 'src'), { recursive: true });
   await mkdir(path.join(root, 'test'), { recursive: true });
   await writeFile(path.join(root, 'src/slug.mjs'), "export const slug = (value) => value.trim().toLowerCase().replaceAll(' ', '-');\n");
   await writeFile(path.join(root, 'test/slug.test.mjs'), '// fixture\n');
+  if (ignoreWorktrees) await writeFile(path.join(root, '.gitignore'), '.worktrees/\n');
   git(root, ['init', '-q']);
-  git(root, ['add', 'src/slug.mjs', 'test/slug.test.mjs']);
+  git(root, [
+    'add',
+    'src/slug.mjs',
+    'test/slug.test.mjs',
+    ...(ignoreWorktrees ? ['.gitignore'] : []),
+  ]);
   git(root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '初始基线']);
   const baseCommit = git(root, ['rev-parse', 'HEAD']);
   const taskDir = path.join(root, 'dev-tasks', 'slug-whitespace');
@@ -285,6 +293,49 @@ test('prepare-workspace 从 task.baseCommit 创建隔离 worktree，不吸收主
 
   await unlink(path.join(fixture.taskDir, 'artifacts/workspace.json'));
   assert.deepEqual(prepareWorkspace(fixture), workspace);
+});
+
+test('prepare-workspace 复用当前 linked workspace，不再创建第二个 worktree', async () => {
+  const fixture = await createFixture();
+  const harnessRoot = await mkdtemp(path.join(os.tmpdir(), 'deliver-task-harness-'));
+  await rmdir(harnessRoot);
+  git(fixture.root, ['worktree', 'add', '-q', '--detach', harnessRoot, fixture.baseCommit]);
+  const taskDir = path.join(harnessRoot, 'dev-tasks', fixture.task.taskId);
+  await mkdir(taskDir, { recursive: true });
+  await writeFile(path.join(taskDir, 'task.json'), `${JSON.stringify(fixture.task, null, 2)}\n`);
+  const harnessFixture = { ...fixture, root: harnessRoot, taskDir };
+  const before = git(harnessRoot, ['worktree', 'list', '--porcelain']);
+
+  const workspace = prepareWorkspace(harnessFixture);
+
+  assert.equal(workspace.kind, 'provided');
+  assert.equal(workspace.workspacePath, await realpath(harnessRoot));
+  assert.equal(workspace.branch, null);
+  assert.equal(git(harnessRoot, ['worktree', 'list', '--porcelain']), before);
+});
+
+test('prepare-workspace 手工 fallback 在仓库内已忽略的 .worktrees 创建', async () => {
+  const fixture = await createFixture();
+
+  const workspace = prepareWorkspace(fixture);
+
+  assert.equal(workspace.kind, 'git-worktree');
+  assert.equal(path.dirname(workspace.workspacePath), path.join(await realpath(fixture.root), '.worktrees'));
+  assert.match(path.basename(workspace.workspacePath), /^deliver-task-slug-whitespace-r1-[0-9a-f]{12}$/);
+});
+
+test('prepare-workspace 在 .worktrees 未被 ignore 时拒绝手工 fallback', async () => {
+  const fixture = await createFixture({ ignoreWorktrees: false });
+  const before = git(fixture.root, ['worktree', 'list', '--porcelain']);
+
+  const result = run(fixture.root, [
+    'prepare-workspace',
+    path.relative(fixture.root, fixture.taskDir),
+  ]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /manual worktree fallback.*\.worktrees.*ignored/i);
+  assert.equal(git(fixture.root, ['worktree', 'list', '--porcelain']), before);
 });
 
 test('prepare-workspace 只接受从干净 baseCommit 开始的显式 isolated workspace', async () => {
