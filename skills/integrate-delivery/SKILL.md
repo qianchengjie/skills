@@ -14,6 +14,8 @@ description: Use when `deliver-task` 已返回 `delivered`，用户或上游需�
 - 只有 live `<task-worktree>/.dev-task/` 能提供可重验的 delivery 证明；commits、branch、聊天摘要或
   handoff 文案都不能替代它。
 - 原 delivery 只证明 `baseCommit..headCommit`。它不自动证明该范围与目标分支组合后的结果。
+- `commit-range` 选择 `keep` 时，结果包含 live task worktree 与 `.dev-task/`；只保留
+  branch/commits 会丢失唯一可重验的 delivery proof，不能报告为完成的 `keep`。
 - 用户主 workspace 的 dirty 是合法状态；不得 stash、clean、reset、覆盖或归因这些修改。
 - 不新增 `finish.json`、revision、ledger、历史链或集成状态机。完成事实直接在最终结果中返回。
 
@@ -54,7 +56,9 @@ description: Use when `deliver-task` 已返回 `delivered`，用户或上游需�
 3. 要求 `delivery.json.result == "delivered"`，读取 `task.json`、`delivery.json` 和
    `artifacts/workspace.json`。不要只相信聊天摘要、branch 名或目录名。
 4. 解析当前 target，确认所引用的 Git commit objects 仍存在，且 `headCommit` 仍以 `baseCommit` 为祖先。
-5. 记录 source 的 task identity、target、workspace 和 branch。动作是 `keep` 时不要求目标分支，直接进入经授权的 cleanup 或返回结果。
+5. 记录 source 的 task identity、target、workspace 和 branch。`commit-range` 的动作是 `keep`
+   时不要求目标分支，直接返回 retained task branch/worktree；即使另有 cleanup 授权，也不删除
+   承载 live proof 的 task worktree。
 6. merge 或 cherry-pick 时，记录目标分支当前完整 OID `D`，检查目标仓库、目标分支、worktree dirty 和适用的项目指令。只记录 caller workspace 的 dirty，不把它归入 task，也不据此使 delivery stale。
 7. merge 或 cherry-pick 时，确认 source 与 destination 属于同一 Git 历史；跨仓复制、补丁传输和 vendor 同步不属于本 skill。
 
@@ -64,8 +68,8 @@ description: Use when `deliver-task` 已返回 `delivered`，用户或上游需�
 
 | delivery target | 可做动作 | 约束 |
 | --- | --- | --- |
-| `commit-range` | merge、cherry-pick、keep、经授权 cleanup | 集成只读取固定 commit objects，不读取 caller workspace 的实时文件 |
-| `no-change` | keep、经授权 cleanup | 没有需要 merge 或 cherry-pick 的业务变化 |
+| `commit-range` | merge、cherry-pick、keep | `keep` 保留 task branch/worktree/proof；merge 或 cherry-pick 成功后才可经授权 cleanup |
+| `no-change` | keep、经授权 cleanup | 没有需要 merge 或 cherry-pick 的业务变化，收口后可经授权 cleanup |
 | `worktree` | keep | 未提交 target 没有可移植的 commit identity；不得复制文件、临时打 patch 或删除唯一 workspace |
 
 `worktree` target 需要集成时，返回 upstream：若原 `commitPolicy` 允许，由 `deliver-task` 重新形成 commit-based delivery；若禁止提交，则由用户或 caller 明确选择其它交付方式。本 skill 不擅自改变 commit policy。
@@ -109,6 +113,10 @@ merge 和 cherry-pick 都先在从目标 OID `D` 创建的临时 isolated integr
 
 cleanup 是显式授权动作，不是成功集成的自动副作用。
 
+cleanup 授权只表示允许删除，不会改变删除资格：`commit-range + keep` 必须保留 task branch、task
+worktree 和其中的 `.dev-task/`。只有 `commit-range` 已成功 merge/cherry-pick，或 `no-change` 已
+收口时，才可继续下面的 task worktree cleanup。
+
 经授权删除脚本创建的 task worktree 时，worktree-local `.dev-task/` 会随 worktree 一起消失；
 必须先在 live 状态上完成本轮 `validate-result`、`close-check` 和下述 durable ref 检查。不得先删
 证明再从 commits 或最终说明倒推收口。`provided` workspace 连同 `.dev-task/` 原样交还 owner，
@@ -116,7 +124,7 @@ cleanup 是显式授权动作，不是成功集成的自动副作用。
 
 清理 task worktree 前必须同时满足：
 
-- target 是 `commit-range` 或 `no-change`；
+- target 是已成功完成 merge/cherry-pick 的 `commit-range`，或已收口的 `no-change`；
 - `artifacts/workspace.json.kind == "git-worktree"`；`provided` workspace 交还其 owner；
 - worktree 路径来自 locator，已 canonicalize，且与 `git worktree list` 完全匹配；
 - worktree 干净，不需要 `--force`；
@@ -139,3 +147,5 @@ cleanup 是显式授权动作，不是成功集成的自动副作用。
 - 未完成项、冲突或需要 upstream 决定的唯一下一步。
 
 目标分支推进且验证通过后，才把本地集成报告为完成；如果还授权了 cleanup，必须同时按要求完成 cleanup。`keep` 的完成含义只是稳定交付结果已保留，不表示已经集成。
+`commit-range + keep` 返回时 task branch、task worktree 与 live `.dev-task/` 必须都是
+`retained`。

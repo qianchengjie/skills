@@ -561,7 +561,25 @@ async function findTaskRevisionWorkspace(repoRoot, task) {
   if (matches.length > 1) {
     throw gateError('multiple live workspaces contain the same task identity');
   }
-  return matches[0] ?? null;
+  if (matches.length === 1) return matches[0];
+
+  const branch = `refs/heads/${workspaceBranch(task)}`;
+  if (gitRefExists(repoRoot, branch)) {
+    const registeredPath = worktreePathForBranch(repoRoot, branch);
+    if (!registeredPath) {
+      throw gateError('task branch exists but its live task proof workspace is missing');
+    }
+    const workspaceRoot = await fs.realpath(registeredPath);
+    if (workspaceRoot === repoRoot) {
+      throw gateError('task branch is checked out in the source workspace without isolated proof state');
+    }
+    return workspaceRoot;
+  }
+
+  if (taskRevisionRefs(repoRoot, task).length > 0) {
+    throw gateError('same revision contract drift detected; increment task.revision');
+  }
+  return null;
 }
 
 async function writeInitialTaskState(workspaceRoot, task, record) {
@@ -622,6 +640,15 @@ async function startWithProvidedWorkspace(repoRoot, task, providedPath) {
     throw gateError('provided workspace must belong to the same Git repository');
   }
 
+  const boundWorkspace = await findTaskRevisionWorkspace(repoRoot, task);
+  if (boundWorkspace !== null) {
+    const output = await readCompleteTaskState(boundWorkspace, task);
+    if (boundWorkspace !== workspaceRoot) {
+      throw gateError('task identity is already bound to another live workspace');
+    }
+    return output;
+  }
+
   const taskDir = path.join(workspaceRoot, '.dev-task');
   const existingState = await optionalLstat(taskDir);
   if (existingState !== null) {
@@ -677,21 +704,6 @@ async function startWithManagedWorkspace(repoRoot, task) {
 
   const shortBranch = workspaceBranch(task);
   const branch = `refs/heads/${shortBranch}`;
-  if (gitRefExists(repoRoot, branch)) {
-    const registeredPath = worktreePathForBranch(repoRoot, branch);
-    if (!registeredPath) {
-      throw gateError('task branch exists but its live task proof workspace is missing');
-    }
-    const workspaceRoot = await fs.realpath(registeredPath);
-    if (workspaceRoot === repoRoot) {
-      throw gateError('task branch is checked out in the source workspace without isolated proof state');
-    }
-    return readCompleteTaskState(workspaceRoot, task);
-  }
-
-  if (taskRevisionRefs(repoRoot, task).length > 0) {
-    throw gateError('same revision contract drift detected; increment task.revision');
-  }
 
   const workspacePath = await fs.mkdtemp(
     path.join(os.tmpdir(), `deliver-task-${task.taskId}-r${task.revision}-`),

@@ -61,6 +61,13 @@ async function createFixture({
   return { root, taskDir: null, workspacePath: null, task, baseCommit };
 }
 
+async function createDetachedWorktree(fixture, prefix = 'deliver-task-provided-') {
+  const workspacePath = await realpath(await mkdtemp(path.join(os.tmpdir(), prefix)));
+  await rm(workspacePath, { recursive: true });
+  git(fixture.root, ['worktree', 'add', '-q', '--detach', workspacePath, fixture.baseCommit]);
+  return realpath(workspacePath);
+}
+
 function runStart(
   fixture,
   {
@@ -378,9 +385,7 @@ test('provided workspace 首次绑定要求同仓、干净且位于 baseCommit',
 
 test('start 显式绑定当前 harness linked worktree，不创建第二个 workspace', async () => {
   const fixture = await createFixture();
-  const harnessRoot = await realpath(await mkdtemp(path.join(os.tmpdir(), 'deliver-task-harness-')));
-  await rm(harnessRoot, { recursive: true });
-  git(fixture.root, ['worktree', 'add', '-q', '--detach', harnessRoot, fixture.baseCommit]);
+  const harnessRoot = await createDetachedWorktree(fixture, 'deliver-task-harness-');
   const before = git(fixture.root, ['worktree', 'list', '--porcelain']);
 
   const output = startTask(fixture, { repo: harnessRoot, workspace: harnessRoot });
@@ -391,6 +396,48 @@ test('start 显式绑定当前 harness linked worktree，不创建第二个 work
   assert.equal(output.branch, null);
   assert.equal(git(fixture.root, ['worktree', 'list', '--porcelain']), before);
   await assert.rejects(access(path.join(fixture.root, '.dev-task')));
+});
+
+test('provided workspace 首次初始化拒绝为 exact identity 创建第二个 execution world', async () => {
+  const fixture = await createFixture();
+  const existing = startTask(fixture);
+  const providedWorkspace = await createDetachedWorktree(fixture);
+
+  const result = runStart(fixture, { workspace: providedWorkspace });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /task identity.*already bound.*workspace/i);
+  await assert.rejects(access(path.join(providedWorkspace, '.dev-task')));
+  assert.deepEqual(
+    JSON.parse(await readFile(path.join(existing.taskDir, 'task.json'), 'utf8')),
+    fixture.task,
+  );
+});
+
+test('provided workspace 首次初始化拒绝已有 execution world 的同 revision 合同漂移', async () => {
+  const fixture = await createFixture();
+  startTask(fixture);
+  const providedWorkspace = await createDetachedWorktree(fixture);
+  const drifted = { ...fixture.task, objective: '未递增 revision 的错误合同变化。' };
+
+  const result = runStart(fixture, { task: drifted, workspace: providedWorkspace });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /same revision.*contract drift/i);
+  await assert.rejects(access(path.join(providedWorkspace, '.dev-task')));
+});
+
+test('provided workspace 不得绕过已有 task branch 的 proof-loss fail closed', async () => {
+  const fixture = await createFixture();
+  const existing = startTask(fixture);
+  const providedWorkspace = await createDetachedWorktree(fixture);
+  await rm(existing.taskDir, { recursive: true });
+
+  const result = runStart(fixture, { workspace: providedWorkspace });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /task branch.*proof.*missing|proof state.*missing/i);
+  await assert.rejects(access(path.join(providedWorkspace, '.dev-task')));
 });
 
 test('exact identity 的完整 .dev-task 幂等返回且不重写证据', async () => {
