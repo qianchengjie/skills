@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import {
+  access,
+  appendFile,
+  mkdtemp,
+  mkdir,
+  readFile,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -19,12 +26,16 @@ function run(cwd, args) {
   });
 }
 
-async function createFixture({ commitPolicy = 'allowed', caller = { kind: 'direct' } } = {}) {
+async function createFixture({
+  commitPolicy = 'allowed',
+  caller = { kind: 'direct' },
+  acceptancePolicy = 'not-required',
+} = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'deliver-task-test-'));
   await mkdir(path.join(root, 'src'), { recursive: true });
   await mkdir(path.join(root, 'test'), { recursive: true });
   await writeFile(path.join(root, 'src/slug.mjs'), "export const slug = (value) => value.trim().toLowerCase().replaceAll(' ', '-');\n");
-  await writeFile(path.join(root, 'test/slug.test.mjs'), "// fixture\n");
+  await writeFile(path.join(root, 'test/slug.test.mjs'), '// fixture\n');
   git(root, ['init', '-q']);
   git(root, ['add', 'src/slug.mjs', 'test/slug.test.mjs']);
   git(root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '初始基线']);
@@ -40,19 +51,30 @@ async function createFixture({ commitPolicy = 'allowed', caller = { kind: 'direc
     acceptanceCriteria: ['slug("  Hello   World  ") 返回 "hello-world"。'],
     constraints: ['不新增依赖。'],
     nonGoals: ['不改变 slug 的大小写规则。'],
-    allowedPaths: ['src/slug.mjs', 'test/slug.test.mjs'],
     forbiddenPaths: ['package.json'],
     baseCommit,
     commitPolicy,
-    upstreamAcceptance: { status: 'not-required' },
+    acceptancePolicy,
   };
   await writeFile(path.join(taskDir, 'task.json'), `${JSON.stringify(task, null, 2)}\n`);
   return { root, taskDir, task, baseCommit };
 }
 
+function taskBinding(fixture, hash) {
+  return {
+    taskId: fixture.task.taskId,
+    revision: fixture.task.revision,
+    taskHash: hash,
+  };
+}
+
 async function initTask(fixture) {
   const result = run(fixture.root, ['init', path.relative(fixture.root, fixture.taskDir)]);
   assert.equal(result.status, 0, result.stderr);
+  await appendFile(
+    path.join(fixture.taskDir, 'audits.md'),
+    '\n### A1：上下文预检\n\n已读取真实代码和项目规则，并形成执行边界。\n',
+  );
   return result;
 }
 
@@ -62,39 +84,99 @@ async function taskHash(fixture) {
   return result.stdout.trim();
 }
 
-async function writeVerifiedClaims(fixture, hash) {
+async function writeExecution(
+  fixture,
+  {
+    allowedPaths = ['src/slug.mjs', 'test/slug.test.mjs'],
+    forbiddenPaths = [],
+    evidenceRefs = ['audits.md#A1'],
+  } = {},
+) {
+  const hash = await taskHash(fixture);
+  const execution = {
+    schemaVersion: 'deliver-task.execution.v1',
+    task: taskBinding(fixture, hash),
+    allowedPaths,
+    forbiddenPaths,
+    evidenceRefs,
+  };
+  await writeFile(path.join(fixture.taskDir, 'execution.json'), `${JSON.stringify(execution, null, 2)}\n`);
+  return execution;
+}
+
+async function snapshotTarget(fixture) {
+  const result = run(fixture.root, ['snapshot-target', path.relative(fixture.root, fixture.taskDir)]);
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+function bindingBlock(fixture, hash, target) {
+  return [
+    '```deliver-task-binding',
+    JSON.stringify({ task: taskBinding(fixture, hash), executionHash: target.executionHash, target }),
+    '```',
+  ].join('\n');
+}
+
+async function appendGeneralReview(fixture, target, { anchor = 'A2' } = {}) {
+  const hash = await taskHash(fixture);
+  await appendFile(
+    path.join(fixture.taskDir, 'audits.md'),
+    `\n### ${anchor}：General Review\n\n最终累计 full clean。\n\n${bindingBlock(fixture, hash, target)}\n`,
+  );
+  return `audits.md#${anchor}`;
+}
+
+async function appendAcceptance(
+  fixture,
+  target,
+  status,
+  { anchor = 'A3', evidenceRefs = ['audits.md#A1'] } = {},
+) {
+  const hash = await taskHash(fixture);
+  const record = {
+    task: taskBinding(fixture, hash),
+    target,
+    status,
+    evidenceRefs,
+  };
+  await appendFile(
+    path.join(fixture.taskDir, 'audits.md'),
+    `\n### ${anchor}：Upstream acceptance\n\n\`\`\`deliver-task-acceptance\n${JSON.stringify(record)}\n\`\`\`\n`,
+  );
+  return `audits.md#${anchor}`;
+}
+
+async function writeVerifiedClaims(fixture, hash, evidenceRefs = ['audits.md#A1']) {
   const claims = {
     schemaVersion: 'deliver-task.claims.v1',
-    task: {
-      taskId: fixture.task.taskId,
-      revision: fixture.task.revision,
-      taskHash: hash,
-    },
+    task: taskBinding(fixture, hash),
     claims: [
       {
         claimId: 'C1',
         statement: '连续空白已归一为一个连字符。',
         status: 'verified',
-        evidenceRefs: ['audits.md#A1'],
+        evidenceRefs,
       },
     ],
   };
   await writeFile(path.join(fixture.taskDir, 'claims.json'), `${JSON.stringify(claims, null, 2)}\n`);
-  await writeFile(
-    path.join(fixture.taskDir, 'audits.md'),
-    '# 单任务审计\n\n### A1：验证\n\n测试通过。\n\n### A2：General Review\n\n最终累计 full clean。\n',
-  );
 }
 
-async function writeDelivery(fixture, { result = 'delivered', target, upstreamRequest = null } = {}) {
+async function writeDelivery(
+  fixture,
+  {
+    result = 'delivered',
+    target,
+    generalReview = 'audits.md#A2',
+    acceptance = null,
+    upstreamRequest = null,
+  } = {},
+) {
   const hash = await taskHash(fixture);
   const delivery = {
     schemaVersion: 'deliver-task.delivery.v1',
-    task: {
-      taskId: fixture.task.taskId,
-      revision: fixture.task.revision,
-      taskHash: hash,
-    },
+    task: taskBinding(fixture, hash),
     result,
     target: target ?? null,
     evidenceRefs:
@@ -102,13 +184,15 @@ async function writeDelivery(fixture, { result = 'delivered', target, upstreamRe
         ? {
             claims: 'claims.json',
             verification: 'audits.md#A1',
-            generalReview: 'audits.md#A2',
+            generalReview,
+            acceptance,
             rulesReview: 'not-applicable',
           }
         : {
             claims: 'claims.json',
             verification: null,
             generalReview: null,
+            acceptance: null,
             rulesReview: null,
           },
     residualRiskRefs: [],
@@ -118,9 +202,23 @@ async function writeDelivery(fixture, { result = 'delivered', target, upstreamRe
   return delivery;
 }
 
-test('init 只在 task-owned directory 创建持久状态', async () => {
+async function prepareDelivered(fixture, { acceptanceStatus } = {}) {
+  await initTask(fixture);
+  await writeExecution(fixture);
+  const target = await snapshotTarget(fixture);
+  const generalReview = await appendGeneralReview(fixture, target);
+  const acceptance = acceptanceStatus
+    ? await appendAcceptance(fixture, target, acceptanceStatus)
+    : null;
+  const hash = await taskHash(fixture);
+  await writeVerifiedClaims(fixture, hash);
+  await writeDelivery(fixture, { target, generalReview, acceptance });
+  return { target, generalReview, acceptance, hash };
+}
+
+test('init 只初始化 task-owned 状态且不替 caller 创建 execution', async () => {
   const fixture = await createFixture({
-    caller: { kind: 'sliced-dev', ref: 'dev-plans/example#S1' },
+    caller: { kind: 'delegated', name: 'sliced-dev', ref: 'dev-plans/example/plan.md#S1' },
   });
   const callerPlan = path.join(fixture.root, 'dev-plans/example/plan.md');
   await mkdir(path.dirname(callerPlan), { recursive: true });
@@ -135,24 +233,53 @@ test('init 只在 task-owned directory 创建持久状态', async () => {
   assert.equal(claims.task.taskId, 'slug-whitespace');
   assert.deepEqual(claims.claims, []);
   assert.match(await readFile(path.join(fixture.taskDir, 'audits.md'), 'utf8'), /# 单任务审计/);
+  await assert.rejects(access(path.join(fixture.taskDir, 'execution.json')));
 });
 
-test('validate-task 接受三种 commitPolicy 并拒绝未知策略', async () => {
+test('validate-task 接受新 exact schema 并拒绝旧 task-owned execution/acceptance 字段', async () => {
   for (const commitPolicy of ['required', 'allowed', 'forbidden']) {
-    const fixture = await createFixture({ commitPolicy });
-    const result = run(fixture.root, ['validate-task', path.relative(fixture.root, fixture.taskDir)]);
-    assert.equal(result.status, 0, `${commitPolicy}: ${result.stderr}`);
+    for (const acceptancePolicy of ['required', 'not-required']) {
+      const fixture = await createFixture({ commitPolicy, acceptancePolicy });
+      const result = run(fixture.root, ['validate-task', path.relative(fixture.root, fixture.taskDir)]);
+      assert.equal(result.status, 0, `${commitPolicy}/${acceptancePolicy}: ${result.stderr}`);
+    }
   }
 
   const fixture = await createFixture();
-  fixture.task.commitPolicy = 'always';
+  fixture.task.allowedPaths = ['src/**'];
+  fixture.task.upstreamAcceptance = { status: 'not-required' };
   await writeFile(path.join(fixture.taskDir, 'task.json'), `${JSON.stringify(fixture.task, null, 2)}\n`);
   const result = run(fixture.root, ['validate-task', path.relative(fixture.root, fixture.taskDir)]);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /commitPolicy.*required.*allowed.*forbidden/);
+  assert.match(result.stderr, /unsupported fields.*allowedPaths.*upstreamAcceptance/);
 });
 
-test('task-hash 对 JSON key 顺序稳定，对契约变化敏感', async () => {
+test('caller 接受 direct 与通用 delegated name/ref，并拒绝旧 kind 和不完整 delegated', async () => {
+  for (const caller of [
+    { kind: 'direct' },
+    { kind: 'delegated', name: 'sliced-dev', ref: 'dev-plans/example/plan.md#S1' },
+    { kind: 'delegated', name: 'release-pipeline', ref: 'tasks/release-1' },
+  ]) {
+    const fixture = await createFixture({ caller });
+    const result = run(fixture.root, ['validate-task', path.relative(fixture.root, fixture.taskDir)]);
+    assert.equal(result.status, 0, `${JSON.stringify(caller)}: ${result.stderr}`);
+  }
+
+  for (const caller of [
+    { kind: 'direct', ref: 'unexpected' },
+    { kind: 'delegated', ref: 'dev-plans/example/plan.md#S1' },
+    { kind: 'delegated', name: 'sliced-dev' },
+    { kind: 'delegated', name: 'SlicedDev', ref: 'x' },
+    { kind: 'sliced-dev', ref: 'dev-plans/example/plan.md#S1' },
+    { kind: 'unknown' },
+  ]) {
+    const fixture = await createFixture({ caller });
+    const result = run(fixture.root, ['validate-task', path.relative(fixture.root, fixture.taskDir)]);
+    assert.equal(result.status, 1, `unexpected pass: ${JSON.stringify(caller)}`);
+  }
+});
+
+test('task hash 对 key 顺序稳定，execution 调整不改 task identity，immutable task 变化会改 hash', async () => {
   const fixture = await createFixture();
   const first = await taskHash(fixture);
   assert.match(first, /^sha256:[0-9a-f]{64}$/);
@@ -161,14 +288,56 @@ test('task-hash 对 JSON key 顺序稳定，对契约变化敏感', async () => 
   await writeFile(path.join(fixture.taskDir, 'task.json'), `${JSON.stringify(reordered, null, 2)}\n`);
   assert.equal(await taskHash(fixture), first);
 
+  await initTask(fixture);
+  await writeExecution(fixture);
+  assert.equal(await taskHash(fixture), first);
+  await writeExecution(fixture, { allowedPaths: ['src/**', 'test/**'] });
+  assert.equal(await taskHash(fixture), first);
+
   reordered.objective = '改变后的目标。';
   await writeFile(path.join(fixture.taskDir, 'task.json'), `${JSON.stringify(reordered, null, 2)}\n`);
   assert.notEqual(await taskHash(fixture), first);
 });
 
-test('required 策略拒绝未提交代码并接受已提交 range', async () => {
+test('validate-execution 校验 exact schema、当前 task binding 和 task-owned evidence refs', async () => {
+  const fixture = await createFixture();
+  await initTask(fixture);
+  const execution = await writeExecution(fixture);
+
+  let result = run(fixture.root, ['validate-execution', path.relative(fixture.root, fixture.taskDir)]);
+  assert.equal(result.status, 0, result.stderr);
+
+  execution.plan = [];
+  await writeFile(path.join(fixture.taskDir, 'execution.json'), `${JSON.stringify(execution, null, 2)}\n`);
+  result = run(fixture.root, ['validate-execution', path.relative(fixture.root, fixture.taskDir)]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /execution\.json.*unsupported fields.*plan/);
+
+  delete execution.plan;
+  execution.task.taskHash = `sha256:${'0'.repeat(64)}`;
+  await writeFile(path.join(fixture.taskDir, 'execution.json'), `${JSON.stringify(execution, null, 2)}\n`);
+  result = run(fixture.root, ['validate-execution', path.relative(fixture.root, fixture.taskDir)]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /execution\.task.*stale task binding/);
+
+  execution.task.taskHash = await taskHash(fixture);
+  execution.evidenceRefs = ['claims.json'];
+  await writeFile(path.join(fixture.taskDir, 'execution.json'), `${JSON.stringify(execution, null, 2)}\n`);
+  result = run(fixture.root, ['validate-execution', path.relative(fixture.root, fixture.taskDir)]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /execution\.evidenceRefs\[0\].*audits\.md A entry/);
+
+  execution.evidenceRefs = ['audits.md#A99'];
+  await writeFile(path.join(fixture.taskDir, 'execution.json'), `${JSON.stringify(execution, null, 2)}\n`);
+  result = run(fixture.root, ['validate-execution', path.relative(fixture.root, fixture.taskDir)]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /evidence ref missing anchor.*A99/);
+});
+
+test('required 策略拒绝未提交代码并接受绑定 execution 的已提交 range', async () => {
   const fixture = await createFixture({ commitPolicy: 'required' });
   await initTask(fixture);
+  await writeExecution(fixture);
   await writeFile(path.join(fixture.root, 'src/slug.mjs'), "export const slug = (value) => value.trim().toLowerCase().replace(/\\s+/g, '-');\n");
 
   let result = run(fixture.root, ['snapshot-target', path.relative(fixture.root, fixture.taskDir)]);
@@ -177,62 +346,193 @@ test('required 策略拒绝未提交代码并接受已提交 range', async () =>
 
   git(fixture.root, ['add', 'src/slug.mjs']);
   git(fixture.root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '修复空白归一']);
-  result = run(fixture.root, ['snapshot-target', path.relative(fixture.root, fixture.taskDir)]);
-  assert.equal(result.status, 0, result.stderr);
-  const target = JSON.parse(result.stdout);
-  assert.deepEqual(target, {
-    kind: 'commit-range',
-    baseCommit: fixture.baseCommit,
-    headCommit: git(fixture.root, ['rev-parse', 'HEAD']),
-  });
+  const target = await snapshotTarget(fixture);
+  assert.equal(target.kind, 'commit-range');
+  assert.equal(target.baseCommit, fixture.baseCommit);
+  assert.equal(target.headCommit, git(fixture.root, ['rev-parse', 'HEAD']));
+  assert.match(target.executionHash, /^sha256:[0-9a-f]{64}$/);
 });
 
-test('allowed 策略可交付未提交 worktree target', async () => {
+test('allowed 策略可交付绑定 execution 的未提交 worktree target', async () => {
   const fixture = await createFixture({ commitPolicy: 'allowed' });
   await initTask(fixture);
+  await writeExecution(fixture);
   await writeFile(path.join(fixture.root, 'src/slug.mjs'), "export const slug = (value) => value.trim().toLowerCase().replace(/\\s+/g, '-');\n");
 
-  const result = run(fixture.root, ['snapshot-target', path.relative(fixture.root, fixture.taskDir)]);
-  assert.equal(result.status, 0, result.stderr);
-  const target = JSON.parse(result.stdout);
+  const target = await snapshotTarget(fixture);
   assert.equal(target.kind, 'worktree');
   assert.equal(target.baseCommit, fixture.baseCommit);
   assert.match(target.snapshotHash, /^sha256:[0-9a-f]{64}$/);
-  assert.deepEqual(Object.keys(target).sort(), ['baseCommit', 'kind', 'snapshotHash']);
+  assert.match(target.executionHash, /^sha256:[0-9a-f]{64}$/);
 });
 
-test('forbidden 策略拒绝业务 commit 并接受未提交 target', async () => {
+test('forbidden 策略拒绝业务 commit 并接受绑定 execution 的未提交 target', async () => {
   const fixture = await createFixture({ commitPolicy: 'forbidden' });
   await initTask(fixture);
+  await writeExecution(fixture);
   await writeFile(path.join(fixture.root, 'src/slug.mjs'), "export const slug = (value) => value.trim().toLowerCase().replace(/\\s+/g, '-');\n");
 
-  let result = run(fixture.root, ['snapshot-target', path.relative(fixture.root, fixture.taskDir)]);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).kind, 'worktree');
+  const target = await snapshotTarget(fixture);
+  assert.equal(target.kind, 'worktree');
+  assert.match(target.executionHash, /^sha256:[0-9a-f]{64}$/);
 
   git(fixture.root, ['add', 'src/slug.mjs']);
   git(fixture.root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '不应允许的提交']);
-  result = run(fixture.root, ['snapshot-target', path.relative(fixture.root, fixture.taskDir)]);
+  const result = run(fixture.root, ['snapshot-target', path.relative(fixture.root, fixture.taskDir)]);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /commitPolicy forbidden.*HEAD.*baseCommit/);
 });
 
-test('snapshot-target 拒绝越过 allowedPaths 或命中 forbiddenPaths', async () => {
-  const fixture = await createFixture({ commitPolicy: 'allowed' });
-  await initTask(fixture);
-  await writeFile(path.join(fixture.root, 'package.json'), '{}\n');
+test('snapshot-target 读取 execution allowlist 并合并 task/execution 两层 forbidden paths', async () => {
+  {
+    const fixture = await createFixture();
+    await initTask(fixture);
+    await writeExecution(fixture, { allowedPaths: ['src/**'] });
+    await writeFile(path.join(fixture.root, 'test/slug.test.mjs'), '// changed\n');
+    const result = run(fixture.root, ['snapshot-target', path.relative(fixture.root, fixture.taskDir)]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /test\/slug\.test\.mjs.*outside execution\.allowedPaths/);
+  }
 
-  const result = run(fixture.root, ['snapshot-target', path.relative(fixture.root, fixture.taskDir)]);
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /package\.json.*forbiddenPaths/);
+  {
+    const fixture = await createFixture();
+    await initTask(fixture);
+    await writeExecution(fixture, { allowedPaths: ['**'] });
+    await writeFile(path.join(fixture.root, 'package.json'), '{}\n');
+    const result = run(fixture.root, ['snapshot-target', path.relative(fixture.root, fixture.taskDir)]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /package\.json.*task\.forbiddenPaths/);
+  }
+
+  {
+    const fixture = await createFixture();
+    await initTask(fixture);
+    await writeExecution(fixture, {
+      allowedPaths: ['src/**', 'test/**'],
+      forbiddenPaths: ['test/**'],
+    });
+    await writeFile(path.join(fixture.root, 'test/slug.test.mjs'), '// changed\n');
+    const result = run(fixture.root, ['snapshot-target', path.relative(fixture.root, fixture.taskDir)]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /test\/slug\.test\.mjs.*execution\.forbiddenPaths/);
+  }
 });
 
-test('delivery.json 是薄结果契约并拒绝内嵌完整证据', async () => {
+test('execution boundary 变化会生成新 hash 并使旧 General binding 失效', async () => {
   const fixture = await createFixture();
   await initTask(fixture);
-  const targetResult = run(fixture.root, ['snapshot-target', path.relative(fixture.root, fixture.taskDir)]);
-  assert.equal(targetResult.status, 0, targetResult.stderr);
-  const delivery = await writeDelivery(fixture, { target: JSON.parse(targetResult.stdout) });
+  await writeExecution(fixture);
+  const oldTarget = await snapshotTarget(fixture);
+  const oldGeneral = await appendGeneralReview(fixture, oldTarget);
+  const hash = await taskHash(fixture);
+  await writeVerifiedClaims(fixture, hash);
+
+  await appendFile(
+    path.join(fixture.taskDir, 'audits.md'),
+    '\n### A3：执行边界调整\n\n同一目标内补充 docs 范围。\n',
+  );
+  await writeExecution(fixture, {
+    allowedPaths: ['src/slug.mjs', 'test/slug.test.mjs', 'docs/**'],
+    evidenceRefs: ['audits.md#A3'],
+  });
+  const newTarget = await snapshotTarget(fixture);
+  assert.notEqual(newTarget.executionHash, oldTarget.executionHash);
+  assert.equal(await taskHash(fixture), hash);
+
+  await writeDelivery(fixture, { target: newTarget, generalReview: oldGeneral });
+  const result = run(fixture.root, ['validate-result', path.relative(fixture.root, fixture.taskDir)]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /General Review.*stale.*execution|generalReview.*binding/i);
+});
+
+test('required acceptance 的 passed/skipped 只绑定 target，不改变 task 或 General identity', async () => {
+  for (const status of ['passed', 'skipped']) {
+    const fixture = await createFixture({ acceptancePolicy: 'required' });
+    await initTask(fixture);
+    await writeExecution(fixture);
+    const target = await snapshotTarget(fixture);
+    const generalReview = await appendGeneralReview(fixture, target);
+    const before = await taskHash(fixture);
+    const acceptance = await appendAcceptance(fixture, target, status);
+    assert.equal(await taskHash(fixture), before);
+    await writeVerifiedClaims(fixture, before);
+    await writeDelivery(fixture, { target, generalReview, acceptance });
+
+    let result = run(fixture.root, ['validate-result', path.relative(fixture.root, fixture.taskDir)]);
+    assert.equal(result.status, 0, `${status}: ${result.stderr}`);
+    result = run(fixture.root, ['close-check', path.relative(fixture.root, fixture.taskDir)]);
+    assert.equal(result.status, 0, `${status}: ${result.stderr}`);
+  }
+});
+
+test('not-required acceptance 要求 delivery acceptance ref 为 null', async () => {
+  const fixture = await createFixture();
+  const { target } = await prepareDelivered(fixture);
+  let result = run(fixture.root, ['validate-result', path.relative(fixture.root, fixture.taskDir)]);
+  assert.equal(result.status, 0, result.stderr);
+
+  const acceptance = await appendAcceptance(fixture, target, 'passed', { anchor: 'A3' });
+  await writeDelivery(fixture, { target, acceptance });
+  result = run(fixture.root, ['validate-result', path.relative(fixture.root, fixture.taskDir)]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /acceptancePolicy not-required.*acceptance.*null/);
+});
+
+test('required acceptance 缺失或绑定旧 target 时不能 delivered', async () => {
+  {
+    const fixture = await createFixture({ acceptancePolicy: 'required' });
+    await initTask(fixture);
+    await writeExecution(fixture);
+    const target = await snapshotTarget(fixture);
+    await appendGeneralReview(fixture, target);
+    const hash = await taskHash(fixture);
+    await writeVerifiedClaims(fixture, hash);
+    await writeDelivery(fixture, { target });
+    const result = run(fixture.root, ['validate-result', path.relative(fixture.root, fixture.taskDir)]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /acceptancePolicy required.*passed\/skipped|acceptance.*required/i);
+  }
+
+  {
+    const fixture = await createFixture({ acceptancePolicy: 'required' });
+    await initTask(fixture);
+    await writeExecution(fixture);
+    const oldTarget = await snapshotTarget(fixture);
+    const staleAcceptance = await appendAcceptance(fixture, oldTarget, 'passed', { anchor: 'A2' });
+    await writeFile(path.join(fixture.root, 'src/slug.mjs'), "export const slug = () => 'new-target';\n");
+    const currentTarget = await snapshotTarget(fixture);
+    const generalReview = await appendGeneralReview(fixture, currentTarget, { anchor: 'A3' });
+    const hash = await taskHash(fixture);
+    await writeVerifiedClaims(fixture, hash);
+    await writeDelivery(fixture, { target: currentTarget, generalReview, acceptance: staleAcceptance });
+    const result = run(fixture.root, ['validate-result', path.relative(fixture.root, fixture.taskDir)]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /acceptance.*stale target binding/i);
+  }
+});
+
+test('同一 target 一旦有 rejected acceptance 就不能复用旧 passed 交付', async () => {
+  const fixture = await createFixture({ acceptancePolicy: 'required' });
+  await initTask(fixture);
+  await writeExecution(fixture);
+  const target = await snapshotTarget(fixture);
+  const generalReview = await appendGeneralReview(fixture, target);
+  const passed = await appendAcceptance(fixture, target, 'passed', { anchor: 'A3' });
+  await appendAcceptance(fixture, target, 'rejected', { anchor: 'A4' });
+  const hash = await taskHash(fixture);
+  await writeVerifiedClaims(fixture, hash);
+  await writeDelivery(fixture, { target, generalReview, acceptance: passed });
+
+  const result = run(fixture.root, ['validate-result', path.relative(fixture.root, fixture.taskDir)]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /target.*rejected acceptance|acceptance.*rejected/i);
+});
+
+test('delivery.json 保持薄结构并拒绝内嵌完整证据', async () => {
+  const fixture = await createFixture();
+  const { target } = await prepareDelivered(fixture);
+  const delivery = JSON.parse(await readFile(path.join(fixture.taskDir, 'delivery.json'), 'utf8'));
+  assert.equal(delivery.evidenceRefs.acceptance, null);
   delivery.verification = [{ command: 'npm test', status: 'passed' }];
   delivery.changedFiles = ['src/slug.mjs'];
   delivery.generalReview = { verdict: 'passed' };
@@ -242,9 +542,10 @@ test('delivery.json 是薄结果契约并拒绝内嵌完整证据', async () => 
   const result = run(fixture.root, ['validate-result', path.relative(fixture.root, fixture.taskDir)]);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /unsupported fields.*verification.*changedFiles.*generalReview.*claims/);
+  assert.equal(target.kind, 'no-change');
 });
 
-test('validate-result 接受四种结果并约束 upstreamRequest 类型', async () => {
+test('validate-result 接受三种 non-delivered 结果并约束 request kind', async () => {
   const cases = [
     ['needs-upstream', 'acceptance-change'],
     ['needs-reslice', 'reslice'],
@@ -272,7 +573,7 @@ test('validate-result 接受四种结果并约束 upstreamRequest 类型', async
     upstreamRequest: {
       kind: 'acceptance-change',
       summary: '错误分类。',
-      evidenceRefs: [],
+      evidenceRefs: ['audits.md#A1'],
     },
   });
   const result = run(fixture.root, ['validate-result', path.relative(fixture.root, fixture.taskDir)]);
@@ -280,13 +581,38 @@ test('validate-result 接受四种结果并约束 upstreamRequest 类型', async
   assert.match(result.stderr, /needs-reslice.*reslice/);
 });
 
-test('close-check 接受未提交 delivered，并检测 stale task 与 stale target', async () => {
+test('三种 non-delivered 结果都拒绝空或不存在的 upstreamRequest evidence refs', async () => {
+  const cases = [
+    ['needs-upstream', 'user-acceptance'],
+    ['needs-reslice', 'reslice'],
+    ['blocked', 'blocker'],
+  ];
+  for (const [resultStatus, requestKind] of cases) {
+    for (const evidenceRefs of [[], ['audits.md#A99']]) {
+      const fixture = await createFixture();
+      await initTask(fixture);
+      await writeDelivery(fixture, {
+        result: resultStatus,
+        upstreamRequest: {
+          kind: requestKind,
+          summary: `${resultStatus} 原因。`,
+          evidenceRefs,
+        },
+      });
+      const result = run(fixture.root, ['validate-result', path.relative(fixture.root, fixture.taskDir)]);
+      assert.equal(result.status, 1, `${resultStatus}/${JSON.stringify(evidenceRefs)} unexpectedly passed`);
+      assert.match(result.stderr, /evidenceRefs.*must not be empty|evidence ref missing anchor/);
+    }
+  }
+});
+
+test('close-check 接受 delivered，并检测 stale task 与 stale Git target', async () => {
   const fixture = await createFixture({ commitPolicy: 'allowed' });
   await initTask(fixture);
+  await writeExecution(fixture);
   await writeFile(path.join(fixture.root, 'src/slug.mjs'), "export const slug = (value) => value.trim().toLowerCase().replace(/\\s+/g, '-');\n");
-  const targetResult = run(fixture.root, ['snapshot-target', path.relative(fixture.root, fixture.taskDir)]);
-  assert.equal(targetResult.status, 0, targetResult.stderr);
-  const target = JSON.parse(targetResult.stdout);
+  const target = await snapshotTarget(fixture);
+  await appendGeneralReview(fixture, target);
   const hash = await taskHash(fixture);
   await writeVerifiedClaims(fixture, hash);
   await writeDelivery(fixture, { target });
@@ -311,18 +637,18 @@ test('close-check 接受未提交 delivered，并检测 stale task 与 stale tar
 test('delivered 拒绝未闭合 claims 和缺失 evidence ref', async () => {
   const fixture = await createFixture();
   await initTask(fixture);
-  const targetResult = run(fixture.root, ['snapshot-target', path.relative(fixture.root, fixture.taskDir)]);
-  assert.equal(targetResult.status, 0, targetResult.stderr);
-  await writeDelivery(fixture, { target: JSON.parse(targetResult.stdout) });
+  await writeExecution(fixture);
+  const target = await snapshotTarget(fixture);
+  await appendGeneralReview(fixture, target);
+  await writeDelivery(fixture, { target });
 
   let result = run(fixture.root, ['close-check', path.relative(fixture.root, fixture.taskDir)]);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /delivered.*at least one claim|claims.*verified/);
 
   const hash = await taskHash(fixture);
-  await writeVerifiedClaims(fixture, hash);
-  await writeFile(path.join(fixture.taskDir, 'audits.md'), '# 单任务审计\n');
+  await writeVerifiedClaims(fixture, hash, ['audits.md#A99']);
   result = run(fixture.root, ['close-check', path.relative(fixture.root, fixture.taskDir)]);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /evidence ref.*audits\.md#A1/);
+  assert.match(result.stderr, /evidence ref missing anchor.*audits\.md#A99/);
 });

@@ -6,12 +6,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const TASK_SCHEMA = 'deliver-task.task.v1';
+const EXECUTION_SCHEMA = 'deliver-task.execution.v1';
 const CLAIMS_SCHEMA = 'deliver-task.claims.v1';
 const DELIVERY_SCHEMA = 'deliver-task.delivery.v1';
 const COMMIT_POLICIES = new Set(['required', 'allowed', 'forbidden']);
 const RESULT_STATUSES = new Set(['delivered', 'needs-upstream', 'needs-reslice', 'blocked']);
 const CLAIM_STATUSES = new Set(['proposed', 'implemented', 'verified', 'blocked', 'waived']);
-const ACCEPTANCE_STATUSES = new Set(['not-required', 'pending', 'passed', 'skipped']);
+const ACCEPTANCE_POLICIES = new Set(['required', 'not-required']);
+const ACCEPTANCE_RESULTS = new Set(['passed', 'skipped', 'rejected']);
 const UPSTREAM_KINDS = new Set([
   'target-change',
   'acceptance-change',
@@ -78,6 +80,10 @@ function sha256(value) {
 
 function taskHash(task) {
   return sha256(canonicalJson(task));
+}
+
+function executionHash(execution) {
+  return sha256(canonicalJson(execution));
 }
 
 function git(root, args, options = {}) {
@@ -178,23 +184,20 @@ async function resolveContext(taskDirArg) {
 }
 
 function validateCaller(caller) {
-  assertExactObject(caller, ['kind'], ['ref'], 'task.caller');
-  if (!new Set(['direct', 'sliced-dev']).has(caller.kind)) {
-    throw gateError('task.caller.kind must be direct or sliced-dev');
+  if (!isPlainObject(caller)) throw gateError('task.caller must be an object');
+  if (caller.kind === 'direct') {
+    assertExactObject(caller, ['kind'], [], 'task.caller');
+    return;
   }
-  if (caller.kind === 'sliced-dev') assertString(caller.ref, 'task.caller.ref');
-  if (caller.ref !== undefined) assertString(caller.ref, 'task.caller.ref');
-}
-
-function validateUpstreamAcceptance(acceptance) {
-  assertExactObject(acceptance, ['status'], ['evidenceRef'], 'task.upstreamAcceptance');
-  if (!ACCEPTANCE_STATUSES.has(acceptance.status)) {
-    throw gateError(`task.upstreamAcceptance.status must be one of ${[...ACCEPTANCE_STATUSES].join(', ')}`);
+  if (caller.kind === 'delegated') {
+    assertExactObject(caller, ['kind', 'name', 'ref'], [], 'task.caller');
+    if (!TASK_ID_RE.test(caller.name || '')) {
+      throw gateError('task.caller.name must be a lowercase hyphenated id');
+    }
+    assertString(caller.ref, 'task.caller.ref');
+    return;
   }
-  if (acceptance.evidenceRef !== undefined) assertString(acceptance.evidenceRef, 'task.upstreamAcceptance.evidenceRef');
-  if (new Set(['passed', 'skipped']).has(acceptance.status) && acceptance.evidenceRef === undefined) {
-    throw gateError(`task.upstreamAcceptance ${acceptance.status} requires evidenceRef`);
-  }
+  throw gateError('task.caller.kind must be direct or delegated');
 }
 
 function validateTask(task, repoRoot) {
@@ -209,11 +212,10 @@ function validateTask(task, repoRoot) {
       'acceptanceCriteria',
       'constraints',
       'nonGoals',
-      'allowedPaths',
       'forbiddenPaths',
       'baseCommit',
       'commitPolicy',
-      'upstreamAcceptance',
+      'acceptancePolicy',
     ],
     [],
     'task.json',
@@ -228,15 +230,15 @@ function validateTask(task, repoRoot) {
   assertStringArray(task.acceptanceCriteria, 'task.acceptanceCriteria', { nonEmpty: true });
   assertStringArray(task.constraints, 'task.constraints');
   assertStringArray(task.nonGoals, 'task.nonGoals');
-  assertStringArray(task.allowedPaths, 'task.allowedPaths', { nonEmpty: true });
   assertStringArray(task.forbiddenPaths, 'task.forbiddenPaths');
-  task.allowedPaths.forEach((item, index) => normalizeRepoPattern(item, `task.allowedPaths[${index}]`));
   task.forbiddenPaths.forEach((item, index) => normalizeRepoPattern(item, `task.forbiddenPaths[${index}]`));
   resolveCommit(repoRoot, task.baseCommit, 'task.baseCommit');
   if (!COMMIT_POLICIES.has(task.commitPolicy)) {
     throw gateError(`task.commitPolicy must be one of ${[...COMMIT_POLICIES].join(', ')}`);
   }
-  validateUpstreamAcceptance(task.upstreamAcceptance);
+  if (!ACCEPTANCE_POLICIES.has(task.acceptancePolicy)) {
+    throw gateError(`task.acceptancePolicy must be one of ${[...ACCEPTANCE_POLICIES].join(', ')}`);
+  }
   return task;
 }
 
@@ -263,6 +265,34 @@ function validateBinding(binding, task, label) {
   ) {
     throw gateError(`${label} has stale task binding; expected ${expected.taskId}@${expected.revision} ${expected.taskHash}`);
   }
+}
+
+async function validateExecution(execution, task, context) {
+  assertExactObject(
+    execution,
+    ['schemaVersion', 'task', 'allowedPaths', 'forbiddenPaths', 'evidenceRefs'],
+    [],
+    'execution.json',
+  );
+  if (execution.schemaVersion !== EXECUTION_SCHEMA) {
+    throw gateError(`execution.schemaVersion must be ${EXECUTION_SCHEMA}`);
+  }
+  validateBinding(execution.task, task, 'execution.task');
+  assertStringArray(execution.allowedPaths, 'execution.allowedPaths', { nonEmpty: true });
+  assertStringArray(execution.forbiddenPaths, 'execution.forbiddenPaths');
+  assertStringArray(execution.evidenceRefs, 'execution.evidenceRefs', { nonEmpty: true });
+  execution.allowedPaths.forEach((item, index) => normalizeRepoPattern(item, `execution.allowedPaths[${index}]`));
+  execution.forbiddenPaths.forEach((item, index) => normalizeRepoPattern(item, `execution.forbiddenPaths[${index}]`));
+  for (const [index, reference] of execution.evidenceRefs.entries()) {
+    assertAuditRef(reference, `execution.evidenceRefs[${index}]`);
+    await resolveEvidenceRef(context, reference, { allowNotApplicable: false });
+  }
+  return execution;
+}
+
+async function readExecution(context, task) {
+  const execution = await readJson(path.join(context.taskDir, 'execution.json'), 'execution.json');
+  return validateExecution(execution, task, context);
 }
 
 async function initTask(context, task) {
@@ -320,7 +350,7 @@ function commitRangePaths(root, baseCommit, headCommit) {
   ).sort();
 }
 
-function assertBoundary(paths, task, context, label) {
+function assertBoundary(paths, task, execution, context, label) {
   for (const repoPath of paths) {
     if (isInsideTaskDir(repoPath, context)) {
       throw gateError(`${label} includes task-owned artifact path ${repoPath}`);
@@ -328,8 +358,11 @@ function assertBoundary(paths, task, context, label) {
     if (matchesAny(repoPath, task.forbiddenPaths)) {
       throw gateError(`${repoPath} matches task.forbiddenPaths`);
     }
-    if (!matchesAny(repoPath, task.allowedPaths)) {
-      throw gateError(`${repoPath} is outside task.allowedPaths`);
+    if (matchesAny(repoPath, execution.forbiddenPaths)) {
+      throw gateError(`${repoPath} matches execution.forbiddenPaths`);
+    }
+    if (!matchesAny(repoPath, execution.allowedPaths)) {
+      throw gateError(`${repoPath} is outside execution.allowedPaths`);
     }
   }
 }
@@ -373,9 +406,10 @@ function isAncestor(root, ancestor, descendant) {
   }
 }
 
-async function snapshotTarget(context, task) {
+async function snapshotTarget(context, task, execution) {
   const baseCommit = resolveCommit(context.repoRoot, task.baseCommit, 'task.baseCommit');
   const headCommit = resolveCommit(context.repoRoot, 'HEAD', 'HEAD');
+  const currentExecutionHash = executionHash(execution);
   if (task.commitPolicy === 'forbidden' && headCommit !== baseCommit) {
     throw gateError('commitPolicy forbidden requires HEAD to equal baseCommit');
   }
@@ -385,17 +419,17 @@ async function snapshotTarget(context, task) {
       throw gateError('task.baseCommit must be an ancestor of HEAD');
     }
     const rangePaths = commitRangePaths(context.repoRoot, baseCommit, headCommit);
-    assertBoundary(rangePaths, task, context, 'commit range');
+    assertBoundary(rangePaths, task, execution, context, 'commit range');
     const dirtyPaths = changedPathsFrom(context.repoRoot, headCommit).filter((item) => !isInsideTaskDir(item, context));
     if (dirtyPaths.length > 0) {
       throw gateError(`committed target has additional worktree changes: ${dirtyPaths.join(', ')}`);
     }
-    return { kind: 'commit-range', baseCommit, headCommit };
+    return { kind: 'commit-range', baseCommit, headCommit, executionHash: currentExecutionHash };
   }
 
   const changedPaths = changedPathsFrom(context.repoRoot, baseCommit).filter((item) => !isInsideTaskDir(item, context));
-  assertBoundary(changedPaths, task, context, 'worktree target');
-  if (changedPaths.length === 0) return { kind: 'no-change', baseCommit };
+  assertBoundary(changedPaths, task, execution, context, 'worktree target');
+  if (changedPaths.length === 0) return { kind: 'no-change', baseCommit, executionHash: currentExecutionHash };
   if (task.commitPolicy === 'required') {
     throw gateError('commitPolicy required requires a committed target when code changed');
   }
@@ -403,33 +437,33 @@ async function snapshotTarget(context, task) {
     kind: 'worktree',
     baseCommit,
     snapshotHash: await worktreeSnapshot(context.repoRoot, changedPaths),
+    executionHash: currentExecutionHash,
   };
 }
 
-function validateTarget(target, task) {
+function validateTarget(target, task, execution) {
   if (!isPlainObject(target)) throw gateError('delivery.target must be an object');
   if (target.kind === 'commit-range') {
-    assertExactObject(target, ['kind', 'baseCommit', 'headCommit'], [], 'delivery.target');
+    assertExactObject(target, ['kind', 'baseCommit', 'headCommit', 'executionHash'], [], 'delivery.target');
     if (task.commitPolicy === 'forbidden') throw gateError('commitPolicy forbidden cannot use a commit-range target');
-    return;
-  }
-  if (target.kind === 'worktree') {
-    assertExactObject(target, ['kind', 'baseCommit', 'snapshotHash'], [], 'delivery.target');
+  } else if (target.kind === 'worktree') {
+    assertExactObject(target, ['kind', 'baseCommit', 'snapshotHash', 'executionHash'], [], 'delivery.target');
     if (task.commitPolicy === 'required') throw gateError('commitPolicy required cannot use a worktree target');
     if (!SHA256_RE.test(target.snapshotHash || '')) throw gateError('delivery.target.snapshotHash must be sha256');
-    return;
+  } else if (target.kind === 'no-change') {
+    assertExactObject(target, ['kind', 'baseCommit', 'executionHash'], [], 'delivery.target');
+  } else {
+    throw gateError('delivery.target.kind must be commit-range, worktree, or no-change');
   }
-  if (target.kind === 'no-change') {
-    assertExactObject(target, ['kind', 'baseCommit'], [], 'delivery.target');
-    return;
+  if (target.executionHash !== executionHash(execution)) {
+    throw gateError('delivery.target has stale execution binding');
   }
-  throw gateError('delivery.target.kind must be commit-range, worktree, or no-change');
 }
 
 function validateEvidenceRefs(evidenceRefs, { delivered }) {
   assertExactObject(
     evidenceRefs,
-    ['claims', 'verification', 'generalReview', 'rulesReview'],
+    ['claims', 'verification', 'generalReview', 'acceptance', 'rulesReview'],
     [],
     'delivery.evidenceRefs',
   );
@@ -437,6 +471,9 @@ function validateEvidenceRefs(evidenceRefs, { delivered }) {
     const value = evidenceRefs[field];
     if (delivered) assertString(value, `delivery.evidenceRefs.${field}`);
     else if (value !== null) assertString(value, `delivery.evidenceRefs.${field}`);
+  }
+  if (evidenceRefs.acceptance !== null) {
+    assertString(evidenceRefs.acceptance, 'delivery.evidenceRefs.acceptance');
   }
 }
 
@@ -447,7 +484,7 @@ function validateUpstreamRequest(request, result) {
   }
   assertExactObject(request, ['kind', 'summary', 'evidenceRefs'], [], 'delivery.upstreamRequest');
   assertString(request.summary, 'delivery.upstreamRequest.summary');
-  assertStringArray(request.evidenceRefs, 'delivery.upstreamRequest.evidenceRefs');
+  assertStringArray(request.evidenceRefs, 'delivery.upstreamRequest.evidenceRefs', { nonEmpty: true });
   if (result === 'needs-reslice' && request.kind !== 'reslice') {
     throw gateError('needs-reslice requires upstreamRequest.kind reslice');
   }
@@ -459,7 +496,7 @@ function validateUpstreamRequest(request, result) {
   }
 }
 
-function validateDelivery(delivery, task) {
+function validateDelivery(delivery, task, execution) {
   assertExactObject(
     delivery,
     [
@@ -481,7 +518,10 @@ function validateDelivery(delivery, task) {
   if (!RESULT_STATUSES.has(delivery.result)) {
     throw gateError(`delivery.result must be one of ${[...RESULT_STATUSES].join(', ')}`);
   }
-  if (delivery.target !== null) validateTarget(delivery.target, task);
+  if (delivery.target !== null) {
+    if (!execution) throw gateError('delivery.target requires execution.json');
+    validateTarget(delivery.target, task, execution);
+  }
   if (delivery.result === 'delivered' && delivery.target === null) {
     throw gateError('delivered requires a target');
   }
@@ -489,11 +529,6 @@ function validateDelivery(delivery, task) {
   assertStringArray(delivery.residualRiskRefs, 'delivery.residualRiskRefs');
   validateUpstreamRequest(delivery.upstreamRequest, delivery.result);
   return delivery;
-}
-
-async function readDelivery(context, task) {
-  const delivery = await readJson(path.join(context.taskDir, 'delivery.json'), 'delivery.json');
-  return validateDelivery(delivery, task);
 }
 
 function validateClaims(claims, task, { requireClosed = false } = {}) {
@@ -527,8 +562,11 @@ function validateClaims(claims, task, { requireClosed = false } = {}) {
   return claims;
 }
 
-async function resolveEvidenceRef(context, reference) {
-  if (reference === 'not-applicable') return;
+async function resolveEvidenceRef(context, reference, { allowNotApplicable = true } = {}) {
+  if (reference === 'not-applicable') {
+    if (!allowNotApplicable) throw gateError('evidence ref not-applicable is not a task-owned evidence ref');
+    return { source: '', section: '' };
+  }
   assertString(reference, 'evidence ref');
   const [relativeFile, anchor, ...extra] = reference.split('#');
   if (extra.length > 0 || !relativeFile) throw gateError(`invalid evidence ref: ${reference}`);
@@ -546,12 +584,170 @@ async function resolveEvidenceRef(context, reference) {
   }
   if (anchor) {
     const escaped = anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const heading = new RegExp(`^#{1,6}\\s+${escaped}(?:[：:].*)?$`, 'm');
-    if (!heading.test(source)) throw gateError(`evidence ref missing anchor: ${reference}`);
+    const lines = source.split(/\r?\n/);
+    const heading = new RegExp(`^(#{1,6})\\s+${escaped}(?:[：:].*)?$`);
+    const start = lines.findIndex((line) => heading.test(line));
+    if (start === -1) throw gateError(`evidence ref missing anchor: ${reference}`);
+    const level = heading.exec(lines[start])[1].length;
+    let end = lines.length;
+    for (let index = start + 1; index < lines.length; index += 1) {
+      const nextHeading = /^(#{1,6})\s+/.exec(lines[index]);
+      if (nextHeading && nextHeading[1].length <= level) {
+        end = index;
+        break;
+      }
+    }
+    return { source, section: lines.slice(start + 1, end).join('\n') };
+  }
+  return { source, section: source };
+}
+
+function protocolBlocks(source, blockName, label) {
+  const opening = `\`\`\`${blockName}`;
+  const lines = source.split(/\r?\n/);
+  const blocks = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index].trim() !== opening) continue;
+    const end = lines.findIndex((line, candidate) => candidate > index && line.trim() === '\`\`\`');
+    if (end === -1) throw gateError(`${label} has unterminated ${blockName} block`);
+    const payload = lines.slice(index + 1, end).join('\n').trim();
+    try {
+      blocks.push(JSON.parse(payload));
+    } catch (error) {
+      throw gateError(`${label} ${blockName} block must be valid JSON: ${error.message}`);
+    }
+    index = end;
+  }
+  return blocks;
+}
+
+function singleProtocolBlock(source, blockName, label) {
+  const blocks = protocolBlocks(source, blockName, label);
+  if (blocks.length !== 1) {
+    throw gateError(`${label} must contain exactly one ${blockName} block`);
+  }
+  return blocks[0];
+}
+
+function assertAuditRef(reference, label) {
+  if (!/^audits\.md#A[1-9][0-9]*$/.test(reference || '')) {
+    throw gateError(`${label} must reference an audits.md A entry`);
   }
 }
 
-async function closeCheck(context, task, delivery) {
+function validateBindingShape(binding, label) {
+  assertExactObject(binding, ['taskId', 'revision', 'taskHash'], [], label);
+  assertString(binding.taskId, `${label}.taskId`);
+  if (!Number.isSafeInteger(binding.revision) || binding.revision < 1) {
+    throw gateError(`${label}.revision must be a positive integer`);
+  }
+  if (!SHA256_RE.test(binding.taskHash || '')) throw gateError(`${label}.taskHash must be sha256`);
+}
+
+function sameTaskBinding(binding, task) {
+  return canonicalJson(binding) === canonicalJson(bindingForTask(task));
+}
+
+function validateGeneralBinding(record, task, execution, target, label) {
+  assertExactObject(record, ['task', 'executionHash', 'target'], [], label);
+  validateBinding(record.task, task, `${label}.task`);
+  if (record.executionHash !== executionHash(execution)) {
+    throw gateError(`${label} has stale execution binding`);
+  }
+  if (canonicalJson(record.target) !== canonicalJson(target)) {
+    throw gateError(`${label} has stale target binding`);
+  }
+}
+
+function validateAcceptanceShape(record, label) {
+  assertExactObject(record, ['task', 'target', 'status', 'evidenceRefs'], [], label);
+  validateBindingShape(record.task, `${label}.task`);
+  if (!ACCEPTANCE_RESULTS.has(record.status)) {
+    throw gateError(`${label}.status must be one of ${[...ACCEPTANCE_RESULTS].join(', ')}`);
+  }
+  assertStringArray(record.evidenceRefs, `${label}.evidenceRefs`, { nonEmpty: true });
+  return record;
+}
+
+async function validateDeliveredBindings(context, task, execution, delivery) {
+  const generalRef = delivery.evidenceRefs.generalReview;
+  assertAuditRef(generalRef, 'delivery.evidenceRefs.generalReview');
+  const generalEvidence = await resolveEvidenceRef(context, generalRef, { allowNotApplicable: false });
+  const generalBinding = singleProtocolBlock(
+    generalEvidence.section,
+    'deliver-task-binding',
+    'General Review evidence',
+  );
+  validateGeneralBinding(generalBinding, task, execution, delivery.target, 'General Review binding');
+
+  const acceptanceRef = delivery.evidenceRefs.acceptance;
+  if (task.acceptancePolicy === 'not-required') {
+    if (acceptanceRef !== null) {
+      throw gateError('acceptancePolicy not-required requires delivery.evidenceRefs.acceptance to be null');
+    }
+    return;
+  }
+  if (acceptanceRef === null) {
+    throw gateError('acceptancePolicy required requires passed/skipped acceptance evidence');
+  }
+  assertAuditRef(acceptanceRef, 'delivery.evidenceRefs.acceptance');
+  const acceptanceEvidence = await resolveEvidenceRef(context, acceptanceRef, { allowNotApplicable: false });
+  const acceptance = validateAcceptanceShape(
+    singleProtocolBlock(
+      acceptanceEvidence.section,
+      'deliver-task-acceptance',
+      'acceptance evidence',
+    ),
+    'acceptance evidence',
+  );
+  validateBinding(acceptance.task, task, 'acceptance evidence.task');
+  if (canonicalJson(acceptance.target) !== canonicalJson(delivery.target)) {
+    throw gateError('acceptance evidence has stale target binding');
+  }
+  if (!new Set(['passed', 'skipped']).has(acceptance.status)) {
+    throw gateError(`acceptancePolicy required cannot deliver with acceptance ${acceptance.status}`);
+  }
+  for (const reference of acceptance.evidenceRefs) {
+    await resolveEvidenceRef(context, reference, { allowNotApplicable: false });
+  }
+
+  const audits = await readJsonOrText(path.join(context.taskDir, 'audits.md'), 'audits.md');
+  const records = protocolBlocks(audits, 'deliver-task-acceptance', 'audits.md')
+    .map((record, index) => validateAcceptanceShape(record, `audits.md acceptance[${index}]`));
+  for (const record of records) {
+    if (!sameTaskBinding(record.task, task)) continue;
+    for (const reference of record.evidenceRefs) {
+      await resolveEvidenceRef(context, reference, { allowNotApplicable: false });
+    }
+    if (record.status === 'rejected' && canonicalJson(record.target) === canonicalJson(delivery.target)) {
+      throw gateError('target has rejected acceptance and cannot be delivered');
+    }
+  }
+}
+
+async function readJsonOrText(file, label) {
+  try {
+    return await fs.readFile(file, 'utf8');
+  } catch (error) {
+    throw gateError(`${label} missing or unreadable: ${error.message}`);
+  }
+}
+
+async function readDelivery(context, task) {
+  const raw = await readJson(path.join(context.taskDir, 'delivery.json'), 'delivery.json');
+  const execution = raw?.target != null ? await readExecution(context, task) : null;
+  const delivery = validateDelivery(raw, task, execution);
+  if (delivery.result === 'delivered') {
+    await validateDeliveredBindings(context, task, execution, delivery);
+  } else {
+    for (const reference of delivery.upstreamRequest.evidenceRefs) {
+      await resolveEvidenceRef(context, reference, { allowNotApplicable: false });
+    }
+  }
+  return { delivery, execution };
+}
+
+async function closeCheck(context, task, execution, delivery) {
   if (delivery.result !== 'delivered') throw gateError(`close-check requires delivered, got ${delivery.result}`);
   const claims = validateClaims(
     await readJson(path.join(context.taskDir, 'claims.json'), 'claims.json'),
@@ -559,13 +755,13 @@ async function closeCheck(context, task, delivery) {
     { requireClosed: true },
   );
   const references = new Set([
-    ...Object.values(delivery.evidenceRefs),
+    ...Object.values(delivery.evidenceRefs).filter((reference) => reference !== null),
     ...delivery.residualRiskRefs,
     ...claims.claims.flatMap((claim) => claim.evidenceRefs),
   ]);
   for (const reference of references) await resolveEvidenceRef(context, reference);
 
-  const currentTarget = await snapshotTarget(context, task);
+  const currentTarget = await snapshotTarget(context, task, execution);
   if (canonicalJson(currentTarget) !== canonicalJson(delivery.target)) {
     throw gateError(
       `delivery target is stale; current ${currentTarget.kind} target changed or snapshotHash no longer matches`,
@@ -575,7 +771,7 @@ async function closeCheck(context, task, delivery) {
 
 function printUsage() {
   process.stderr.write(
-    '用法：deliver-task.mjs <init|validate-task|task-hash|snapshot-target|validate-result|close-check> <taskDir>\n',
+    '用法：deliver-task.mjs <init|validate-task|task-hash|validate-execution|snapshot-target|validate-result|close-check> <taskDir>\n',
   );
 }
 
@@ -598,8 +794,14 @@ async function main() {
     process.stdout.write(`${context.taskDir}: initialized\n`);
     return;
   }
+  if (command === 'validate-execution') {
+    const execution = await readExecution(context, task);
+    process.stdout.write(`execution.json: passed ${executionHash(execution)}\n`);
+    return;
+  }
   if (command === 'snapshot-target') {
-    process.stdout.write(`${JSON.stringify(await snapshotTarget(context, task), null, 2)}\n`);
+    const execution = await readExecution(context, task);
+    process.stdout.write(`${JSON.stringify(await snapshotTarget(context, task, execution), null, 2)}\n`);
     return;
   }
   if (command === 'validate-result') {
@@ -608,8 +810,8 @@ async function main() {
     return;
   }
   if (command === 'close-check') {
-    const delivery = await readDelivery(context, task);
-    await closeCheck(context, task, delivery);
+    const { delivery, execution } = await readDelivery(context, task);
+    await closeCheck(context, task, execution, delivery);
     process.stdout.write('deliver-task close-check: passed\n');
     return;
   }

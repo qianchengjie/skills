@@ -5,26 +5,28 @@
 实现前读取 task、项目入口、直接消费者、相关测试、适用 AGENTS/rules 和当前 Git 状态。在 `audits.md` 明确：
 
 - 需要理解与已读上下文；
-- 允许修改、禁止修改、非目标、停止条件；
+- deliver-task 拟定的允许修改、执行禁止范围、task 用户禁止范围、非目标、停止条件；
 - active rule catalog、execution-time selected / not-applicable 分类及理由；
-- `commitPolicy`、baseCommit、caller 和 upstream acceptance；
+- `commitPolicy`、`acceptancePolicy`、baseCommit 和 caller；
 - 当前内容是一个交付单元，或应回流的证据。
 
 路径和文件名只产生候选规则分类。读完必读代码并针对触发条件 focused search 后，才能闭合 execution-time 分类；无法用代码证据排除的候选归入 selected。selected rules 进入 task brief 和实现约束，但不替代最终 rules-review 的独立分类。
 
+preflight 依据写入 `audits.md` 后，由 controller 创建当前 `execution.json`；caller 和 implementer 都不填写。用户没有提供文件清单时，controller 仍应根据真实代码、直接消费者、相邻测试和项目规则建立最小完整 allowlist。`execution.evidenceRefs` 引用本次判断依据，并运行 `validate-execution` 后才生成 brief。
+
 ## 实现派发
 
-controller 在 `artifacts/task-brief.md` 投影当前 task identity、目标、验收、约束、preflight、claims、selected rules、允许/禁止路径和本轮修复依据。随后创建默认 blocked 的 task report，再派发 implementer。
+controller 在 `artifacts/task-brief.md` 投影当前 task identity、execution identity、目标、验收、约束、preflight、claims、selected rules、允许/禁止路径和本轮修复依据。随后创建默认 blocked 的 task report，再派发 implementer。implementer 同时读取当前 `execution.json`，但不得修改它。
 
 实现返回后逐项核对：
 
 - changed files 与真实 staged/unstaged/untracked 路径一致；
-- 全部业务变化属于 allowedPaths 且不命中 forbiddenPaths；
+- 全部业务变化属于 `execution.allowedPaths`，且不命中 `task.forbiddenPaths ∪ execution.forbiddenPaths`；
 - 不修改 task durable state、caller state 或已有无关改动；
 - task report 的验证结果可复验；
 - claims 只按当前证据推进，不提前写下游通过。
 
-接收门禁失败时先记录依据。实际 diff 已越界时不得回填 allowedPaths 使本轮通过；若扩边仍在原目标/验收/公共契约/授权内，可由 controller 记录并以新 task revision 重新进入；否则 `needs-upstream`。
+接收门禁失败时先记录依据。实际 diff 已越界时不得事后回填 allowlist 使该轮通过。若所需扩边仍在 immutable task contract 内，controller 先记录原因、更新 `execution.json`、重新校验并重新派发；不创建新 task revision。命中 task 用户禁止范围或要求改变 immutable task contract 时才 `needs-upstream`。
 
 ## 验证与 target
 
@@ -37,7 +39,7 @@ controller 在 `artifacts/task-brief.md` 投影当前 task identity、目标、�
 - `forbidden`：保持 `HEAD == baseCommit`，不创建 commit。
 - 无业务变化不创建空 commit，使用 `no-change`。
 
-task directory 的 durable/generated artifacts 不能混入业务 commit range。`snapshot-target` 只检查确定性的 Git identity、路径边界和内容 hash，不判断业务正确性。
+task directory 的 durable/generated artifacts 不能混入业务 commit range。`snapshot-target` 从当前 `execution.json` 读取 allowlist，合并 task/execution 两层 forbidden paths，并把 canonical execution hash 写入 target identity。它只检查确定性的 Git identity、路径边界和内容 hash，不判断业务正确性。
 
 ## General Review
 
@@ -48,16 +50,18 @@ General reviewer 独立于 implementer，只消费当前 review package 和其�
 3. repair 后开放集合清零也不能收口；必须对最终 target 再做累计 `full`。最终三个 verdict 只来自这轮。
 4. 最终 full 新发现 finding 时重新进入 repair；不得用另一个 fresh reviewer 洗掉结构合法负结论。
 
-每轮在 `audits.md` 记录 review type、直接前序 A、task identity、target identity、package hash、verdict、finding dispositions 和完整 open set。机器只校验这些字段被显式记录和引用，不判断 reviewer 是否正确。
+每轮在 `audits.md` 记录 review type、直接前序 A、task identity、execution identity、target identity、package hash、verdict、finding dispositions 和完整 open set。最终累计 full A 还写入 [TASK-CONTRACT.md](TASK-CONTRACT.md) 的 `deliver-task-binding` 块。机器只校验当前交付引用的绑定被显式记录且匹配，不判断 reviewer 是否正确。execution hash 变化后，旧 General binding 失效，必须为新 target 重做 General。
 
 ## Upstream acceptance
 
-General clean 后读取 `task.upstreamAcceptance.status`：
+General clean 后读取 `task.acceptancePolicy`：
 
-- `not-required / passed / skipped`：按合同继续；
-- `pending`：写 `needs-upstream / user-acceptance` 并停止。
+- `not-required`：不创建验收状态文件，`delivery.evidenceRefs.acceptance = null`，按合同继续；
+- `required`：读取 `audits.md` 中绑定当前 task/target 的验收 A 条目；`passed / skipped` 继续，缺失时写 `needs-upstream / user-acceptance` 并停止。
 
-直接用户拒收但不改变目标、验收、公共契约或授权时，记录反馈、递增 task revision、返修并重新执行累计 General full。反馈改变上述边界时返回对应 `needs-upstream`，不能直接修。
+验收 A 条目按 [TASK-CONTRACT.md](TASK-CONTRACT.md) 记录 task identity、当前 target identity、`passed / skipped / rejected` 和非空 evidence refs。验收状态不进入 task hash；同一 target 验收通过后不重建 task identity、不重新 snapshot，也不使已有 General evidence stale。
+
+直接用户拒收但不改变 immutable task contract 时，写 `rejected` A 条目，在同一 task identity 内返修并重新执行累计 General full；新 target 自动使旧验收证据失效。反馈改变 immutable task contract 时返回对应 `needs-upstream`，不能直接修。
 
 ## 最终 rules-review
 
@@ -79,7 +83,7 @@ General clean 后读取 `task.upstreamAcceptance.status`：
 每轮返修先把验证、General、upstream feedback 或 rules-review 的失败依据写入 audits，再刷新 brief/report。最多 4 次实际业务修改。以下情况停止：
 
 - 多个独立工作单元：`needs-reslice`；
-- 目标、验收、公共契约、授权或用户判断变化：`needs-upstream`；
+- immutable task contract、授权或用户判断变化：`needs-upstream`；
 - 现有合同内持续环境/工具失败或修复次数用尽：`blocked`。
 
 停止不是丢弃证据。写薄 delivery result，target 可为当前已固定 target 或 `null`，evidence refs 指向现有 claims/audits/run。
@@ -89,9 +93,9 @@ General clean 后读取 `task.upstreamAcceptance.status`：
 `delivered` 必须同时满足：
 
 - delivery 与当前 task revision/hash 绑定；
-- target 符合 commitPolicy，且当前 Git 状态仍与 target 一致；
+- target 与当前 execution hash 绑定、符合 commitPolicy，且当前 Git 状态仍与 target 一致；
 - 至少一个 claim，全部 `verified / waived` 且有 evidence refs；
-- 验证、最终 General、适用 acceptance 和最终 rules-review 都有明确终态与引用；
+- 验证、绑定当前 task/execution/target 的最终 General、适用 acceptance 和最终 rules-review 都有明确终态与引用；
 - residual risks 只用 refs，不在 delivery 内复制正文；
 - 没有 caller lifecycle 写入。
 
