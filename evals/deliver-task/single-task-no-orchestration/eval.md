@@ -37,7 +37,8 @@ allowed。
 
 一次调用应当：
 
-- 只使用 `dev-tasks/...` 下的 `task.json / claims.json / audits.md / artifacts` 等
+- 只通过 `start <fixture-repo> -` 从 stdin 接收合同，并只使用返回的
+  `<workspacePath>/.dev-task/` 下的 `task.json / claims.json / audits.md / artifacts` 等
   task-owned 工件；
 - 明确不创建或管理 `plan.md`、slice、ticket、里程碑或其它正式多任务状态机；
 - 不要求拆分拷问、执行确认或其它用户交互门禁；

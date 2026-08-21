@@ -2,14 +2,22 @@
 
 ## Workspace 建立
 
-读取并校验 `task.json`、固定 `task.baseCommit` 后，在读取任何业务代码、项目规则或执行
-preflight 之前建立 workspace。依次使用 caller 已提供的 isolated workspace、满足 base/clean/
-task-owned 条件的当前 harness linked worktree、harness 原生 worktree 机制；三者都不适用时，
-才运行 `prepare-workspace` 的仓库内 `.worktrees/` 手工 fallback。native 或已有 workspace 用
-`--workspace` 显式绑定。只有命令返回的 `workspacePath` 是本任务的业务执行根目录。
+caller 或 direct controller 先形成结构化 immutable task contract，不在 caller workspace
+落盘状态。在读取任何业务代码、项目规则或执行 preflight 之前，依次选择 caller 已提供的
+isolated workspace、满足 base/clean/task-owned 条件的当前 harness linked worktree、harness
+原生 workspace；命中后把路径作为 `--workspace` 显式绑定。三者都不适用时才使用默认模式。
 
-不得为了省事绕过 harness 原生机制。手工 fallback 要求 `.worktrees/` 已被 Git ignore；创建
-被 sandbox 拒绝时不得提权硬干、改用系统临时目录或退回未隔离主 checkout，按环境阻塞收口。
+无论 workspace 来源如何，都把合同通过 stdin 交给唯一
+`start <repo> - [--workspace <workspacePath>]` bootstrap，不调用其它入口。`start` 先校验 exact
+schema、完整 `baseCommit`、repo 和 provided workspace，再原子初始化
+`<task-worktree>/.dev-task/`。只有命令返回的 `workspacePath` 是本任务的业务执行根目录，返回的
+`taskDir` 是后续证明状态入口。不得绕过可用的 harness 原生机制；没有可绑定的宿主 workspace
+时，默认模式才从 base 在系统临时目录创建 worktree。
+
+exact identity 且 `.dev-task/` 完整时幂等返回，不重写证据。同 revision 合同漂移、已有
+branch/worktree 但证明缺失或不完整、provided workspace 已有旧 identity 时 fail closed；不能从
+commits、branch、聊天摘要或外部 registry 恢复证明。higher revision 的默认模式从同一 base
+建立新 branch/worktree。
 
 task workspace 建立后使用 snapshot-at-start 语义：caller workspace 后续出现 dirty、修改
 同一逻辑文件、产生新 commit 或切换分支，都不改变当前 base、execution、target 或已有
@@ -40,7 +48,7 @@ controller 在 `artifacts/task-brief.md` 投影当前 task identity、execution 
 
 - changed files 与真实 staged/unstaged/untracked 路径一致；
 - 全部业务变化属于 `execution.allowedPaths`，且不命中 `task.forbiddenPaths ∪ execution.forbiddenPaths`；
-- 不修改 task durable state、caller state 或 task workspace 之外的文件；
+- 不修改 `.dev-task/` durable state、caller state 或 task workspace 之外的文件；
 - task report 的验证结果可复验；
 - claims 只按当前证据推进，不提前写下游通过。
 
@@ -57,9 +65,10 @@ controller 在 `artifacts/task-brief.md` 投影当前 task identity、execution 
 - `forbidden`：保持 `HEAD == baseCommit`，不创建 commit。
 - 无业务变化不创建空 commit，使用 `no-change`。
 
-task directory 的 durable/generated artifacts 不能混入业务 commit range。`snapshot-target`
-只读取 workspace locator 绑定的 task workspace，从当前 `execution.json` 读取 allowlist，合并
-task/execution 两层 forbidden paths，并把 canonical execution hash 写入 target identity。
+.dev-task/ 的 durable/generated artifacts 不能混入业务 worktree target 或 commit range；正常由
+`.dev-task/.gitignore` 的 `*` 排除，被强制暂存或提交时仍必须拒绝。`snapshot-target` 只读取当前
+task workspace，从当前 `execution.json` 读取 allowlist，合并 task/execution 两层 forbidden
+paths，并把 canonical execution hash 写入 target identity。
 commit-range target 由该 workspace 中的固定 Git objects `baseCommit..headCommit` 决定；caller
 workspace 的 HEAD 和 dirty 不参与 snapshot 或 freshness。task workspace 自身在 commit 后仍有
 应进入业务提交的 dirty 时继续失败。脚本只检查确定性的 workspace/task 绑定、Git identity、
@@ -123,8 +132,10 @@ General clean 后读取 `task.acceptancePolicy`：
 - residual risks 只用 refs，不在 delivery 内复制正文；
 - 没有 caller lifecycle 写入。
 
-`close-check` 只检查机器可判定的闭包，不判断 claim 真实性、测试充分性、finding 正确性、规则适用性或用户确认真实性。
+`validate-result` 与 `close-check` 都必须在 live `.dev-task/` 上执行；证明目录丢失时立即 fail
+closed，不能根据 commits、branch 或摘要推断 `delivered`。`close-check` 只检查机器可判定的
+闭包，不判断 claim 真实性、测试充分性、finding 正确性、规则适用性或用户确认真实性。
 
-收口只返回稳定 target、task workspace/branch identity 和证据引用。worktree 清理以及把
+收口只返回稳定 target、`taskDir`、task workspace/branch identity 和证据引用。worktree 清理以及把
 `baseCommit..headCommit` 集成到 caller branch，属于用户或上层 caller 的后续动作；deliver-task
 不自动 merge、cherry-pick、rebase、push 或 publish。

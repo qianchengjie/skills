@@ -7,7 +7,7 @@ import {
   mkdir,
   readFile,
   realpath,
-  rmdir,
+  rm,
   unlink,
   writeFile,
 } from 'node:fs/promises';
@@ -22,46 +22,28 @@ function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 }
 
-function run(cwd, args) {
+function run(cwd, args, { input } = {}) {
   return spawnSync(process.execPath, [script, ...args], {
     cwd,
     encoding: 'utf8',
+    input,
   });
-}
-
-function prepareWorkspace(fixture, extra = []) {
-  const result = run(fixture.root, [
-    'prepare-workspace',
-    path.relative(fixture.root, fixture.taskDir),
-    ...extra,
-  ]);
-  assert.equal(result.status, 0, result.stderr || result.stdout);
-  return JSON.parse(result.stdout);
 }
 
 async function createFixture({
   commitPolicy = 'allowed',
   caller = { kind: 'direct' },
   acceptancePolicy = 'not-required',
-  ignoreWorktrees = true,
 } = {}) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'deliver-task-test-'));
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'deliver-task-test-')));
   await mkdir(path.join(root, 'src'), { recursive: true });
   await mkdir(path.join(root, 'test'), { recursive: true });
   await writeFile(path.join(root, 'src/slug.mjs'), "export const slug = (value) => value.trim().toLowerCase().replaceAll(' ', '-');\n");
   await writeFile(path.join(root, 'test/slug.test.mjs'), '// fixture\n');
-  if (ignoreWorktrees) await writeFile(path.join(root, '.gitignore'), '.worktrees/\n');
   git(root, ['init', '-q']);
-  git(root, [
-    'add',
-    'src/slug.mjs',
-    'test/slug.test.mjs',
-    ...(ignoreWorktrees ? ['.gitignore'] : []),
-  ]);
+  git(root, ['add', 'src/slug.mjs', 'test/slug.test.mjs']);
   git(root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '初始基线']);
   const baseCommit = git(root, ['rev-parse', 'HEAD']);
-  const taskDir = path.join(root, 'dev-tasks', 'slug-whitespace');
-  await mkdir(taskDir, { recursive: true });
   const task = {
     schemaVersion: 'deliver-task.task.v1',
     taskId: 'slug-whitespace',
@@ -76,8 +58,32 @@ async function createFixture({
     commitPolicy,
     acceptancePolicy,
   };
-  await writeFile(path.join(taskDir, 'task.json'), `${JSON.stringify(task, null, 2)}\n`);
-  return { root, taskDir, task, baseCommit };
+  return { root, taskDir: null, workspacePath: null, task, baseCommit };
+}
+
+function runStart(
+  fixture,
+  {
+    task = fixture.task,
+    repo = fixture.root,
+    workspace,
+    input = `${JSON.stringify(task)}\n`,
+  } = {},
+) {
+  return run(
+    fixture.root,
+    ['start', repo, '-', ...(workspace ? ['--workspace', workspace] : [])],
+    { input },
+  );
+}
+
+function startTask(fixture, options = {}) {
+  const result = runStart(fixture, options);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const output = JSON.parse(result.stdout);
+  fixture.taskDir = output.taskDir;
+  fixture.workspacePath = output.workspacePath;
+  return output;
 }
 
 function taskBinding(fixture, hash) {
@@ -89,9 +95,7 @@ function taskBinding(fixture, hash) {
 }
 
 async function initTask(fixture) {
-  prepareWorkspace(fixture, ['--workspace', fixture.root]);
-  const result = run(fixture.root, ['init', path.relative(fixture.root, fixture.taskDir)]);
-  assert.equal(result.status, 0, result.stderr);
+  const result = startTask(fixture, { workspace: fixture.root });
   await appendFile(
     path.join(fixture.taskDir, 'audits.md'),
     '\n### A1：上下文预检\n\n已读取真实代码和项目规则，并形成执行边界。\n',
@@ -100,7 +104,7 @@ async function initTask(fixture) {
 }
 
 async function taskHash(fixture) {
-  const result = run(fixture.root, ['task-hash', path.relative(fixture.root, fixture.taskDir)]);
+  const result = run(fixture.workspacePath ?? fixture.root, ['task-hash', fixture.taskDir]);
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
 }
@@ -126,7 +130,7 @@ async function writeExecution(
 }
 
 async function snapshotTarget(fixture) {
-  const result = run(fixture.root, ['snapshot-target', path.relative(fixture.root, fixture.taskDir)]);
+  const result = run(fixture.workspacePath, ['snapshot-target', fixture.taskDir]);
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout);
 }
@@ -237,285 +241,353 @@ async function prepareDelivered(fixture, { acceptanceStatus } = {}) {
   return { target, generalReview, acceptance, hash };
 }
 
-test('init 只初始化 task-owned 状态且不替 caller 创建 execution', async () => {
+test('start 是唯一 bootstrap，并在 task workspace 内原子初始化固定状态', async () => {
   const fixture = await createFixture({
-    caller: { kind: 'delegated', name: 'to-tickets', ref: '.scratch/example/issues/01-slug.md' },
+    caller: { kind: 'delegated', name: 'to-tickets', ref: 'tickets/slug-whitespace' },
   });
-  const callerTicket = path.join(fixture.root, '.scratch/example/issues/01-slug.md');
-  await mkdir(path.dirname(callerTicket), { recursive: true });
-  await writeFile(callerTicket, 'Status: ready-for-agent\n');
 
-  const result = run(fixture.root, ['init', path.relative(fixture.root, fixture.taskDir)]);
-  assert.equal(result.status, 0, result.stderr);
+  const output = startTask(fixture);
 
-  assert.equal(await readFile(callerTicket, 'utf8'), 'Status: ready-for-agent\n');
-  assert.match(await readFile(path.join(fixture.taskDir, '.gitignore'), 'utf8'), /^\/artifacts\/$/m);
-  const claims = JSON.parse(await readFile(path.join(fixture.taskDir, 'claims.json'), 'utf8'));
-  assert.equal(claims.schemaVersion, 'deliver-task.claims.v1');
-  assert.equal(claims.task.taskId, 'slug-whitespace');
-  assert.deepEqual(claims.claims, []);
-  assert.match(await readFile(path.join(fixture.taskDir, 'audits.md'), 'utf8'), /# 单任务审计/);
-  await assert.rejects(access(path.join(fixture.taskDir, 'execution.json')));
-});
-
-test('init 在没有 workspace binding 时默认建立隔离 worktree', async () => {
-  const fixture = await createFixture();
-
-  const result = run(fixture.root, ['init', path.relative(fixture.root, fixture.taskDir)]);
-
-  assert.equal(result.status, 0, result.stderr);
-  const workspace = JSON.parse(
-    await readFile(path.join(fixture.taskDir, 'artifacts/workspace.json'), 'utf8'),
+  assert.deepEqual(Object.keys(output).sort(), [
+    'baseCommit',
+    'branch',
+    'kind',
+    'task',
+    'taskDir',
+    'workspacePath',
+  ]);
+  assert.equal(output.kind, 'git-worktree');
+  assert.equal(output.baseCommit, fixture.baseCommit);
+  assert.equal(output.task.taskId, fixture.task.taskId);
+  assert.equal(output.task.revision, 1);
+  assert.match(output.task.taskHash, /^sha256:[0-9a-f]{64}$/);
+  assert.equal(output.taskDir, path.join(output.workspacePath, '.dev-task'));
+  assert.match(
+    output.branch,
+    /^refs\/heads\/deliver-task\/slug-whitespace-r1-[0-9a-f]{12}$/,
   );
-  assert.equal(workspace.kind, 'git-worktree');
-  assert.notEqual(workspace.workspacePath, fixture.root);
-  assert.equal(git(workspace.workspacePath, ['rev-parse', 'HEAD']), fixture.baseCommit);
+  assert.deepEqual(
+    JSON.parse(await readFile(path.join(output.taskDir, 'task.json'), 'utf8')),
+    fixture.task,
+  );
+  const claims = JSON.parse(await readFile(path.join(output.taskDir, 'claims.json'), 'utf8'));
+  assert.equal(claims.schemaVersion, 'deliver-task.claims.v1');
+  assert.deepEqual(claims.task, output.task);
+  assert.deepEqual(claims.claims, []);
+  assert.match(await readFile(path.join(output.taskDir, 'audits.md'), 'utf8'), /# 单任务审计/);
+  assert.equal(await readFile(path.join(output.taskDir, '.gitignore'), 'utf8'), '*\n');
+  const workspace = JSON.parse(
+    await readFile(path.join(output.taskDir, 'artifacts/workspace.json'), 'utf8'),
+  );
+  assert.deepEqual(workspace, {
+    schemaVersion: 'deliver-task.workspace.v1',
+    task: output.task,
+    kind: output.kind,
+    workspacePath: output.workspacePath,
+    branch: output.branch,
+    baseCommit: output.baseCommit,
+  });
+  await assert.rejects(access(path.join(output.taskDir, 'execution.json')));
+  assert.equal(git(output.workspacePath, ['status', '--porcelain']), '');
 });
 
-test('prepare-workspace 从 task.baseCommit 创建隔离 worktree，不吸收主分支新提交', async () => {
+test('默认 start 不触碰 dirty caller，只从 baseCommit 建立 task workspace', async () => {
   const fixture = await createFixture({ commitPolicy: 'required' });
+  await writeFile(path.join(fixture.root, 'background-notes.md'), '用户任务外修改。\n');
   await writeFile(path.join(fixture.root, 'src/slug.mjs'), "export const slug = () => 'main-only';\n");
   git(fixture.root, ['add', 'src/slug.mjs']);
   git(fixture.root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '用户主分支提交']);
 
-  const workspace = prepareWorkspace(fixture);
+  const output = startTask(fixture);
 
-  assert.equal(workspace.schemaVersion, 'deliver-task.workspace.v1');
-  assert.equal(workspace.kind, 'git-worktree');
-  assert.equal(workspace.baseCommit, fixture.baseCommit);
-  assert.notEqual(workspace.workspacePath, fixture.root);
-  assert.equal(git(workspace.workspacePath, ['rev-parse', 'HEAD']), fixture.baseCommit);
-  assert.match(workspace.branch, /^refs\/heads\/deliver-task\//);
+  assert.notEqual(output.workspacePath, await realpath(fixture.root));
+  assert.equal(git(output.workspacePath, ['rev-parse', 'HEAD']), fixture.baseCommit);
   assert.doesNotMatch(
-    await readFile(path.join(workspace.workspacePath, 'src/slug.mjs'), 'utf8'),
+    await readFile(path.join(output.workspacePath, 'src/slug.mjs'), 'utf8'),
     /main-only/,
   );
-
-  await unlink(path.join(fixture.taskDir, 'artifacts/workspace.json'));
-  assert.deepEqual(prepareWorkspace(fixture), workspace);
+  assert.equal(await readFile(path.join(fixture.root, 'background-notes.md'), 'utf8'), '用户任务外修改。\n');
+  await assert.rejects(access(path.join(fixture.root, '.dev-task')));
+  await assert.rejects(access(path.join(fixture.root, 'dev-tasks')));
+  assert.equal(git(fixture.root, ['status', '--porcelain']), '?? background-notes.md');
+  assert.equal(output.taskDir, path.join(output.workspacePath, '.dev-task'));
 });
 
-test('prepare-workspace 复用当前 linked workspace，不再创建第二个 worktree', async () => {
+test('start 在 mutation 前拒绝非法 repo、stdin、exact schema 和非完整 baseCommit', async () => {
+  const cases = [
+    { input: '{', pattern: /task contract.*valid JSON/i },
+    {
+      task: (task) => ({ ...task, allowedPaths: ['src/**'] }),
+      pattern: /unsupported fields.*allowedPaths/,
+    },
+    {
+      task: (task) => ({ ...task, baseCommit: 'HEAD' }),
+      pattern: /task\.baseCommit.*full Git commit OID/,
+    },
+  ];
+  for (const testCase of cases) {
+    const fixture = await createFixture();
+    const beforeWorktrees = git(fixture.root, ['worktree', 'list', '--porcelain']);
+    const beforeBranches = git(fixture.root, ['for-each-ref', '--format=%(refname)', 'refs/heads']);
+    const task = testCase.task ? testCase.task(fixture.task) : fixture.task;
+    const result = runStart(fixture, { task, input: testCase.input });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, testCase.pattern);
+    assert.equal(git(fixture.root, ['worktree', 'list', '--porcelain']), beforeWorktrees);
+    assert.equal(git(fixture.root, ['for-each-ref', '--format=%(refname)', 'refs/heads']), beforeBranches);
+    await assert.rejects(access(path.join(fixture.root, '.dev-task')));
+  }
+
   const fixture = await createFixture();
-  const harnessRoot = await mkdtemp(path.join(os.tmpdir(), 'deliver-task-harness-'));
-  await rmdir(harnessRoot);
+  const missingRepo = path.join(os.tmpdir(), `missing-deliver-task-repo-${Date.now()}`);
+  const result = runStart(fixture, { repo: missingRepo });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /repository directory missing/i);
+  await assert.rejects(access(path.join(fixture.root, '.dev-task')));
+});
+
+test('provided workspace 首次绑定要求同仓、干净且位于 baseCommit', async () => {
+  {
+    const fixture = await createFixture();
+    const output = startTask(fixture, { workspace: path.join(fixture.root, 'src') });
+    assert.equal(output.kind, 'provided');
+    assert.equal(output.workspacePath, await realpath(fixture.root));
+    assert.equal(output.taskDir, path.join(await realpath(fixture.root), '.dev-task'));
+    assert.equal(output.branch, 'refs/heads/master');
+  }
+
+  {
+    const fixture = await createFixture();
+    await writeFile(path.join(fixture.root, 'background-notes.md'), '保留。\n');
+    const result = runStart(fixture, { workspace: fixture.root });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /provided workspace.*clean.*background-notes\.md/i);
+    assert.equal(await readFile(path.join(fixture.root, 'background-notes.md'), 'utf8'), '保留。\n');
+    await assert.rejects(access(path.join(fixture.root, '.dev-task')));
+  }
+
+  {
+    const fixture = await createFixture();
+    const unrelated = await createFixture();
+    const result = runStart(fixture, { workspace: unrelated.root });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /same Git repository/i);
+    await assert.rejects(access(path.join(unrelated.root, '.dev-task')));
+  }
+});
+
+test('start 显式绑定当前 harness linked worktree，不创建第二个 workspace', async () => {
+  const fixture = await createFixture();
+  const harnessRoot = await realpath(await mkdtemp(path.join(os.tmpdir(), 'deliver-task-harness-')));
+  await rm(harnessRoot, { recursive: true });
   git(fixture.root, ['worktree', 'add', '-q', '--detach', harnessRoot, fixture.baseCommit]);
-  const taskDir = path.join(harnessRoot, 'dev-tasks', fixture.task.taskId);
-  await mkdir(taskDir, { recursive: true });
-  await writeFile(path.join(taskDir, 'task.json'), `${JSON.stringify(fixture.task, null, 2)}\n`);
-  const harnessFixture = { ...fixture, root: harnessRoot, taskDir };
-  const before = git(harnessRoot, ['worktree', 'list', '--porcelain']);
-
-  const workspace = prepareWorkspace(harnessFixture);
-
-  assert.equal(workspace.kind, 'provided');
-  assert.equal(workspace.workspacePath, await realpath(harnessRoot));
-  assert.equal(workspace.branch, null);
-  assert.equal(git(harnessRoot, ['worktree', 'list', '--porcelain']), before);
-});
-
-test('prepare-workspace 手工 fallback 在仓库内已忽略的 .worktrees 创建', async () => {
-  const fixture = await createFixture();
-
-  const workspace = prepareWorkspace(fixture);
-
-  assert.equal(workspace.kind, 'git-worktree');
-  assert.equal(path.dirname(workspace.workspacePath), path.join(await realpath(fixture.root), '.worktrees'));
-  assert.match(path.basename(workspace.workspacePath), /^deliver-task-slug-whitespace-r1-[0-9a-f]{12}$/);
-});
-
-test('prepare-workspace 在 .worktrees 未被 ignore 时拒绝手工 fallback', async () => {
-  const fixture = await createFixture({ ignoreWorktrees: false });
   const before = git(fixture.root, ['worktree', 'list', '--porcelain']);
 
-  const result = run(fixture.root, [
-    'prepare-workspace',
-    path.relative(fixture.root, fixture.taskDir),
-  ]);
+  const output = startTask(fixture, { repo: harnessRoot, workspace: harnessRoot });
 
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /manual worktree fallback.*\.worktrees.*ignored/i);
+  assert.equal(output.kind, 'provided');
+  assert.equal(output.workspacePath, await realpath(harnessRoot));
+  assert.equal(output.taskDir, path.join(output.workspacePath, '.dev-task'));
+  assert.equal(output.branch, null);
   assert.equal(git(fixture.root, ['worktree', 'list', '--porcelain']), before);
+  await assert.rejects(access(path.join(fixture.root, '.dev-task')));
 });
 
-test('prepare-workspace 只接受从干净 baseCommit 开始的显式 isolated workspace', async () => {
-  {
-    const fixture = await createFixture();
-    const workspace = prepareWorkspace(fixture, ['--workspace', path.join(fixture.root, 'src')]);
-
-    assert.equal(workspace.kind, 'provided');
-    assert.equal(workspace.workspacePath, await realpath(fixture.root));
-    assert.deepEqual(
-      prepareWorkspace(fixture, ['--workspace', fixture.root]),
-      workspace,
-    );
-  }
-
-  {
-    const fixture = await createFixture();
-    await writeFile(path.join(fixture.root, 'src/slug.mjs'), "export const slug = () => 'dirty';\n");
-
-    const result = run(fixture.root, [
-      'prepare-workspace',
-      path.relative(fixture.root, fixture.taskDir),
-      '--workspace',
-      fixture.root,
-    ]);
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /provided workspace.*clean.*src\/slug\.mjs/i);
-  }
-});
-
-test('隔离 workspace 中与 taskDir 同仓库相对路径的工件不能进入业务 commit', async () => {
-  const fixture = await createFixture({ commitPolicy: 'required' });
-  const workspace = prepareWorkspace(fixture);
-  let result = run(fixture.root, ['init', path.relative(fixture.root, fixture.taskDir)]);
-  assert.equal(result.status, 0, result.stderr);
-  await appendFile(
-    path.join(fixture.taskDir, 'audits.md'),
-    '\n### A1：上下文预检\n\n已建立隔离 workspace 与执行边界。\n',
-  );
-  await writeExecution(fixture, { allowedPaths: ['**'] });
-  const mirroredTaskDir = path.join(workspace.workspacePath, 'dev-tasks/slug-whitespace');
-  await mkdir(mirroredTaskDir, { recursive: true });
-  await writeFile(path.join(mirroredTaskDir, 'rogue.md'), '不应进入业务提交。\n');
-  git(workspace.workspacePath, ['add', 'dev-tasks/slug-whitespace/rogue.md']);
-  git(workspace.workspacePath, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '错误提交 task 工件']);
-
-  result = run(fixture.root, ['snapshot-target', path.relative(fixture.root, fixture.taskDir)]);
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /task-owned artifact path dev-tasks\/slug-whitespace\/rogue\.md/);
-});
-
-test('更高 task revision 建立新 workspace，同 revision 的 hash 漂移仍 fail closed', async () => {
-  {
-    const fixture = await createFixture();
-    const previous = prepareWorkspace(fixture);
-    fixture.task.revision = 2;
-    fixture.task.objective = '显式改变后的目标。';
-    await writeFile(
-      path.join(fixture.taskDir, 'task.json'),
-      `${JSON.stringify(fixture.task, null, 2)}\n`,
-    );
-
-    const current = prepareWorkspace(fixture);
-    assert.equal(current.task.revision, 2);
-    assert.notEqual(current.workspacePath, previous.workspacePath);
-    assert.notEqual(current.branch, previous.branch);
-  }
-
-  {
-    const fixture = await createFixture();
-    prepareWorkspace(fixture);
-    fixture.task.objective = '未递增 revision 的错误合同变化。';
-    await writeFile(
-      path.join(fixture.taskDir, 'task.json'),
-      `${JSON.stringify(fixture.task, null, 2)}\n`,
-    );
-
-    const result = run(fixture.root, [
-      'prepare-workspace',
-      path.relative(fixture.root, fixture.taskDir),
-    ]);
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /workspace\.task.*stale task binding/);
-  }
-});
-
-test('commit-range freshness 只读取隔离 task workspace，不受主工作区 dirty 或新提交影响', async () => {
-  const fixture = await createFixture({ commitPolicy: 'required' });
-  await writeFile(path.join(fixture.root, 'background-notes.md'), '用户任务外修改。\n');
-  const workspace = prepareWorkspace(fixture);
-  let result = run(fixture.root, ['init', path.relative(fixture.root, fixture.taskDir)]);
-  assert.equal(result.status, 0, result.stderr);
-  await appendFile(
-    path.join(fixture.taskDir, 'audits.md'),
-    '\n### A1：上下文预检\n\n已在隔离 workspace 读取代码和项目规则，并形成执行边界。\n',
-  );
-  await writeExecution(fixture);
-  await writeFile(path.join(workspace.workspacePath, 'src/slug.mjs'), "export const slug = (value) => value.trim().toLowerCase().replace(/\\s+/g, '-');\n");
-  git(workspace.workspacePath, ['add', 'src/slug.mjs']);
-  git(workspace.workspacePath, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '修复空白归一']);
-
-  const target = await snapshotTarget(fixture);
-  const generalReview = await appendGeneralReview(fixture, target);
-  const hash = await taskHash(fixture);
-  await writeVerifiedClaims(fixture, hash);
-  await writeDelivery(fixture, { target, generalReview });
-
-  await writeFile(path.join(fixture.root, 'src/slug.mjs'), "export const slug = () => 'main-new-head';\n");
-  git(fixture.root, ['add', 'src/slug.mjs']);
-  git(fixture.root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '用户继续提交']);
-  await writeFile(path.join(fixture.root, 'user-live-edit.md'), '用户继续编辑。\n');
-  result = run(fixture.root, ['close-check', path.relative(fixture.root, fixture.taskDir)]);
-  assert.equal(result.status, 0, result.stderr);
-
-  await writeFile(path.join(workspace.workspacePath, 'test/slug.test.mjs'), '// task workspace residual\n');
-  result = run(fixture.root, ['close-check', path.relative(fixture.root, fixture.taskDir)]);
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /committed target has additional worktree changes.*test\/slug\.test\.mjs/);
-});
-
-test('validate-task 接受新 exact schema 并拒绝旧 task-owned execution/acceptance 字段', async () => {
-  for (const commitPolicy of ['required', 'allowed', 'forbidden']) {
-    for (const acceptancePolicy of ['required', 'not-required']) {
-      const fixture = await createFixture({ commitPolicy, acceptancePolicy });
-      const result = run(fixture.root, ['validate-task', path.relative(fixture.root, fixture.taskDir)]);
-      assert.equal(result.status, 0, `${commitPolicy}/${acceptancePolicy}: ${result.stderr}`);
-    }
-  }
-
+test('exact identity 的完整 .dev-task 幂等返回且不重写证据', async () => {
   const fixture = await createFixture();
-  fixture.task.allowedPaths = ['src/**'];
-  fixture.task.upstreamAcceptance = { status: 'not-required' };
-  await writeFile(path.join(fixture.taskDir, 'task.json'), `${JSON.stringify(fixture.task, null, 2)}\n`);
-  const result = run(fixture.root, ['validate-task', path.relative(fixture.root, fixture.taskDir)]);
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /unsupported fields.*allowedPaths.*upstreamAcceptance/);
+  const first = startTask(fixture);
+  await appendFile(path.join(fixture.taskDir, 'audits.md'), '\n### A1：保留证据\n\n不得重写。\n');
+  const claims = JSON.parse(await readFile(path.join(fixture.taskDir, 'claims.json'), 'utf8'));
+  claims.claims.push({
+    claimId: 'C1',
+    statement: '已有声明。',
+    status: 'proposed',
+    evidenceRefs: [],
+  });
+  await writeFile(path.join(fixture.taskDir, 'claims.json'), `${JSON.stringify(claims, null, 2)}\n`);
+  const beforeAudits = await readFile(path.join(fixture.taskDir, 'audits.md'), 'utf8');
+  const beforeClaims = await readFile(path.join(fixture.taskDir, 'claims.json'), 'utf8');
+
+  const second = startTask(fixture);
+
+  assert.deepEqual(second, first);
+  assert.equal(await readFile(path.join(fixture.taskDir, 'audits.md'), 'utf8'), beforeAudits);
+  assert.equal(await readFile(path.join(fixture.taskDir, 'claims.json'), 'utf8'), beforeClaims);
 });
 
-test('validate-task 要求 baseCommit 为完整 commit OID，不能用会漂移的 Git revision', async () => {
-  for (const baseCommit of ['HEAD', 'deadbeef']) {
-    const fixture = await createFixture();
-    fixture.task.baseCommit = baseCommit;
-    await writeFile(
-      path.join(fixture.taskDir, 'task.json'),
-      `${JSON.stringify(fixture.task, null, 2)}\n`,
-    );
+test('同 revision 合同漂移 fail closed，不创建第二个 branch 或 workspace', async () => {
+  const fixture = await createFixture();
+  startTask(fixture);
+  const beforeWorktrees = git(fixture.root, ['worktree', 'list', '--porcelain']);
+  const beforeBranches = git(fixture.root, ['for-each-ref', '--format=%(refname)', 'refs/heads/deliver-task']);
+  const drifted = { ...fixture.task, objective: '未递增 revision 的错误合同变化。' };
 
-    const result = run(fixture.root, ['validate-task', path.relative(fixture.root, fixture.taskDir)]);
-    assert.equal(result.status, 1, `${baseCommit} unexpectedly passed`);
-    assert.match(result.stderr, /task\.baseCommit.*full Git commit OID/);
+  const result = runStart(fixture, { task: drifted });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /same revision.*contract drift/i);
+  assert.equal(git(fixture.root, ['worktree', 'list', '--porcelain']), beforeWorktrees);
+  assert.equal(git(fixture.root, ['for-each-ref', '--format=%(refname)', 'refs/heads/deliver-task']), beforeBranches);
+
+  const providedFixture = await createFixture();
+  const providedFirst = startTask(providedFixture, { workspace: providedFixture.root });
+  const providedExact = startTask(providedFixture);
+  assert.deepEqual(providedExact, providedFirst);
+  const providedBeforeWorktrees = git(providedFixture.root, ['worktree', 'list', '--porcelain']);
+  const providedDrift = {
+    ...providedFixture.task,
+    objective: 'provided workspace 中未递增 revision 的错误合同变化。',
+  };
+
+  const providedResult = runStart(providedFixture, { task: providedDrift });
+
+  assert.equal(providedResult.status, 1);
+  assert.match(providedResult.stderr, /same revision.*contract drift/i);
+  assert.equal(
+    git(providedFixture.root, ['worktree', 'list', '--porcelain']),
+    providedBeforeWorktrees,
+  );
+});
+
+test('更高 revision 默认建立新的确定性 branch 和 worktree', async () => {
+  const fixture = await createFixture();
+  const previous = startTask(fixture);
+  fixture.task = { ...fixture.task, revision: 2, objective: '显式改变后的目标。' };
+
+  const current = startTask(fixture);
+
+  assert.equal(current.task.revision, 2);
+  assert.notEqual(current.workspacePath, previous.workspacePath);
+  assert.notEqual(current.branch, previous.branch);
+  assert.match(current.branch, /^refs\/heads\/deliver-task\/slug-whitespace-r2-[0-9a-f]{12}$/);
+  assert.equal(git(current.workspacePath, ['rev-parse', 'HEAD']), fixture.baseCommit);
+  assert.equal(JSON.parse(await readFile(path.join(previous.taskDir, 'task.json'), 'utf8')).revision, 1);
+});
+
+test('provided workspace 已含旧 identity 时拒绝 higher revision 且不覆盖旧状态', async () => {
+  const fixture = await createFixture();
+  const previous = startTask(fixture, { workspace: fixture.root });
+  await appendFile(path.join(previous.taskDir, 'audits.md'), '\n### A1：旧证据\n\n保留。\n');
+  const beforeTask = await readFile(path.join(previous.taskDir, 'task.json'), 'utf8');
+  const beforeAudits = await readFile(path.join(previous.taskDir, 'audits.md'), 'utf8');
+  const next = { ...fixture.task, revision: 2, objective: '新 revision。' };
+
+  const result = runStart(fixture, { task: next, workspace: fixture.root });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /provided workspace.*existing task identity/i);
+  assert.equal(await readFile(path.join(previous.taskDir, 'task.json'), 'utf8'), beforeTask);
+  assert.equal(await readFile(path.join(previous.taskDir, 'audits.md'), 'utf8'), beforeAudits);
+});
+
+test('已有 branch/worktree 但证明缺失或不完整时拒绝恢复', async () => {
+  {
+    const fixture = await createFixture();
+    const output = startTask(fixture);
+    await writeFile(path.join(output.workspacePath, 'src/slug.mjs'), "export const slug = () => 'kept';\n");
+    git(output.workspacePath, ['add', 'src/slug.mjs']);
+    git(output.workspacePath, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '保留业务成果']);
+    await rm(output.taskDir, { recursive: true });
+
+    const result = runStart(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /proof state.*missing/i);
+    assert.equal(git(output.workspacePath, ['rev-parse', '--abbrev-ref', 'HEAD']), output.branch.slice('refs/heads/'.length));
+    await assert.rejects(access(output.taskDir));
+  }
+
+  {
+    const fixture = await createFixture();
+    const output = startTask(fixture);
+    await unlink(path.join(output.taskDir, 'claims.json'));
+
+    const result = runStart(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /proof state.*incomplete|claims\.json.*missing/i);
+    await assert.rejects(access(path.join(output.taskDir, 'claims.json')));
   }
 });
 
-test('caller 接受 direct 与通用 delegated name/ref，并拒绝旧 kind 和不完整 delegated', async () => {
+test('默认 workspace 初始化失败时回滚本次新建 worktree 和 branch', async () => {
+  const fixture = await createFixture();
+  await writeFile(path.join(fixture.root, '.dev-task'), '仓库原有冲突文件。\n');
+  git(fixture.root, ['add', '-f', '.dev-task']);
+  git(fixture.root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '加入冲突路径']);
+  fixture.baseCommit = git(fixture.root, ['rev-parse', 'HEAD']);
+  fixture.task = { ...fixture.task, baseCommit: fixture.baseCommit };
+  const beforeWorktrees = git(fixture.root, ['worktree', 'list', '--porcelain']);
+  const beforeBranches = git(fixture.root, ['for-each-ref', '--format=%(refname)', 'refs/heads/deliver-task']);
+
+  const result = runStart(fixture);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /\.dev-task.*directory|proof state/i);
+  assert.equal(git(fixture.root, ['worktree', 'list', '--porcelain']), beforeWorktrees);
+  assert.equal(git(fixture.root, ['for-each-ref', '--format=%(refname)', 'refs/heads/deliver-task']), beforeBranches);
+  assert.equal(await readFile(path.join(fixture.root, '.dev-task'), 'utf8'), '仓库原有冲突文件。\n');
+});
+
+test('.dev-task 默认 self-ignore，强制进入 index 或 commit 时 target boundary 拒绝', async () => {
+  for (const commitState of ['staged', 'committed']) {
+    const fixture = await createFixture();
+    await initTask(fixture);
+    await writeExecution(fixture, { allowedPaths: ['**'] });
+    assert.equal(git(fixture.root, ['status', '--porcelain']), '');
+    git(fixture.root, ['add', '-f', '.dev-task/task.json']);
+    if (commitState === 'committed') {
+      git(fixture.root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '错误提交证明状态']);
+    }
+
+    const result = run(fixture.root, ['snapshot-target', fixture.taskDir]);
+    assert.equal(result.status, 1, `${commitState} unexpectedly passed`);
+    assert.match(result.stderr, /task-owned artifact path \.dev-task\/task\.json/);
+  }
+});
+
+test('旧 bootstrap 命令和其它命令的隐式 bootstrap 均被拒绝', async () => {
+  const fixture = await createFixture();
+  for (const command of ['validate-task', 'prepare-workspace', 'init']) {
+    const result = run(fixture.root, [command, fixture.root]);
+    assert.equal(result.status, 2, `${command} unexpectedly passed`);
+    assert.match(result.stderr, /unknown command/i);
+  }
+  for (const command of ['task-hash', 'validate-execution', 'snapshot-target', 'validate-result', 'close-check']) {
+    const result = run(fixture.root, [command, path.join(fixture.root, '.dev-task')]);
+    assert.notEqual(result.status, 0, `${command} unexpectedly bootstrapped`);
+  }
+  await assert.rejects(access(path.join(fixture.root, '.dev-task')));
+  assert.equal(git(fixture.root, ['for-each-ref', '--format=%(refname)', 'refs/heads/deliver-task']), '');
+});
+
+test('start 接受 exact task schema 与通用 caller，并拒绝旧字段或非法 caller', async () => {
   for (const caller of [
     { kind: 'direct' },
-    { kind: 'delegated', name: 'to-tickets', ref: '.scratch/example/issues/01-slug.md' },
+    { kind: 'delegated', name: 'to-tickets', ref: 'tickets/slug-whitespace' },
     { kind: 'delegated', name: 'release-pipeline', ref: 'tasks/release-1' },
   ]) {
     const fixture = await createFixture({ caller });
-    const result = run(fixture.root, ['validate-task', path.relative(fixture.root, fixture.taskDir)]);
+    const result = runStart(fixture, { workspace: fixture.root });
     assert.equal(result.status, 0, `${JSON.stringify(caller)}: ${result.stderr}`);
   }
 
-  for (const caller of [
-    { kind: 'direct', ref: 'unexpected' },
-    { kind: 'delegated', ref: '.scratch/example/issues/01-slug.md' },
-    { kind: 'delegated', name: 'to-tickets' },
-    { kind: 'delegated', name: 'ToTickets', ref: 'x' },
-    { kind: 'planner', ref: '.scratch/example/issues/01-slug.md' },
-    { kind: 'unknown' },
-  ]) {
-    const fixture = await createFixture({ caller });
-    const result = run(fixture.root, ['validate-task', path.relative(fixture.root, fixture.taskDir)]);
-    assert.equal(result.status, 1, `unexpected pass: ${JSON.stringify(caller)}`);
+  const invalidTasks = [
+    (task) => ({ ...task, allowedPaths: ['src/**'], upstreamAcceptance: { status: 'not-required' } }),
+    (task) => ({ ...task, caller: { kind: 'direct', ref: 'unexpected' } }),
+    (task) => ({ ...task, caller: { kind: 'delegated', ref: 'tickets/slug-whitespace' } }),
+    (task) => ({ ...task, caller: { kind: 'delegated', name: 'ToTickets', ref: 'x' } }),
+    (task) => ({ ...task, caller: { kind: 'planner', ref: 'x' } }),
+  ];
+  for (const buildTask of invalidTasks) {
+    const fixture = await createFixture();
+    const result = runStart(fixture, { task: buildTask(fixture.task), workspace: fixture.root });
+    assert.equal(result.status, 1, result.stderr);
+    await assert.rejects(access(path.join(fixture.root, '.dev-task')));
   }
 });
 
-test('task hash 对 key 顺序稳定，execution 调整不改 task identity，immutable task 变化会改 hash', async () => {
+test('task hash 对 key 顺序稳定，execution 调整不改 identity，原地合同漂移被拒绝', async () => {
   const fixture = await createFixture();
+  await initTask(fixture);
   const first = await taskHash(fixture);
   assert.match(first, /^sha256:[0-9a-f]{64}$/);
 
@@ -523,7 +595,6 @@ test('task hash 对 key 顺序稳定，execution 调整不改 task identity，im
   await writeFile(path.join(fixture.taskDir, 'task.json'), `${JSON.stringify(reordered, null, 2)}\n`);
   assert.equal(await taskHash(fixture), first);
 
-  await initTask(fixture);
   await writeExecution(fixture);
   assert.equal(await taskHash(fixture), first);
   await writeExecution(fixture, { allowedPaths: ['src/**', 'test/**'] });
@@ -531,7 +602,9 @@ test('task hash 对 key 顺序稳定，execution 调整不改 task identity，im
 
   reordered.objective = '改变后的目标。';
   await writeFile(path.join(fixture.taskDir, 'task.json'), `${JSON.stringify(reordered, null, 2)}\n`);
-  assert.notEqual(await taskHash(fixture), first);
+  const result = run(fixture.root, ['task-hash', fixture.taskDir]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /workspace\.task.*stale task binding/);
 });
 
 test('validate-execution 校验 exact schema、当前 task binding 和 task-owned evidence refs', async () => {

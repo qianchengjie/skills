@@ -12,71 +12,53 @@ disable-model-invocation: true
 
 - 输入是一个已明确目标、验收、约束、用户禁止范围和调用策略的开发任务；具体执行路径由本 skill 读取真实上下文后确定。
 - 输出只是一份 `delivered / needs-upstream / needs-reslice / blocked` 单任务结果。
-- task-owned directory 只保存合同、证据和本地执行定位；业务代码只在当前 task workspace 内读写。不写 caller 的 plan、任务编排状态或最终 closure。
+- task workspace 内的 `.dev-task/` 保存合同、证据和本地执行定位；业务代码与证明状态共享同一个 isolated workspace 生命周期。不写 caller 的 plan、任务编排状态或最终 closure。
 - 可以自行安排任务内部的实现步骤；不创建或管理正式多任务计划。
 - 发现多个可独立验收、独立交付的工作单元时，立即返回 `needs-reslice`，不把它们伪装成内部步骤继续执行。
 - 目标、验收、公共契约、用户禁止范围、调用策略或用户判断需要变化时，立即返回 `needs-upstream`。直接调用时用户就是 upstream；由其它 skill 委托时只向 caller 回流，不越过 caller 直接询问用户。
 
 ## 输入与目录
 
-使用 [TASK-CONTRACT.md](TASK-CONTRACT.md) 的 `task.json` 作为调用契约。
+使用 [TASK-CONTRACT.md](TASK-CONTRACT.md) 的 exact task contract 作为 stdin 调用契约。
 
-- 直接调用：默认使用 `dev-tasks/YYYY-MM-DD-<slug>/`；根据用户原始任务写入 `task.json`，`caller` 固定为 `{ "kind": "direct" }`。
-- 上游委托：使用 caller 提供的 task directory；caller 写 `task.json`，使用通用 `{ "kind": "delegated", "name", "ref" }`，本 skill 不修改 caller 状态文件。
-- caller 只提供 immutable task contract，不填写 `execution.json`。deliver-task 在 preflight 后创建和维护该文件。
+- 直接调用：根据用户原始任务形成结构化合同，`caller` 固定为 `{ "kind": "direct" }`。
+- 上游委托：caller 只传递结构化 immutable task contract，使用通用
+  `{ "kind": "delegated", "name", "ref" }`；caller 不创建 task directory、不落盘 task state，
+  也不填写 `execution.json`。
+- deliver-task 在 preflight 后创建和维护 `execution.json`；`start` 不提前生成。
 
-开始时先校验任务：
+启动前按以下优先级选择 workspace，命中后停止：
 
-```bash
-node <deliver-task-skill-dir>/scripts/deliver-task.mjs validate-task <taskDir>
-```
+1. caller 已提供从 `task.baseCommit` 开始、业务区干净且只属于当前任务的 isolated workspace；
+2. 当前 workspace 已是 harness 建立的 linked worktree，且满足同一 base、clean、task-owned 边界；
+3. 运行环境提供 native worktree 能力时，先让 harness 从 `task.baseCommit` 创建并切入 workspace；
+4. 以上都不适用时，使用脚本默认模式。
 
-随后按以下优先级建立 workspace，命中后停止选择：
+前三种都只把选定路径作为 `--workspace` 传给同一个 `start`，不另建 task state，也不调用其它
+bootstrap。不得为了省事绕过 harness 原生机制；脚本默认模式只是没有可用宿主 workspace 时的
+fallback。
 
-1. caller 已提供从 `task.baseCommit` 开始、业务区干净且只属于当前任务的 isolated
-   workspace：直接绑定该路径。
-2. 当前 workspace 已是运行环境提供的 linked worktree：比较 canonical Git directory 与
-   common directory，并排除 submodule；仅当 `HEAD == task.baseCommit`、taskDir 外业务区干净且
-   当前 workspace 只属于本任务时，直接绑定当前 Git root，不再创建第二个 worktree。
-
-   ```bash
-   GIT_DIR=$(cd "$(git rev-parse --git-dir)" && pwd -P)
-   GIT_COMMON=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
-   git rev-parse --show-superproject-working-tree
-   ```
-
-3. 运行环境提供 `EnterWorktree`、`WorktreeCreate`、`--worktree` 等原生机制：必须先让 harness
-   从 `task.baseCommit` 创建并切入 task workspace，再绑定返回的路径。原生能力拥有路径、
-   sandbox 权限和生命周期；不能因为默认脚本更快而跳过它。
-4. 以上都不适用：运行不带 `--workspace` 的命令，让脚本在当前 Git root 的
-   `.worktrees/deliver-task-...` 创建手工 fallback。`.worktrees/` 必须已被 Git ignore；创建因
-   sandbox 权限失败时不提权硬干，也不退回未隔离的主 checkout，而是保留证据并返回
-   `blocked`。
-
-绑定 caller、当前 linked worktree 或 native workspace 时运行：
+唯一 bootstrap：
 
 ```bash
-node <deliver-task-skill-dir>/scripts/deliver-task.mjs prepare-workspace <taskDir> --workspace <workspacePath>
+generate-task-contract | node <deliver-task-skill-dir>/scripts/deliver-task.mjs start <repo> -
 ```
 
-手工 fallback 时运行：
+caller、当前 linked worktree 或运行环境已经提供 isolated workspace 时：
 
 ```bash
-node <deliver-task-skill-dir>/scripts/deliver-task.mjs prepare-workspace <taskDir>
+generate-task-contract | node <deliver-task-skill-dir>/scripts/deliver-task.mjs start <repo> - --workspace <workspacePath>
 ```
 
-最后运行：
+无 `--workspace` 时，脚本从 `task.baseCommit` 在系统临时目录创建 task-scoped Git worktree。
+`start` 固定返回 task binding、`taskDir`、`workspacePath`、`kind`、`branch` 和 `baseCommit`；
+其中 `taskDir == <workspacePath>/.dev-task`，`workspacePath` 是后续 preflight、实现、验证、提交、
+review 和收口的唯一业务工作目录。不得继续从 caller workspace 读取业务代码。
 
-```bash
-node <deliver-task-skill-dir>/scripts/deliver-task.mjs init <taskDir>
-```
-
-`prepare-workspace` 输出的
-`workspacePath` 是后续 preflight、实现、验证和提交的唯一业务工作目录；不得继续从 caller
-workspace 读取业务代码。`init` 只初始化 task-owned 合同/证据文件；若调用方漏掉显式
-prepare，它只会复用满足条件的当前 linked worktree 或执行仓库内手工 fallback，无法调用
-harness 原生机制；正常流程不得依赖这个兜底来延后 workspace 选择。
-任何 caller 状态变化都由 caller 在收到结果后决定。
+exact identity 且 `.dev-task/` 完整时 `start` 幂等返回，不重写证据。同 revision 合同漂移，或
+已有 task branch/worktree 但 `.dev-task/` 缺失、不完整时 fail closed；不得根据 commits、branch、
+聊天摘要或重建 locator 推断历史证明。higher revision 默认建立新的 branch/worktree；provided
+workspace 已含旧 identity 时拒绝覆盖。任何 caller 状态变化都由 caller 在收到结果后决定。
 
 ## 开始前判断
 
@@ -98,7 +80,7 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs validate-execution <taskD
 
 同一授权目标内需要调整执行路径时，先追加审计依据，再原地更新 `execution.json`；不递增 task revision/hash。若调整命中 `task.forbiddenPaths` 或要求改变 immutable task contract，才回流 upstream。
 
-不要把 `needs-reslice` 变成新的 `plan.md`，也不要在 task directory 内新建 slice、ticket、里程碑或任务状态机。
+不要把 `needs-reslice` 变成新的 `plan.md`，也不要在 `.dev-task/` 内新建 slice、ticket、里程碑或任务状态机。
 
 ## commitPolicy
 

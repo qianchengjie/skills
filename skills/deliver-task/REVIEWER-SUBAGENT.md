@@ -4,7 +4,10 @@ reviewer 不修改业务文件、task durable state 或 caller state。每轮使
 
 ## 固定输入
 
-派发前 controller 已完成边界核对、验证、commit/worktree/no-change target 固定，并生成绑定 task、execution、target 三个 identity 的当前 `artifacts/review-package.md`。reviewer 不从 `git status`、当前 HEAD、index 或同名工作区路径重建范围。
+派发前 controller 已完成边界核对、验证、commit/worktree/no-change target 固定，并在 live
+`<task-worktree>/.dev-task/artifacts/review-package.md` 生成绑定 task、execution、target 三个
+identity 的当前 package。reviewer 不从 `git status`、当前 HEAD、index、branch、聊天摘要或同名
+工作区路径重建范围；`.dev-task/` 缺失或 package 无法绑定时返回 cannot-verify。
 
 commit-range 只由 package 具名的 task workspace Git objects `baseCommit..headCommit` 确定。
 caller workspace 的当前 branch、HEAD、dirty 或同名文件不是审查输入，也不能使 package stale。

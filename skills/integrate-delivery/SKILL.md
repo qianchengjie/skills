@@ -11,13 +11,17 @@ description: Use when `deliver-task` 已返回 `delivered`，用户或上游需�
 
 - 本 skill 只拥有 delivery 之后的本地 integration boundary，不接管任务实现、返修、规划或远端流程。
 - `delivery.json` 和它引用的证据保持只读；集成结果不回写成新的 delivery identity。
+- 只有 live `<task-worktree>/.dev-task/` 能提供可重验的 delivery 证明；commits、branch、聊天摘要或
+  handoff 文案都不能替代它。
 - 原 delivery 只证明 `baseCommit..headCommit`。它不自动证明该范围与目标分支组合后的结果。
 - 用户主 workspace 的 dirty 是合法状态；不得 stash、clean、reset、覆盖或归因这些修改。
 - 不新增 `finish.json`、revision、ledger、历史链或集成状态机。完成事实直接在最终结果中返回。
 
 ## 输入与授权
 
-接受 task directory、`delivery.json` 路径或包含等价定位信息的 `deliver-task` 返回结果。还需要确定：
+接受 live `taskDir`、其中的 `delivery.json` 路径或包含该绝对 `taskDir` 的 `deliver-task` 返回
+结果。`taskDir` 必须等于 `<task-worktree>/.dev-task`；只包含等价 commits、branch 或摘要的输入
+不足以开始 integration。还需要确定：
 
 - 期望动作：`merge / cherry-pick / keep`；
 - merge 或 cherry-pick 的目标仓库与目标分支；
@@ -45,11 +49,14 @@ description: Use when `deliver-task` 已返回 `delivered`，用户或上游需�
    node <deliver-task-skill-dir>/scripts/deliver-task.mjs close-check <taskDir>
    ```
 
-2. 要求 `delivery.json.result == "delivered"`，读取 `task.json`、`delivery.json` 和 `artifacts/workspace.json`。不要只相信聊天摘要、branch 名或目录名。
-3. 解析当前 target，确认所引用的 Git commit objects 仍存在，且 `headCommit` 仍以 `baseCommit` 为祖先。
-4. 记录 source 的 task identity、target、workspace 和 branch。动作是 `keep` 时不要求目标分支，直接进入经授权的 cleanup 或返回结果。
-5. merge 或 cherry-pick 时，记录目标分支当前完整 OID `D`，检查目标仓库、目标分支、worktree dirty 和适用的项目指令。只记录 caller workspace 的 dirty，不把它归入 task，也不据此使 delivery stale。
-6. merge 或 cherry-pick 时，确认 source 与 destination 属于同一 Git 历史；跨仓复制、补丁传输和 vendor 同步不属于本 skill。
+2. 两条命令都必须直接消费 live `.dev-task/`；目录或任一必需证明丢失时停止，不根据现存
+   commits、branch、旧输出或聊天摘要补写 locator、恢复证据或推断 `delivered`。
+3. 要求 `delivery.json.result == "delivered"`，读取 `task.json`、`delivery.json` 和
+   `artifacts/workspace.json`。不要只相信聊天摘要、branch 名或目录名。
+4. 解析当前 target，确认所引用的 Git commit objects 仍存在，且 `headCommit` 仍以 `baseCommit` 为祖先。
+5. 记录 source 的 task identity、target、workspace 和 branch。动作是 `keep` 时不要求目标分支，直接进入经授权的 cleanup 或返回结果。
+6. merge 或 cherry-pick 时，记录目标分支当前完整 OID `D`，检查目标仓库、目标分支、worktree dirty 和适用的项目指令。只记录 caller workspace 的 dirty，不把它归入 task，也不据此使 delivery stale。
+7. merge 或 cherry-pick 时，确认 source 与 destination 属于同一 Git 历史；跨仓复制、补丁传输和 vendor 同步不属于本 skill。
 
 从预检结束到实际移动目标分支前，目标分支必须仍指向 `D`。发生移动时重新检查和推荐，不自动 rebase、merge 新基线或假装旧决策仍有效。
 
@@ -101,6 +108,11 @@ merge 和 cherry-pick 都先在从目标 OID `D` 创建的临时 isolated integr
 ## 清理规则
 
 cleanup 是显式授权动作，不是成功集成的自动副作用。
+
+经授权删除脚本创建的 task worktree 时，worktree-local `.dev-task/` 会随 worktree 一起消失；
+必须先在 live 状态上完成本轮 `validate-result`、`close-check` 和下述 durable ref 检查。不得先删
+证明再从 commits 或最终说明倒推收口。`provided` workspace 连同 `.dev-task/` 原样交还 owner，
+本 skill 不单独删除其证明目录。
 
 清理 task worktree 前必须同时满足：
 

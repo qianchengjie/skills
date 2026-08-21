@@ -3,20 +3,22 @@
 ## 目录角色
 
 ```text
-<taskDir>/
-├── task.json          # upstream immutable 输入合同；deliver-task 不擅自扩大
-├── execution.json     # deliver-task 根据真实代码与项目规则确定的当前执行边界
-├── claims.json        # 声明、证据引用与状态真源
-├── audits.md          # preflight / validation / review / acceptance / repair 审计真源
-├── delivery.json      # 薄结果合同
-├── .gitignore         # 忽略 /artifacts/
-└── artifacts/         # 当前运行定位与可重建 brief/report/target/review package
-    └── workspace.json # 绑定 task-scoped workspace 的本地 locator
+<task-worktree>/
+├── <业务代码与项目文件>
+└── .dev-task/        # taskDir；默认由自身 .gitignore 排除出 Git target
+    ├── task.json          # upstream immutable 输入合同；deliver-task 不擅自扩大
+    ├── execution.json     # preflight 后由 deliver-task 创建的当前执行边界
+    ├── claims.json        # 声明、证据引用与状态真源
+    ├── audits.md          # preflight / validation / review / acceptance / repair 审计真源
+    ├── delivery.json      # 薄结果合同
+    ├── .gitignore         # 内容固定为 *
+    └── artifacts/         # 当前运行定位与可重建 brief/report/target/review package
+        └── workspace.json # 绑定当前 task workspace 的本地 locator
 ```
 
-`taskDir` 保存合同和证据，可以继续位于 caller workspace；业务代码只在
-`artifacts/workspace.json` 指向的 task workspace 中保持项目原相对路径。两个目录不是同一个
-状态世界。rules-review run 继续由 `rules-review` 写入自己的协议目录。
+`taskDir` 固定为 `<task-worktree>/.dev-task`。合同、证据、locator 与业务代码共享同一个
+isolated workspace 生命周期；caller workspace 不保存 task state。rules-review run 继续由
+`rules-review` 写入自己的协议目录。
 
 ## task.json
 
@@ -53,6 +55,8 @@
 - `commitPolicy` 只允许 `required / allowed / forbidden`。
 - `acceptancePolicy` 只允许 `required / not-required`。
 - task hash 是完整 `task.json` 的递归 key-sort canonical JSON SHA-256，格式为 `sha256:<hex>`。
+- bootstrap 时 caller 只把该对象写入 `start` 的 stdin；`start` 完整校验后才把它写入新建或
+  首次绑定 workspace 的 `.dev-task/task.json`。
 
 只有目标、验收、约束、非目标、用户禁止范围、caller、base、commit policy 或
 acceptance policy 变化时才递增 revision。执行路径选择和实际验收结果不属于 immutable
@@ -79,20 +83,26 @@ task identity。旧 task identity 下的证据不会自动证明新合同；cont
 ```
 
 - `kind` 只允许 `provided / git-worktree`。caller 提供、当前满足条件的 harness linked
-  workspace 或 harness 原生机制创建的 workspace 使用 `provided`；脚本仓库内 fallback 使用
+  workspace 或 harness 原生机制创建的 workspace 使用 `provided`；默认模式使用
   `git-worktree`。
 - `workspacePath` 是 canonical absolute Git root。`branch` 是完整 `refs/heads/...` 或
   `null`；脚本创建的 Git worktree 必须有 branch。
-- 首次绑定的 provided workspace 必须 `HEAD == task.baseCommit`，且 taskDir 之外没有
-  tracked/untracked 业务修改。fallback 总是从该 base 创建。
+- `taskDir` 必须等于 `<workspacePath>/.dev-task`；locator 不能指向另一个 workspace。
+- 首次绑定的 provided workspace 必须属于 `<repo>` 的同一 Git repository、
+  `HEAD == task.baseCommit`、业务区干净且不存在旧 `.dev-task/`。默认模式总是从该 base
+  在系统临时目录创建 worktree。
 - 后续 `HEAD` 可以随着当前任务提交向前移动，但必须保持 base 祖先关系和 branch identity。
 - locator 绑定当前 task identity，却不进入 task、execution 或 target hash；绝对路径不是
   可移植交付 identity，也不形成 workspace revision、历史链或状态机。
-- upstream 显式递增同一 `taskId` 的 task revision 后，新 identity 建立新的 workspace 并覆盖
-  当前 locator；旧 worktree 保留但不再被当前任务使用。同 revision 只改变 task hash 时拒绝，
-  防止绕过 revision 规则静默换合同。
-- 脚本创建的 locator 丢失时，可按 task identity 对应的 branch 重新发现已注册 worktree。
-  不自动清理 worktree，也不自动 merge、cherry-pick、rebase、push 或 publish。
+- exact identity 且 `.dev-task/` 完整时 `start` 幂等返回，不重写 locator 或其它证据。同 revision
+  只改变 task hash 时拒绝，防止绕过 revision 规则静默换合同。
+- higher revision 在默认模式建立新的确定性 branch/worktree；provided workspace 已含旧
+  identity 时拒绝覆盖，旧状态继续归其 owner。
+- branch/worktree 已存在但 `.dev-task/`、locator 或其它初始证明状态缺失、不完整时 fail
+  closed；不按 branch 重新发现并补写 locator，也不根据 commits 或摘要恢复证明。
+- `.dev-task/.gitignore` 内容固定为 `*`。正常状态不进入 Git；被强制暂存或提交时仍由 target
+  path boundary 拒绝。
+- 不自动清理 worktree，也不自动 merge、cherry-pick、rebase、push 或 publish。
 - `execution.json` 不增加 `baselineDirtyPaths`、dirty hash 或 attribution history。caller
   workspace 的 dirty/HEAD 不属于 task workspace，因而不需要被解释。
 
@@ -258,8 +268,8 @@ task identity。旧 task identity 下的证据不会自动证明新合同；cont
 
 这些文件是当前运行定位或可重建的注意力收束视图，不进入 `delivery.json`：
 
-- `workspace.json`：当前 task workspace 的本地 locator；脚本 fallback 可按 task branch
-  重建，运行期间不得随意删除 caller/native workspace 的唯一定位信息；
+- `workspace.json`：当前 task workspace 的本地 locator；它是 live `.dev-task/` 证明闭包的一部分，
+  丢失时 fail closed，不按 task branch 补写；
 - `task-brief.md`：task、当前 execution、preflight、claims、selected execution rules、修复输入；
 - `task-report.json`：implementer 的 changed files、验证 handoff、blocked 原因；
 - `target.json`：`snapshot-target` 输出；

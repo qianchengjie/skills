@@ -3,6 +3,7 @@
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 const TASK_SCHEMA = 'deliver-task.task.v1';
@@ -178,6 +179,32 @@ async function writeJson(file, value) {
   await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+async function optionalLstat(target) {
+  try {
+    return await fs.lstat(target);
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function resolveRepositoryRoot(repoArg) {
+  if (!repoArg) throw usageError('repository is required');
+  const requested = path.resolve(repoArg);
+  const stat = await optionalLstat(requested);
+  if (stat === null) throw usageError(`repository directory missing: ${repoArg}`);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw usageError(`repository must be a real directory: ${repoArg}`);
+  }
+  let root;
+  try {
+    root = git(requested, ['rev-parse', '--show-toplevel']).trim();
+  } catch {
+    throw usageError(`repository must be inside a Git worktree: ${repoArg}`);
+  }
+  return fs.realpath(root);
+}
+
 async function resolveContext(taskDirArg) {
   if (!taskDirArg) throw usageError('task directory is required');
   const taskDir = path.resolve(taskDirArg);
@@ -193,11 +220,22 @@ async function resolveContext(taskDirArg) {
   const repoRoot = git(taskDir, ['rev-parse', '--show-toplevel']).trim();
   const canonicalRoot = await fs.realpath(repoRoot);
   const canonicalTaskDir = await fs.realpath(taskDir);
-  const relativeTaskDir = path.relative(canonicalRoot, canonicalTaskDir).split(path.sep).join('/');
-  if (!relativeTaskDir || relativeTaskDir.startsWith('../') || path.isAbsolute(relativeTaskDir)) {
-    throw usageError('task directory must be inside one Git worktree');
+  const expectedTaskDir = path.join(canonicalRoot, '.dev-task');
+  if (canonicalTaskDir !== expectedTaskDir) {
+    throw usageError('task directory must be <task-worktree>/.dev-task');
   }
-  return { repoRoot: canonicalRoot, taskDir: canonicalTaskDir, relativeTaskDir };
+  return { repoRoot: canonicalRoot, taskDir: canonicalTaskDir, relativeTaskDir: '.dev-task' };
+}
+
+async function readTaskContractFromStdin() {
+  let source = '';
+  process.stdin.setEncoding('utf8');
+  for await (const chunk of process.stdin) source += chunk;
+  try {
+    return JSON.parse(source);
+  } catch (error) {
+    throw gateError(`task contract stdin must be valid JSON: ${error.message}`);
+  }
 }
 
 function validateCaller(caller) {
@@ -321,35 +359,7 @@ function currentBranchRef(root) {
   }
 }
 
-async function canonicalGitDirectory(root, argument) {
-  const gitDirectory = git(root, ['rev-parse', argument]).trim();
-  return fs.realpath(path.resolve(root, gitDirectory));
-}
-
-async function isLinkedWorktree(root) {
-  const superprojectRoot = git(root, ['rev-parse', '--show-superproject-working-tree']).trim();
-  if (superprojectRoot) return false;
-  const [gitDirectory, commonDirectory] = await Promise.all([
-    canonicalGitDirectory(root, '--git-dir'),
-    canonicalGitDirectory(root, '--git-common-dir'),
-  ]);
-  return gitDirectory !== commonDirectory;
-}
-
-function isIgnoredRepoPath(root, repoPath) {
-  try {
-    execFileSync('git', ['check-ignore', '--quiet', '--', repoPath], {
-      cwd: root,
-      stdio: 'ignore',
-    });
-    return true;
-  } catch (error) {
-    if (error.status === 1) return false;
-    throw gateError(`git check-ignore failed for ${repoPath}`);
-  }
-}
-
-async function validateWorkspaceRecord(record, task) {
+async function validateWorkspaceRecord(record, task, expectedWorkspaceRoot = null) {
   assertExactObject(
     record,
     ['schemaVersion', 'task', 'kind', 'workspacePath', 'branch', 'baseCommit'],
@@ -383,6 +393,9 @@ async function validateWorkspaceRecord(record, task) {
   if (workspaceRoot !== record.workspacePath) {
     throw gateError(`workspace.workspacePath must be the canonical Git root ${workspaceRoot}`);
   }
+  if (expectedWorkspaceRoot !== null && workspaceRoot !== expectedWorkspaceRoot) {
+    throw gateError('workspace.workspacePath must equal the task worktree Git root');
+  }
   const baseCommit = resolveCommit(workspaceRoot, task.baseCommit, 'task.baseCommit in workspace');
   const headCommit = resolveCommit(workspaceRoot, 'HEAD', 'workspace HEAD');
   if (!isAncestor(workspaceRoot, baseCommit, headCommit)) {
@@ -397,9 +410,9 @@ async function validateWorkspaceRecord(record, task) {
 async function readWorkspaceContext(context, task) {
   const record = await readOptionalJson(workspaceRecordPath(context), 'artifacts/workspace.json');
   if (record === null) {
-    throw gateError('task workspace is not prepared; run prepare-workspace before preflight');
+    throw gateError('task proof state is incomplete: artifacts/workspace.json is missing');
   }
-  const { workspaceRoot } = await validateWorkspaceRecord(record, task);
+  const { workspaceRoot } = await validateWorkspaceRecord(record, task, context.repoRoot);
   return {
     ...context,
     repoRoot: workspaceRoot,
@@ -424,116 +437,292 @@ function gitRefExists(root, reference) {
 }
 
 function worktreePathForBranch(root, branch) {
-  const blocks = git(root, ['worktree', 'list', '--porcelain']).trim().split(/\n\n+/);
-  for (const block of blocks) {
-    const lines = block.split('\n');
-    const worktreeLine = lines.find((line) => line.startsWith('worktree '));
-    const branchLine = lines.find((line) => line.startsWith('branch '));
-    if (worktreeLine && branchLine === `branch ${branch}`) {
-      return worktreeLine.slice('worktree '.length);
+  for (const worktree of registeredWorktrees(root)) {
+    if (worktree.branch === branch) {
+      return worktree.workspacePath;
     }
   }
   return null;
 }
 
-function hasPriorWorkspaceBinding(record, task) {
-  if (!isPlainObject(record) || record.schemaVersion !== WORKSPACE_SCHEMA) return false;
-  try {
-    validateBindingShape(record.task, 'workspace.task');
-  } catch {
-    return false;
-  }
-  return record.task.taskId === task.taskId && record.task.revision < task.revision;
+function registeredWorktrees(root) {
+  const output = git(root, ['worktree', 'list', '--porcelain']).trim();
+  if (!output) return [];
+  return output.split(/\n\n+/).map((block) => {
+    const lines = block.split('\n');
+    const worktreeLine = lines.find((line) => line.startsWith('worktree '));
+    const branchLine = lines.find((line) => line.startsWith('branch '));
+    return {
+      workspacePath: worktreeLine?.slice('worktree '.length) ?? null,
+      branch: branchLine?.slice('branch '.length) ?? null,
+    };
+  });
 }
 
-async function prepareWorkspace(context, task, providedPath) {
-  const target = workspaceRecordPath(context);
-  let existing = await readOptionalJson(target, 'artifacts/workspace.json');
-  if (existing !== null && hasPriorWorkspaceBinding(existing, task)) existing = null;
-  if (existing !== null) {
-    const { record, workspaceRoot } = await validateWorkspaceRecord(existing, task);
-    if (providedPath) {
-      const requestedWorkspace = await resolveWorkspaceRoot(providedPath);
-      if (requestedWorkspace !== workspaceRoot) {
-        throw gateError('prepared workspace does not match --workspace');
-      }
-    }
-    return record;
+async function gitCommonDir(root) {
+  const commonDir = git(root, ['rev-parse', '--git-common-dir']).trim();
+  const absolute = path.isAbsolute(commonDir) ? commonDir : path.resolve(root, commonDir);
+  return fs.realpath(absolute);
+}
+
+function taskRevisionRefs(root, task) {
+  const prefix = `refs/heads/deliver-task/${task.taskId}-r${task.revision}-`;
+  return git(root, ['for-each-ref', '--format=%(refname)', 'refs/heads'])
+    .split(/\r?\n/)
+    .filter((reference) => reference.startsWith(prefix));
+}
+
+function outputForStart(record) {
+  return {
+    task: record.task,
+    taskDir: path.join(record.workspacePath, '.dev-task'),
+    workspacePath: record.workspacePath,
+    kind: record.kind,
+    branch: record.branch,
+    baseCommit: record.baseCommit,
+  };
+}
+
+async function readCompleteTaskState(workspaceRoot, task) {
+  const taskDir = path.join(workspaceRoot, '.dev-task');
+  const state = await optionalLstat(taskDir);
+  if (state === null) throw gateError('task proof state is missing from existing workspace');
+  if (!state.isDirectory() || state.isSymbolicLink()) {
+    throw gateError('task proof state is incomplete: .dev-task must be a real directory');
   }
 
-  let kind;
-  let workspacePath;
-  let branch;
-  if (providedPath) {
-    kind = 'provided';
-    workspacePath = await resolveWorkspaceRoot(providedPath);
-    const headCommit = resolveCommit(workspacePath, 'HEAD', 'provided workspace HEAD');
-    if (headCommit !== task.baseCommit) {
-      throw gateError('new provided workspace must start exactly at task.baseCommit');
-    }
-    const dirtyPaths = changedPathsFrom(workspacePath, headCommit)
-      .filter((repoPath) => !isInsideTaskDir(repoPath, context));
-    if (dirtyPaths.length > 0) {
-      throw gateError(`new provided workspace must be clean outside taskDir: ${dirtyPaths.join(', ')}`);
-    }
-    branch = currentBranchRef(workspacePath);
-  } else if (
-    await isLinkedWorktree(context.repoRoot)
-    && resolveCommit(context.repoRoot, 'HEAD', 'current linked workspace HEAD') === task.baseCommit
-    && changedPathsFrom(context.repoRoot, task.baseCommit)
-      .filter((repoPath) => !isInsideTaskDir(repoPath, context)).length === 0
-  ) {
-    kind = 'provided';
-    workspacePath = context.repoRoot;
-    branch = currentBranchRef(workspacePath);
-  } else {
-    kind = 'git-worktree';
-    const shortBranch = workspaceBranch(task);
-    branch = `refs/heads/${shortBranch}`;
-    const registeredPath = worktreePathForBranch(context.repoRoot, branch);
-    if (registeredPath) {
-      workspacePath = await fs.realpath(registeredPath);
-      if (workspacePath === context.repoRoot) {
-        throw gateError('task branch is checked out in the source workspace and cannot be reused as isolated');
-      }
-    } else {
-      if (gitRefExists(context.repoRoot, branch)) {
-        const branchCommit = resolveCommit(context.repoRoot, branch, 'existing task workspace branch');
-        if (!isAncestor(context.repoRoot, task.baseCommit, branchCommit)) {
-          throw gateError('existing task workspace branch does not descend from task.baseCommit');
-        }
-      }
-      const workspaceName = shortBranch.replace('/', '-');
-      const repoWorkspacePath = path.posix.join('.worktrees', workspaceName);
-      if (!isIgnoredRepoPath(context.repoRoot, repoWorkspacePath)) {
-        throw gateError('manual worktree fallback requires .worktrees/ to be ignored');
-      }
-      await fs.mkdir(path.join(context.repoRoot, '.worktrees'), { recursive: true });
-      workspacePath = path.join(context.repoRoot, repoWorkspacePath);
-      try {
-        git(context.repoRoot, gitRefExists(context.repoRoot, branch)
-          ? ['worktree', 'add', '-q', workspacePath, shortBranch]
-          : ['worktree', 'add', '-q', '-b', shortBranch, workspacePath, task.baseCommit]);
-      } catch (error) {
-        await fs.rmdir(workspacePath).catch(() => {});
-        throw error;
-      }
-      workspacePath = await fs.realpath(workspacePath);
-    }
+  let context;
+  let existingTask;
+  try {
+    context = await resolveContext(taskDir);
+    existingTask = await readTask(context);
+  } catch (error) {
+    throw gateError(`task proof state is incomplete: ${error.message}`);
+  }
+  if (canonicalJson(existingTask) !== canonicalJson(task)) {
+    throw gateError('task proof state has a different task identity');
   }
 
+  try {
+    const claims = await readJson(path.join(taskDir, 'claims.json'), 'claims.json');
+    validateClaims(claims, task);
+    const audits = await readJsonOrText(path.join(taskDir, 'audits.md'), 'audits.md');
+    if (!audits.trim()) throw gateError('audits.md must not be empty');
+    const ignore = await readJsonOrText(path.join(taskDir, '.gitignore'), '.gitignore');
+    if (ignore !== '*\n') throw gateError('.gitignore must contain exactly *');
+    const record = await readJson(workspaceRecordPath(context), 'artifacts/workspace.json');
+    await validateWorkspaceRecord(record, task, workspaceRoot);
+    return outputForStart(record);
+  } catch (error) {
+    throw gateError(`task proof state is incomplete: ${error.message}`);
+  }
+}
+
+async function findTaskRevisionWorkspace(repoRoot, task) {
+  const matches = [];
+  for (const worktree of registeredWorktrees(repoRoot)) {
+    if (!worktree.workspacePath) continue;
+    let workspaceRoot;
+    let source;
+    try {
+      workspaceRoot = await fs.realpath(worktree.workspacePath);
+      source = await fs.readFile(path.join(workspaceRoot, '.dev-task', 'task.json'), 'utf8');
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw gateError(`cannot inspect live task proof state: ${error.message}`);
+    }
+
+    let candidate;
+    try {
+      candidate = JSON.parse(source);
+    } catch {
+      continue;
+    }
+    if (
+      !isPlainObject(candidate) ||
+      candidate.taskId !== task.taskId ||
+      candidate.revision !== task.revision
+    ) {
+      continue;
+    }
+
+    let existingTask;
+    try {
+      existingTask = validateTask(candidate, workspaceRoot);
+    } catch (error) {
+      throw gateError(`task proof state is incomplete: ${error.message}`);
+    }
+    if (canonicalJson(existingTask) !== canonicalJson(task)) {
+      throw gateError('same revision contract drift detected; increment task.revision');
+    }
+    matches.push(workspaceRoot);
+  }
+
+  if (matches.length > 1) {
+    throw gateError('multiple live workspaces contain the same task identity');
+  }
+  return matches[0] ?? null;
+}
+
+async function writeInitialTaskState(workspaceRoot, task, record) {
+  const taskDir = path.join(workspaceRoot, '.dev-task');
+  if (await optionalLstat(taskDir)) {
+    throw gateError('.dev-task already exists and cannot be initialized as new proof state');
+  }
+  const stagingDir = await fs.mkdtemp(path.join(workspaceRoot, '.dev-task.tmp-'));
+  let installed = false;
+  try {
+    await writeJson(path.join(stagingDir, 'task.json'), task);
+    await writeJson(path.join(stagingDir, 'claims.json'), {
+      schemaVersion: CLAIMS_SCHEMA,
+      task: bindingForTask(task),
+      claims: [],
+    });
+    await fs.writeFile(
+      path.join(stagingDir, 'audits.md'),
+      `# 单任务审计\n\n- taskId：${task.taskId}\n- revision：${task.revision}\n- taskHash：${taskHash(task)}\n`,
+    );
+    await fs.writeFile(path.join(stagingDir, '.gitignore'), '*\n');
+    await fs.mkdir(path.join(stagingDir, 'artifacts'));
+    await writeJson(path.join(stagingDir, 'artifacts', 'workspace.json'), record);
+    await fs.rename(stagingDir, taskDir);
+    installed = true;
+    return taskDir;
+  } catch (error) {
+    await fs.rm(installed ? taskDir : stagingDir, { recursive: true, force: true }).catch(() => {});
+    if (error instanceof GateError) throw error;
+    throw gateError(`cannot initialize task proof state: ${error.message}`);
+  }
+}
+
+async function rollbackCreatedWorkspace(repoRoot, workspacePath, branch) {
+  const errors = [];
+  const registeredPath = worktreePathForBranch(repoRoot, branch);
+  if (registeredPath) {
+    try {
+      git(repoRoot, ['worktree', 'remove', '--force', registeredPath]);
+    } catch (error) {
+      errors.push(error.message);
+    }
+  }
+  await fs.rm(workspacePath, { recursive: true, force: true }).catch((error) => errors.push(error.message));
+  if (gitRefExists(repoRoot, branch)) {
+    try {
+      git(repoRoot, ['branch', '-D', branch.slice('refs/heads/'.length)]);
+    } catch (error) {
+      errors.push(error.message);
+    }
+  }
+  if (errors.length > 0) throw gateError(`rollback failed: ${errors.join('; ')}`);
+}
+
+async function startWithProvidedWorkspace(repoRoot, task, providedPath) {
+  const workspaceRoot = await resolveWorkspaceRoot(providedPath);
+  if (await gitCommonDir(workspaceRoot) !== await gitCommonDir(repoRoot)) {
+    throw gateError('provided workspace must belong to the same Git repository');
+  }
+
+  const taskDir = path.join(workspaceRoot, '.dev-task');
+  const existingState = await optionalLstat(taskDir);
+  if (existingState !== null) {
+    if (!existingState.isDirectory() || existingState.isSymbolicLink()) {
+      throw gateError('provided workspace contains incomplete task proof state');
+    }
+    let existingTask;
+    try {
+      existingTask = validateTask(
+        await readJson(path.join(taskDir, 'task.json'), 'task.json'),
+        workspaceRoot,
+      );
+    } catch (error) {
+      throw gateError(`provided workspace contains incomplete task proof state: ${error.message}`);
+    }
+    if (canonicalJson(existingTask) !== canonicalJson(task)) {
+      throw gateError('provided workspace already contains an existing task identity');
+    }
+    return readCompleteTaskState(workspaceRoot, task);
+  }
+
+  const headCommit = resolveCommit(workspaceRoot, 'HEAD', 'provided workspace HEAD');
+  if (headCommit !== task.baseCommit) {
+    throw gateError('new provided workspace must start exactly at task.baseCommit');
+  }
+  const dirtyPaths = changedPathsFrom(workspaceRoot, headCommit);
+  if (dirtyPaths.length > 0) {
+    throw gateError(`new provided workspace must be clean: ${dirtyPaths.join(', ')}`);
+  }
   const record = {
     schemaVersion: WORKSPACE_SCHEMA,
     task: bindingForTask(task),
-    kind,
-    workspacePath,
-    branch,
+    kind: 'provided',
+    workspacePath: workspaceRoot,
+    branch: currentBranchRef(workspaceRoot),
     baseCommit: task.baseCommit,
   };
-  await validateWorkspaceRecord(record, task);
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  await writeJson(target, record);
-  return record;
+  await validateWorkspaceRecord(record, task, workspaceRoot);
+  let created = false;
+  try {
+    await writeInitialTaskState(workspaceRoot, task, record);
+    created = true;
+    return await readCompleteTaskState(workspaceRoot, task);
+  } catch (error) {
+    if (created) await fs.rm(taskDir, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+async function startWithManagedWorkspace(repoRoot, task) {
+  const existingWorkspace = await findTaskRevisionWorkspace(repoRoot, task);
+  if (existingWorkspace) return readCompleteTaskState(existingWorkspace, task);
+
+  const shortBranch = workspaceBranch(task);
+  const branch = `refs/heads/${shortBranch}`;
+  if (gitRefExists(repoRoot, branch)) {
+    const registeredPath = worktreePathForBranch(repoRoot, branch);
+    if (!registeredPath) {
+      throw gateError('task branch exists but its live task proof workspace is missing');
+    }
+    const workspaceRoot = await fs.realpath(registeredPath);
+    if (workspaceRoot === repoRoot) {
+      throw gateError('task branch is checked out in the source workspace without isolated proof state');
+    }
+    return readCompleteTaskState(workspaceRoot, task);
+  }
+
+  if (taskRevisionRefs(repoRoot, task).length > 0) {
+    throw gateError('same revision contract drift detected; increment task.revision');
+  }
+
+  const workspacePath = await fs.mkdtemp(
+    path.join(os.tmpdir(), `deliver-task-${task.taskId}-r${task.revision}-`),
+  );
+  try {
+    git(repoRoot, ['worktree', 'add', '-q', '-b', shortBranch, workspacePath, task.baseCommit]);
+    const workspaceRoot = await fs.realpath(workspacePath);
+    const record = {
+      schemaVersion: WORKSPACE_SCHEMA,
+      task: bindingForTask(task),
+      kind: 'git-worktree',
+      workspacePath: workspaceRoot,
+      branch,
+      baseCommit: task.baseCommit,
+    };
+    await validateWorkspaceRecord(record, task, workspaceRoot);
+    await writeInitialTaskState(workspaceRoot, task, record);
+    return await readCompleteTaskState(workspaceRoot, task);
+  } catch (error) {
+    try {
+      await rollbackCreatedWorkspace(repoRoot, workspacePath, branch);
+    } catch (rollbackError) {
+      throw gateError(`${error.message}; ${rollbackError.message}`);
+    }
+    throw error;
+  }
+}
+
+async function startTask(repoRoot, task, providedPath) {
+  if (providedPath) return startWithProvidedWorkspace(repoRoot, task, providedPath);
+  return startWithManagedWorkspace(repoRoot, task);
 }
 
 async function validateExecution(execution, task, context) {
@@ -562,37 +751,6 @@ async function validateExecution(execution, task, context) {
 async function readExecution(context, task) {
   const execution = await readJson(path.join(context.taskDir, 'execution.json'), 'execution.json');
   return validateExecution(execution, task, context);
-}
-
-async function initTask(context, task) {
-  await fs.mkdir(path.join(context.taskDir, 'artifacts'), { recursive: true });
-  const gitignore = path.join(context.taskDir, '.gitignore');
-  try {
-    await fs.access(gitignore);
-  } catch {
-    await fs.writeFile(gitignore, '/artifacts/\n');
-  }
-
-  const claimsFile = path.join(context.taskDir, 'claims.json');
-  try {
-    await fs.access(claimsFile);
-  } catch {
-    await writeJson(claimsFile, {
-      schemaVersion: CLAIMS_SCHEMA,
-      task: bindingForTask(task),
-      claims: [],
-    });
-  }
-
-  const auditsFile = path.join(context.taskDir, 'audits.md');
-  try {
-    await fs.access(auditsFile);
-  } catch {
-    await fs.writeFile(
-      auditsFile,
-      `# 单任务审计\n\n- taskId：${task.taskId}\n- revision：${task.revision}\n- taskHash：${taskHash(task)}\n`,
-    );
-  }
 }
 
 function parseNullPaths(buffer) {
@@ -690,14 +848,15 @@ async function snapshotTarget(context, task, execution) {
     }
     const rangePaths = commitRangePaths(context.repoRoot, baseCommit, headCommit);
     assertBoundary(rangePaths, task, execution, context, 'commit range');
-    const dirtyPaths = changedPathsFrom(context.repoRoot, headCommit).filter((item) => !isInsideTaskDir(item, context));
+    const dirtyPaths = changedPathsFrom(context.repoRoot, headCommit);
+    assertBoundary(dirtyPaths, task, execution, context, 'worktree changes');
     if (dirtyPaths.length > 0) {
       throw gateError(`committed target has additional worktree changes: ${dirtyPaths.join(', ')}`);
     }
     return { kind: 'commit-range', baseCommit, headCommit, executionHash: currentExecutionHash };
   }
 
-  const changedPaths = changedPathsFrom(context.repoRoot, baseCommit).filter((item) => !isInsideTaskDir(item, context));
+  const changedPaths = changedPathsFrom(context.repoRoot, baseCommit);
   assertBoundary(changedPaths, task, execution, context, 'worktree target');
   if (changedPaths.length === 0) return { kind: 'no-change', baseCommit, executionHash: currentExecutionHash };
   if (task.commitPolicy === 'required') {
@@ -1059,45 +1218,48 @@ async function closeCheck(context, task, execution, delivery) {
 
 function printUsage() {
   process.stderr.write(
-    '用法：deliver-task.mjs <validate-task|task-hash|prepare-workspace|init|validate-execution|snapshot-target|validate-result|close-check> <taskDir> [--workspace <path>]\n',
+    '用法：deliver-task.mjs start <repo> - [--workspace <path>]\n'
+      + '      deliver-task.mjs <task-hash|validate-execution|snapshot-target|validate-result|close-check> <task-worktree>/.dev-task\n',
   );
 }
 
 async function main() {
-  const [command, taskDirArg, ...extra] = process.argv.slice(2);
-  if (!command || !taskDirArg) throw usageError('invalid arguments');
-  const sourceContext = await resolveContext(taskDirArg);
-  const task = await readTask(sourceContext);
+  const [command, ...args] = process.argv.slice(2);
+  if (!command) throw usageError('invalid arguments');
 
-  if (command === 'validate-task') {
-    if (extra.length > 0) throw usageError('validate-task does not accept extra arguments');
-    process.stdout.write('task.json: passed\n');
-    return;
-  }
-  if (command === 'task-hash') {
-    if (extra.length > 0) throw usageError('task-hash does not accept extra arguments');
-    process.stdout.write(`${taskHash(task)}\n`);
-    return;
-  }
-  if (command === 'prepare-workspace') {
-    if (extra.length !== 0 && !(extra.length === 2 && extra[0] === '--workspace')) {
-      throw usageError('prepare-workspace accepts only optional --workspace <path>');
+  if (command === 'start') {
+    const [repoArg, stdinMarker, ...extra] = args;
+    if (!repoArg || stdinMarker !== '-') {
+      throw usageError('start requires <repo> and - for stdin task contract');
     }
-    const record = await prepareWorkspace(sourceContext, task, extra[1]);
-    process.stdout.write(`${JSON.stringify(record, null, 2)}\n`);
+    if (extra.length !== 0 && !(extra.length === 2 && extra[0] === '--workspace' && extra[1])) {
+      throw usageError('start accepts only optional --workspace <path>');
+    }
+    const repoRoot = await resolveRepositoryRoot(repoArg);
+    const task = validateTask(await readTaskContractFromStdin(), repoRoot);
+    const output = await startTask(repoRoot, task, extra[1]);
+    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
     return;
   }
-  if (extra.length > 0) throw usageError(`${command} does not accept extra arguments`);
-  if (!new Set(['init', 'validate-execution', 'snapshot-target', 'validate-result', 'close-check']).has(command)) {
+
+  const taskCommands = new Set([
+    'task-hash',
+    'validate-execution',
+    'snapshot-target',
+    'validate-result',
+    'close-check',
+  ]);
+  if (!taskCommands.has(command)) {
     throw usageError(`unknown command: ${command}`);
   }
-  if (command === 'init') {
-    await prepareWorkspace(sourceContext, task);
-  }
+  const [taskDirArg, ...extra] = args;
+  if (!taskDirArg) throw usageError(`${command} requires taskDir`);
+  if (extra.length > 0) throw usageError(`${command} does not accept extra arguments`);
+  const sourceContext = await resolveContext(taskDirArg);
+  const task = await readTask(sourceContext);
   const context = await readWorkspaceContext(sourceContext, task);
-  if (command === 'init') {
-    await initTask(context, task);
-    process.stdout.write(`${context.taskDir}: initialized\n`);
+  if (command === 'task-hash') {
+    process.stdout.write(`${taskHash(task)}\n`);
     return;
   }
   if (command === 'validate-execution') {
