@@ -10,10 +10,13 @@
 ├── audits.md          # preflight / validation / review / acceptance / repair 审计真源
 ├── delivery.json      # 薄结果合同
 ├── .gitignore         # 忽略 /artifacts/
-└── artifacts/         # 可重建 brief/report/target/review package
+└── artifacts/         # 当前运行定位与可重建 brief/report/target/review package
+    └── workspace.json # 绑定 task-scoped workspace 的本地 locator
 ```
 
-业务代码继续位于项目原路径。rules-review run 继续由 `rules-review` 写入自己的协议目录。
+`taskDir` 保存合同和证据，可以继续位于 caller workspace；业务代码只在
+`artifacts/workspace.json` 指向的 task workspace 中保持项目原相对路径。两个目录不是同一个
+状态世界。rules-review run 继续由 `rules-review` 写入自己的协议目录。
 
 ## task.json
 
@@ -26,8 +29,8 @@
   "revision": 1,
   "caller": {
     "kind": "delegated",
-    "name": "sliced-dev",
-    "ref": "dev-plans/example/plan.md#S1"
+    "name": "to-tickets",
+    "ref": "tickets/ISSUE-123"
   },
   "objective": "一个明确交付目标",
   "acceptanceCriteria": ["可观察验收条件"],
@@ -56,6 +59,42 @@ acceptance policy 变化时才递增 revision。执行路径选择和实际验�
 task identity。旧 task identity 下的证据不会自动证明新合同；controller 必须重新判断
 哪些证据可引用，并在 `audits.md` 留 provenance。
 
+## artifacts/workspace.json
+
+`schemaVersion = deliver-task.workspace.v1`，是当前 task 的本地 workspace locator：
+
+```json
+{
+  "schemaVersion": "deliver-task.workspace.v1",
+  "task": {
+    "taskId": "fix-slug-whitespace",
+    "revision": 1,
+    "taskHash": "sha256:..."
+  },
+  "kind": "git-worktree",
+  "workspacePath": "/absolute/path/to/task-worktree",
+  "branch": "refs/heads/deliver-task/fix-slug-whitespace-r1-0123456789ab",
+  "baseCommit": "完整 Git commit OID"
+}
+```
+
+- `kind` 只允许 `provided / git-worktree`。运行环境或 caller 提供的 isolated workspace
+  使用 `provided`；脚本 fallback 使用 `git-worktree`。
+- `workspacePath` 是 canonical absolute Git root。`branch` 是完整 `refs/heads/...` 或
+  `null`；脚本创建的 Git worktree 必须有 branch。
+- 首次绑定的 provided workspace 必须 `HEAD == task.baseCommit`，且 taskDir 之外没有
+  tracked/untracked 业务修改。fallback 总是从该 base 创建。
+- 后续 `HEAD` 可以随着当前任务提交向前移动，但必须保持 base 祖先关系和 branch identity。
+- locator 绑定当前 task identity，却不进入 task、execution 或 target hash；绝对路径不是
+  可移植交付 identity，也不形成 workspace revision、历史链或状态机。
+- upstream 显式递增同一 `taskId` 的 task revision 后，新 identity 建立新的 workspace 并覆盖
+  当前 locator；旧 worktree 保留但不再被当前任务使用。同 revision 只改变 task hash 时拒绝，
+  防止绕过 revision 规则静默换合同。
+- 脚本创建的 locator 丢失时，可按 task identity 对应的 branch 重新发现已注册 worktree。
+  不自动清理 worktree，也不自动 merge、cherry-pick、rebase、push 或 publish。
+- `execution.json` 不增加 `baselineDirtyPaths`、dirty hash 或 attribution history。caller
+  workspace 的 dirty/HEAD 不属于 task workspace，因而不需要被解释。
+
 ## execution.json
 
 `schemaVersion = deliver-task.execution.v1`，只接受以下字段：
@@ -74,8 +113,8 @@ task identity。旧 task identity 下的证据不会自动证明新合同；cont
 }
 ```
 
-- caller 不创建或填写 `execution.json`。deliver-task 在读取真实代码、直接消费者、相关
-  测试、AGENTS/rules 和 Git 状态后创建，并用非空 `evidenceRefs` 指向形成边界的
+- caller 不创建或填写 `execution.json`。deliver-task 在已绑定 task workspace 中读取真实
+  代码、直接消费者、相关测试、AGENTS/rules 和 Git 状态后创建，并用非空 `evidenceRefs` 指向形成边界的
   task-owned 审计证据。
 - `allowedPaths` 非空；两组路径使用与 task 相同的规范化仓库相对格式。
 - 有效禁止范围是 `task.forbiddenPaths ∪ execution.forbiddenPaths`；允许范围只读取
@@ -216,8 +255,10 @@ task identity。旧 task identity 下的证据不会自动证明新合同；cont
 
 ## artifacts
 
-这些文件是可重建的注意力收束视图，不进入 `delivery.json`：
+这些文件是当前运行定位或可重建的注意力收束视图，不进入 `delivery.json`：
 
+- `workspace.json`：当前 task workspace 的本地 locator；脚本 fallback 可按 task branch
+  重建，运行期间不得随意删除 caller/native workspace 的唯一定位信息；
 - `task-brief.md`：task、当前 execution、preflight、claims、selected execution rules、修复输入；
 - `task-report.json`：implementer 的 changed files、验证 handoff、blocked 原因；
 - `target.json`：`snapshot-target` 输出；

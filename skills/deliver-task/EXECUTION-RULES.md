@@ -1,8 +1,22 @@
 # 单任务执行与保证规则
 
+## Workspace 建立
+
+读取并校验 `task.json`、固定 `task.baseCommit` 后，在读取任何业务代码、项目规则或执行
+preflight 之前运行 `prepare-workspace`。caller/运行环境已提供适合当前任务的 isolated
+workspace 时显式绑定该路径；否则从 base 创建 task-scoped Git worktree。只有命令返回的
+`workspacePath` 是本任务的业务执行根目录。
+
+task workspace 建立后使用 snapshot-at-start 语义：caller workspace 后续出现 dirty、修改
+同一逻辑文件、产生新 commit 或切换分支，都不改变当前 base、execution、target 或已有
+evidence。不得在执行中自动 refresh base、同步文件、rebase、merge 或切回 caller workspace
+读取“更新版本”。upstream 明确要求吸收新基线时，按 immutable task contract change 回流，
+不能偷偷更新当前任务。
+
 ## 上下文预检
 
-实现前读取 task、项目入口、直接消费者、相关测试、适用 AGENTS/rules 和当前 Git 状态。在 `audits.md` 明确：
+在 task workspace 中读取项目入口、直接消费者、相关测试、适用 AGENTS/rules 和该 workspace
+的 Git 状态。在 `audits.md` 明确：
 
 - 需要理解与已读上下文；
 - deliver-task 拟定的允许修改、执行禁止范围、task 用户禁止范围、非目标、停止条件；
@@ -22,7 +36,7 @@ controller 在 `artifacts/task-brief.md` 投影当前 task identity、execution 
 
 - changed files 与真实 staged/unstaged/untracked 路径一致；
 - 全部业务变化属于 `execution.allowedPaths`，且不命中 `task.forbiddenPaths ∪ execution.forbiddenPaths`；
-- 不修改 task durable state、caller state 或已有无关改动；
+- 不修改 task durable state、caller state 或 task workspace 之外的文件；
 - task report 的验证结果可复验；
 - claims 只按当前证据推进，不提前写下游通过。
 
@@ -34,12 +48,18 @@ controller 在 `artifacts/task-brief.md` 投影当前 task identity、execution 
 
 按 commitPolicy 固定 target：
 
-- `required`：controller 只 stage task report 与真实 task-owned 业务文件精确对应的路径，确认无未暂存残余、额外 staged、rename 逃逸或基线重叠后，创建普通业务 commit；返修追加 commit，不重写旧提交。
+- `required`：controller 只在 task workspace stage 与 task report 精确对应的真实业务路径，确认无未暂存残余、额外 staged 或 rename 逃逸后，创建普通业务 commit；返修追加 commit，不重写旧提交。
 - `allowed`：选择 commit 时执行同一边界；不提交时保留完整 worktree snapshot。
 - `forbidden`：保持 `HEAD == baseCommit`，不创建 commit。
 - 无业务变化不创建空 commit，使用 `no-change`。
 
-task directory 的 durable/generated artifacts 不能混入业务 commit range。`snapshot-target` 从当前 `execution.json` 读取 allowlist，合并 task/execution 两层 forbidden paths，并把 canonical execution hash 写入 target identity。它只检查确定性的 Git identity、路径边界和内容 hash，不判断业务正确性。
+task directory 的 durable/generated artifacts 不能混入业务 commit range。`snapshot-target`
+只读取 workspace locator 绑定的 task workspace，从当前 `execution.json` 读取 allowlist，合并
+task/execution 两层 forbidden paths，并把 canonical execution hash 写入 target identity。
+commit-range target 由该 workspace 中的固定 Git objects `baseCommit..headCommit` 决定；caller
+workspace 的 HEAD 和 dirty 不参与 snapshot 或 freshness。task workspace 自身在 commit 后仍有
+应进入业务提交的 dirty 时继续失败。脚本只检查确定性的 workspace/task 绑定、Git identity、
+路径边界和内容 hash，不判断业务正确性。
 
 ## General Review
 
@@ -74,7 +94,7 @@ General clean 后读取 `task.acceptancePolicy`：
 - `ready_for_merge` 才是 clean；`must_fix_before_merge / should_review_before_merge` 产生 finding，`manual_verification_required / review_incomplete / review_blocked` 产生 cannot-verify/blocked；
 - 默认 SHOULD 整组接受与“零已知缺陷收口”继续使用当前语义，不在本 skill 重新定义风险等级或压缩审查深度。
 
-规则 finding 只向前进入 task repair，不回写历史 preflight。新 target 先重新取得累计 General clean，再执行 fresh full；只有当前 `sliced-dev` 单片协议原本允许的“直接前序 full + 当前一跳 repair verification”条件全部成立时才可使用该组合，不能递归继承或把 verification 冒充 full run。
+规则 finding 只向前进入 task repair，不回写历史 preflight。新 target 先重新取得累计 General clean，再执行 fresh full；只有当前单任务协议允许的“直接前序 full + 当前一跳 repair verification”条件全部成立时才可使用该组合，不能递归继承或把 verification 冒充 full run。
 
 `rules-review` 当前只接受 commit TARGET。若 `allowed` 选择未提交或 `forbidden`，且 active catalog 非空导致必要 rules-review 无法运行，返回 `needs-upstream / authorization-change`；不擅自提交、不把规则审查标为 not-applicable。
 
@@ -100,3 +120,7 @@ General clean 后读取 `task.acceptancePolicy`：
 - 没有 caller lifecycle 写入。
 
 `close-check` 只检查机器可判定的闭包，不判断 claim 真实性、测试充分性、finding 正确性、规则适用性或用户确认真实性。
+
+收口只返回稳定 target、task workspace/branch identity 和证据引用。worktree 清理以及把
+`baseCommit..headCommit` 集成到 caller branch，属于用户或上层 caller 的后续动作；deliver-task
+不自动 merge、cherry-pick、rebase、push 或 publish。

@@ -1,6 +1,6 @@
 ---
 name: deliver-task
-description: Use when 用户或上游 skill 已提供边界明确的软件开发任务，需要在不创建正式多任务计划的前提下完成实现、验证、独立审查、返修和交付结果收口。
+description: Use when 用户或上游 skill 已提供边界明确的软件开发任务，需要在 task-scoped isolated workspace 中完成实现、验证、提交、独立审查、返修和交付结果收口。
 disable-model-invocation: true
 ---
 
@@ -8,11 +8,11 @@ disable-model-invocation: true
 
 ## 第一原则
 
-完成一个任务，返回一个交付结果；不接管 caller 的生命周期。
+在 task-scoped isolated workspace 中完成一个任务，返回一个交付结果；不接管 caller 的生命周期，也不负责把结果集成回 caller workspace。
 
 - 输入是一个已明确目标、验收、约束、用户禁止范围和调用策略的开发任务；具体执行路径由本 skill 读取真实上下文后确定。
 - 输出只是一份 `delivered / needs-upstream / needs-reslice / blocked` 单任务结果。
-- 只写 task-owned directory 和任务授权的业务文件；不写 caller 的 plan、slice 状态、当前指针、P/K/F 或最终 closure。
+- task-owned directory 只保存合同、证据和本地执行定位；业务代码只在当前 task workspace 内读写。不写 caller 的 plan、任务编排状态或最终 closure。
 - 可以自行安排任务内部的实现步骤；不创建或管理正式多任务计划。
 - 发现多个可独立验收、独立交付的工作单元时，立即返回 `needs-reslice`，不把它们伪装成内部步骤继续执行。
 - 目标、验收、公共契约、用户禁止范围、调用策略或用户判断需要变化时，立即返回 `needs-upstream`。直接调用时用户就是 upstream；由其它 skill 委托时只向 caller 回流，不越过 caller 直接询问用户。
@@ -23,24 +23,33 @@ disable-model-invocation: true
 
 - 直接调用：默认使用 `dev-tasks/YYYY-MM-DD-<slug>/`；根据用户原始任务写入 `task.json`，`caller` 固定为 `{ "kind": "direct" }`。
 - 上游委托：使用 caller 提供的 task directory；caller 写 `task.json`，使用通用 `{ "kind": "delegated", "name", "ref" }`，本 skill 不修改 caller 状态文件。
-- `sliced-dev` 委托只是通用 delegated caller 的一个实例：目录固定在该 plan 的 `deliveries/<taskId>/`，`name=sliced-dev`，`commitPolicy=required`。
 - caller 只提供 immutable task contract，不填写 `execution.json`。deliver-task 在 preflight 后创建和维护该文件。
 
 开始时运行：
 
 ```bash
 node <deliver-task-skill-dir>/scripts/deliver-task.mjs validate-task <taskDir>
+node <deliver-task-skill-dir>/scripts/deliver-task.mjs prepare-workspace <taskDir>
 node <deliver-task-skill-dir>/scripts/deliver-task.mjs init <taskDir>
 ```
 
-`init` 只能在 task directory 内创建 `claims.json`、`audits.md`、`.gitignore` 和
-`artifacts/`，不会替 caller 预填 `execution.json`。任何 caller 状态变化都由 caller 在收到结果后决定。
+如果 caller 或运行环境已经提供从 `task.baseCommit` 开始、业务区干净且只属于当前任务的 isolated workspace，第二条命令改为：
+
+```bash
+node <deliver-task-skill-dir>/scripts/deliver-task.mjs prepare-workspace <taskDir> --workspace <workspacePath>
+```
+
+否则脚本从 `task.baseCommit` 创建 task-scoped Git worktree。`prepare-workspace` 输出的
+`workspacePath` 是后续 preflight、实现、验证和提交的唯一业务工作目录；不得继续从 caller
+workspace 读取业务代码。`init` 只初始化 task-owned 合同/证据文件；若调用方漏掉显式
+prepare，它会先建立默认隔离 worktree，但正常流程不得依赖这个兜底来延后 workspace 切换。
+任何 caller 状态变化都由 caller 在收到结果后决定。
 
 ## 开始前判断
 
 按以下顺序做一次公开、可审计的判断：
 
-1. 读取 `task.json`、必要代码上下文、当前工作区状态和适用项目 rules。
+1. 只在已绑定的 task workspace 中读取必要代码上下文、Git 状态和适用项目 rules；caller workspace 的 HEAD、dirty 和同名文件都不是本任务上下文。
 2. 区分实现步骤与独立工作单元：
    - 多个步骤共同完成同一验收结果，可在任务内部安排；
    - 任一部分可独立验收、独立发布或失败后不阻塞另一部分，返回 `needs-reslice`。
@@ -70,7 +79,8 @@ Git 提交是调用策略，不是 `delivered` 的普遍定义。
 
 - `required` 表示 caller 已授权本任务创建业务 commit，不需要再次询问同一权限。
 - `allowed` 未选择提交或 `forbidden` 本身不产生 `needs-upstream`。
-- `push / merge / publish` 永远不属于默认能力。
+- `rebase / merge / cherry-pick / push / publish` 和把 task branch 集成回 caller workspace 永远不属于 deliver-task。
+- workspace 建立后固定 `baseCommit`；caller workspace 后续 dirty、提交或分支移动都不触发 refresh、同步或 evidence stale。只有 upstream 明确改变 task contract/base 时才建立新 task identity。
 - 若适用的既有审查工具只接受 commit TARGET，而 `forbidden` 使必要审查无法执行，记录能力冲突并返回 `needs-upstream`；不得静默跳过审查或擅自改变 policy。
 
 提交或保留工作区结果后，运行：
@@ -86,7 +96,7 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
 完整执行规则见 [EXECUTION-RULES.md](EXECUTION-RULES.md)。固定顺序是：
 
 1. 生成 `artifacts/task-brief.md` 和默认 blocked 的 `artifacts/task-report.json`。
-2. 按 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 派发 fresh implementer；共享工作区同时只允许一个业务文件 writer。
+2. 按 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 派发 fresh implementer；task workspace 同时只允许一个业务文件 writer。
 3. 接收后按当前 `execution.json` 及 task/execution 两层 forbidden paths 核对实际 diff、task report 和 claims，运行任务验证。
 4. 按 `commitPolicy` 固定 commit range、worktree snapshot 或 no-change target。
 5. 生成绑定 task、execution、target 三个 identity 的 review package，按 [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md) 派发独立 General Review。
@@ -113,7 +123,7 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
 | `needs-reslice` | 当前合同实际含多个独立工作单元 | `reslice` |
 | `blocked` | 合同不变时仍因环境、工具或不可恢复条件无法完成 | `blocker` |
 
-`delivered` 只表示这个任务已交付，不表示 caller 的 slice done、计划完成、可 merge、可发布或整体 closure。
+`delivered` 只表示这个任务在固定 `baseCommit` 与 task workspace 中已交付，不表示 caller 的计划完成、已集成、可 merge、可发布或整体 closure。
 
 ## 收口
 
@@ -142,4 +152,4 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs close-check <taskDir>
 
 机器只检查 schema、task/execution/target binding、Git target、路径边界、引用存在和明确终态；不判断实现正确性、证据强度、reviewer 判断、验收理由或规则语义。命令细节见 [SCRIPTS.md](SCRIPTS.md)。
 
-最终只向 upstream 返回：result、`delivery.json` 路径、target 摘要、关键 evidence refs 和需要 upstream 决定的下一步。不要替 upstream 写状态。
+最终只向 upstream 返回：result、`delivery.json` 路径、target 摘要、task workspace 路径与 branch identity、关键 evidence refs 和需要 upstream 决定的下一步。不要替 upstream 写状态，也不要自动清理或集成 task worktree。

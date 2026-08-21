@@ -3,9 +3,11 @@
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 const TASK_SCHEMA = 'deliver-task.task.v1';
+const WORKSPACE_SCHEMA = 'deliver-task.workspace.v1';
 const EXECUTION_SCHEMA = 'deliver-task.execution.v1';
 const CLAIMS_SCHEMA = 'deliver-task.claims.v1';
 const DELIVERY_SCHEMA = 'deliver-task.delivery.v1';
@@ -24,6 +26,7 @@ const UPSTREAM_KINDS = new Set([
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
 const TASK_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const GIT_OID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const WORKSPACE_KINDS = new Set(['provided', 'git-worktree']);
 
 class UsageError extends Error {}
 class GateError extends Error {}
@@ -157,6 +160,21 @@ async function readJson(file, label) {
   }
 }
 
+async function readOptionalJson(file, label) {
+  let source;
+  try {
+    source = await fs.readFile(file, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw gateError(`${label} missing or unreadable: ${error.message}`);
+  }
+  try {
+    return JSON.parse(source);
+  } catch (error) {
+    throw gateError(`${label} must be valid JSON: ${error.message}`);
+  }
+}
+
 async function writeJson(file, value) {
   await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
 }
@@ -232,7 +250,13 @@ function validateTask(task, repoRoot) {
   assertStringArray(task.nonGoals, 'task.nonGoals');
   assertStringArray(task.forbiddenPaths, 'task.forbiddenPaths');
   task.forbiddenPaths.forEach((item, index) => normalizeRepoPattern(item, `task.forbiddenPaths[${index}]`));
-  resolveCommit(repoRoot, task.baseCommit, 'task.baseCommit');
+  if (!GIT_OID_RE.test(task.baseCommit || '')) {
+    throw gateError('task.baseCommit must be a full Git commit OID');
+  }
+  const baseCommit = resolveCommit(repoRoot, task.baseCommit, 'task.baseCommit');
+  if (baseCommit !== task.baseCommit) {
+    throw gateError('task.baseCommit must identify the commit object directly');
+  }
   if (!COMMIT_POLICIES.has(task.commitPolicy)) {
     throw gateError(`task.commitPolicy must be one of ${[...COMMIT_POLICIES].join(', ')}`);
   }
@@ -265,6 +289,209 @@ function validateBinding(binding, task, label) {
   ) {
     throw gateError(`${label} has stale task binding; expected ${expected.taskId}@${expected.revision} ${expected.taskHash}`);
   }
+}
+
+function workspaceRecordPath(context) {
+  return path.join(context.taskDir, 'artifacts', 'workspace.json');
+}
+
+async function resolveWorkspaceRoot(candidate) {
+  const requested = path.resolve(candidate);
+  let stat;
+  try {
+    stat = await fs.lstat(requested);
+  } catch {
+    throw gateError(`workspace directory missing: ${candidate}`);
+  }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw gateError(`workspace must be a real directory: ${candidate}`);
+  }
+  const root = git(requested, ['rev-parse', '--show-toplevel']).trim();
+  return fs.realpath(root);
+}
+
+function currentBranchRef(root) {
+  try {
+    return execFileSync('git', ['symbolic-ref', '-q', 'HEAD'], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function validateWorkspaceRecord(record, task) {
+  assertExactObject(
+    record,
+    ['schemaVersion', 'task', 'kind', 'workspacePath', 'branch', 'baseCommit'],
+    [],
+    'workspace.json',
+  );
+  if (record.schemaVersion !== WORKSPACE_SCHEMA) {
+    throw gateError(`workspace.schemaVersion must be ${WORKSPACE_SCHEMA}`);
+  }
+  validateBinding(record.task, task, 'workspace.task');
+  if (!WORKSPACE_KINDS.has(record.kind)) {
+    throw gateError(`workspace.kind must be one of ${[...WORKSPACE_KINDS].join(', ')}`);
+  }
+  assertString(record.workspacePath, 'workspace.workspacePath');
+  if (!path.isAbsolute(record.workspacePath)) {
+    throw gateError('workspace.workspacePath must be absolute');
+  }
+  if (record.branch !== null) {
+    if (typeof record.branch !== 'string' || !/^refs\/heads\/[^\s]+$/.test(record.branch)) {
+      throw gateError('workspace.branch must be null or a full refs/heads ref');
+    }
+  }
+  if (record.kind === 'git-worktree' && record.branch === null) {
+    throw gateError('git-worktree workspace requires a branch');
+  }
+  if (record.baseCommit !== task.baseCommit) {
+    throw gateError('workspace.baseCommit must equal task.baseCommit');
+  }
+
+  const workspaceRoot = await resolveWorkspaceRoot(record.workspacePath);
+  if (workspaceRoot !== record.workspacePath) {
+    throw gateError(`workspace.workspacePath must be the canonical Git root ${workspaceRoot}`);
+  }
+  const baseCommit = resolveCommit(workspaceRoot, task.baseCommit, 'task.baseCommit in workspace');
+  const headCommit = resolveCommit(workspaceRoot, 'HEAD', 'workspace HEAD');
+  if (!isAncestor(workspaceRoot, baseCommit, headCommit)) {
+    throw gateError('workspace HEAD must descend from task.baseCommit');
+  }
+  if (currentBranchRef(workspaceRoot) !== record.branch) {
+    throw gateError('workspace branch identity changed');
+  }
+  return { record, workspaceRoot };
+}
+
+async function readWorkspaceContext(context, task) {
+  const record = await readOptionalJson(workspaceRecordPath(context), 'artifacts/workspace.json');
+  if (record === null) {
+    throw gateError('task workspace is not prepared; run prepare-workspace before preflight');
+  }
+  const { workspaceRoot } = await validateWorkspaceRecord(record, task);
+  return {
+    ...context,
+    repoRoot: workspaceRoot,
+    workspace: record,
+  };
+}
+
+function workspaceBranch(task) {
+  return `deliver-task/${task.taskId}-r${task.revision}-${taskHash(task).slice('sha256:'.length, 'sha256:'.length + 12)}`;
+}
+
+function gitRefExists(root, reference) {
+  try {
+    execFileSync('git', ['show-ref', '--verify', '--quiet', reference], {
+      cwd: root,
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function worktreePathForBranch(root, branch) {
+  const blocks = git(root, ['worktree', 'list', '--porcelain']).trim().split(/\n\n+/);
+  for (const block of blocks) {
+    const lines = block.split('\n');
+    const worktreeLine = lines.find((line) => line.startsWith('worktree '));
+    const branchLine = lines.find((line) => line.startsWith('branch '));
+    if (worktreeLine && branchLine === `branch ${branch}`) {
+      return worktreeLine.slice('worktree '.length);
+    }
+  }
+  return null;
+}
+
+function hasPriorWorkspaceBinding(record, task) {
+  if (!isPlainObject(record) || record.schemaVersion !== WORKSPACE_SCHEMA) return false;
+  try {
+    validateBindingShape(record.task, 'workspace.task');
+  } catch {
+    return false;
+  }
+  return record.task.taskId === task.taskId && record.task.revision < task.revision;
+}
+
+async function prepareWorkspace(context, task, providedPath) {
+  const target = workspaceRecordPath(context);
+  let existing = await readOptionalJson(target, 'artifacts/workspace.json');
+  if (existing !== null && hasPriorWorkspaceBinding(existing, task)) existing = null;
+  if (existing !== null) {
+    const { record, workspaceRoot } = await validateWorkspaceRecord(existing, task);
+    if (providedPath) {
+      const requestedWorkspace = await resolveWorkspaceRoot(providedPath);
+      if (requestedWorkspace !== workspaceRoot) {
+        throw gateError('prepared workspace does not match --workspace');
+      }
+    }
+    return record;
+  }
+
+  let kind;
+  let workspacePath;
+  let branch;
+  if (providedPath) {
+    kind = 'provided';
+    workspacePath = await resolveWorkspaceRoot(providedPath);
+    const headCommit = resolveCommit(workspacePath, 'HEAD', 'provided workspace HEAD');
+    if (headCommit !== task.baseCommit) {
+      throw gateError('new provided workspace must start exactly at task.baseCommit');
+    }
+    const dirtyPaths = changedPathsFrom(workspacePath, headCommit)
+      .filter((repoPath) => !isInsideTaskDir(repoPath, context));
+    if (dirtyPaths.length > 0) {
+      throw gateError(`new provided workspace must be clean outside taskDir: ${dirtyPaths.join(', ')}`);
+    }
+    branch = currentBranchRef(workspacePath);
+  } else {
+    kind = 'git-worktree';
+    const shortBranch = workspaceBranch(task);
+    branch = `refs/heads/${shortBranch}`;
+    const registeredPath = worktreePathForBranch(context.repoRoot, branch);
+    if (registeredPath) {
+      workspacePath = await fs.realpath(registeredPath);
+      if (workspacePath === context.repoRoot) {
+        throw gateError('task branch is checked out in the source workspace and cannot be reused as isolated');
+      }
+    } else {
+      if (gitRefExists(context.repoRoot, branch)) {
+        const branchCommit = resolveCommit(context.repoRoot, branch, 'existing task workspace branch');
+        if (!isAncestor(context.repoRoot, task.baseCommit, branchCommit)) {
+          throw gateError('existing task workspace branch does not descend from task.baseCommit');
+        }
+      }
+      workspacePath = await fs.mkdtemp(path.join(os.tmpdir(), `deliver-task-${task.taskId}-`));
+      try {
+        git(context.repoRoot, gitRefExists(context.repoRoot, branch)
+          ? ['worktree', 'add', '-q', workspacePath, shortBranch]
+          : ['worktree', 'add', '-q', '-b', shortBranch, workspacePath, task.baseCommit]);
+      } catch (error) {
+        await fs.rmdir(workspacePath).catch(() => {});
+        throw error;
+      }
+      workspacePath = await fs.realpath(workspacePath);
+    }
+  }
+
+  const record = {
+    schemaVersion: WORKSPACE_SCHEMA,
+    task: bindingForTask(task),
+    kind,
+    workspacePath,
+    branch,
+    baseCommit: task.baseCommit,
+  };
+  await validateWorkspaceRecord(record, task);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await writeJson(target, record);
+  return record;
 }
 
 async function validateExecution(execution, task, context) {
@@ -335,7 +562,8 @@ function parseNullPaths(buffer) {
 }
 
 function isInsideTaskDir(repoPath, context) {
-  return repoPath === context.relativeTaskDir || repoPath.startsWith(`${context.relativeTaskDir}/`);
+  return context.relativeTaskDir !== null
+    && (repoPath === context.relativeTaskDir || repoPath.startsWith(`${context.relativeTaskDir}/`));
 }
 
 function changedPathsFrom(root, revision) {
@@ -789,24 +1017,42 @@ async function closeCheck(context, task, execution, delivery) {
 
 function printUsage() {
   process.stderr.write(
-    '用法：deliver-task.mjs <init|validate-task|task-hash|validate-execution|snapshot-target|validate-result|close-check> <taskDir>\n',
+    '用法：deliver-task.mjs <validate-task|task-hash|prepare-workspace|init|validate-execution|snapshot-target|validate-result|close-check> <taskDir> [--workspace <path>]\n',
   );
 }
 
 async function main() {
   const [command, taskDirArg, ...extra] = process.argv.slice(2);
-  if (!command || !taskDirArg || extra.length > 0) throw usageError('invalid arguments');
-  const context = await resolveContext(taskDirArg);
-  const task = await readTask(context);
+  if (!command || !taskDirArg) throw usageError('invalid arguments');
+  const sourceContext = await resolveContext(taskDirArg);
+  const task = await readTask(sourceContext);
 
   if (command === 'validate-task') {
+    if (extra.length > 0) throw usageError('validate-task does not accept extra arguments');
     process.stdout.write('task.json: passed\n');
     return;
   }
   if (command === 'task-hash') {
+    if (extra.length > 0) throw usageError('task-hash does not accept extra arguments');
     process.stdout.write(`${taskHash(task)}\n`);
     return;
   }
+  if (command === 'prepare-workspace') {
+    if (extra.length !== 0 && !(extra.length === 2 && extra[0] === '--workspace')) {
+      throw usageError('prepare-workspace accepts only optional --workspace <path>');
+    }
+    const record = await prepareWorkspace(sourceContext, task, extra[1]);
+    process.stdout.write(`${JSON.stringify(record, null, 2)}\n`);
+    return;
+  }
+  if (extra.length > 0) throw usageError(`${command} does not accept extra arguments`);
+  if (!new Set(['init', 'validate-execution', 'snapshot-target', 'validate-result', 'close-check']).has(command)) {
+    throw usageError(`unknown command: ${command}`);
+  }
+  if (command === 'init') {
+    await prepareWorkspace(sourceContext, task);
+  }
+  const context = await readWorkspaceContext(sourceContext, task);
   if (command === 'init') {
     await initTask(context, task);
     process.stdout.write(`${context.taskDir}: initialized\n`);
@@ -833,7 +1079,6 @@ async function main() {
     process.stdout.write('deliver-task close-check: passed\n');
     return;
   }
-  throw usageError(`unknown command: ${command}`);
 }
 
 main().catch((error) => {
