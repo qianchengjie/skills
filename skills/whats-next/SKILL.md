@@ -12,7 +12,7 @@ description: 开发事项中不确定下一步做什么、该由哪个 skill 或
 固定输出：
 
 ```markdown
-- 责任归属：<执行层 | 集成层 | Spec 层 | 探索层 | 规则层>
+- 责任归属：<执行层 | 规划层 | 集成层 | Spec 层 | 探索层 | 规则层>
 - 判断依据：<当前状态需要哪一层继续，或哪一层的真源 / 执行结果有问题>
 - 推荐下一步：<具体 skill 和必要的后续顺序>
 - 动作：stop
@@ -28,6 +28,7 @@ description: 开发事项中不确定下一步做什么、该由哪个 skill 或
 | 需求已经明确，但尚未形成可执行 Spec，或当前 Spec 写错 | Spec 层 | 用 `to-spec` 形成或修正 Spec；完成后进入 `deliver-task` |
 | Spec 已明确且正确，下一步是实现或验证 | 执行层 | 用 `deliver-task` 完成单任务交付 |
 | 代码、任务或验证有问题 | 执行层 | 用 `deliver-task` 完成修复与交付 |
+| `deliver-task` 已返回 `needs-reslice / reslice`，当前合同实际含多个可独立交付单元 | 规划层 | 用 `to-tickets` 根据原 Spec、任务合同和回流证据拆成多个 bounded tickets；确认后每个 ticket 分别进入 `deliver-task` |
 | `deliver-task` 已返回 `delivered`，需要处理本地集成或 task worktree / branch 收尾 | 集成层 | 用 `integrate-delivery` 处理固定交付结果 |
 | 代码违反当前有效规则 | 执行层 | 用 `deliver-task` 完成边界明确的修复、验证与适用审查 |
 | 规则定义本身错误 | 规则层 | 用 `rule-steward` 修正规则；完成后进入 `deliver-task` |
@@ -45,7 +46,7 @@ description: 开发事项中不确定下一步做什么、该由哪个 skill 或
 - 用局部兼容迁就错误上游；
 - 新增 revision、baseline hash、invalidation ledger、状态机、影响图、版本关系或受影响切片计算。
 
-上游 owner 修正后，如果下一步是边界明确的软件开发任务，交给 `deliver-task`；只有 `deliver-task` 返回 `delivered` 且需要本地集成或收尾时，才交给 `integrate-delivery`。`deliver-task` 不负责把结果集成回 caller workspace，`integrate-delivery` 不接管任务实现或返修。
+上游 owner 修正后，如果下一步是边界明确的软件开发任务，交给 `deliver-task`。`needs-reslice` 只回流到规划层，不表示 Spec 错误或需求重新出现分叉，也不由 Router 或 `deliver-task` 自行拆票。只有 `deliver-task` 返回 `delivered` 且需要本地集成或收尾时，才交给 `integrate-delivery`。`deliver-task` 不负责把结果集成回 caller workspace，`integrate-delivery` 不接管任务实现或返修。
 
 ## 其他导航和辅助 skill 不拥有当前真值
 

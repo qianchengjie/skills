@@ -56,6 +56,6 @@ caller 返回什么 delivery result、upstreamRequest.kind 与理由。不要提
 ## Evaluation boundary
 
 本用例只验证 reslice 的职责回流，不判断新任务数量、顺序、依赖、命名、验收细化或
-caller 是否必须使用 `sliced-dev`。Evaluator 只依据 subject 的公开回复和公开工具
+caller 后续必须使用哪个规划 skill。Evaluator 只依据 subject 的公开回复和公开工具
 动作判定，不要求、推断或保存隐藏思考过程。本文件定义一次独立调用，不定义
 repetitions、RED/GREEN 编排、重试、聚合或结果文件格式。

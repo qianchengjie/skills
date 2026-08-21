@@ -231,16 +231,16 @@ async function prepareDelivered(fixture, { acceptanceStatus } = {}) {
 
 test('init 只初始化 task-owned 状态且不替 caller 创建 execution', async () => {
   const fixture = await createFixture({
-    caller: { kind: 'delegated', name: 'sliced-dev', ref: 'dev-plans/example/plan.md#S1' },
+    caller: { kind: 'delegated', name: 'to-tickets', ref: '.scratch/example/issues/01-slug.md' },
   });
-  const callerPlan = path.join(fixture.root, 'dev-plans/example/plan.md');
-  await mkdir(path.dirname(callerPlan), { recursive: true });
-  await writeFile(callerPlan, 'S1: in-progress\ncurrent: S1\n');
+  const callerTicket = path.join(fixture.root, '.scratch/example/issues/01-slug.md');
+  await mkdir(path.dirname(callerTicket), { recursive: true });
+  await writeFile(callerTicket, 'Status: ready-for-agent\n');
 
   const result = run(fixture.root, ['init', path.relative(fixture.root, fixture.taskDir)]);
   assert.equal(result.status, 0, result.stderr);
 
-  assert.equal(await readFile(callerPlan, 'utf8'), 'S1: in-progress\ncurrent: S1\n');
+  assert.equal(await readFile(callerTicket, 'utf8'), 'Status: ready-for-agent\n');
   assert.match(await readFile(path.join(fixture.taskDir, '.gitignore'), 'utf8'), /^\/artifacts\/$/m);
   const claims = JSON.parse(await readFile(path.join(fixture.taskDir, 'claims.json'), 'utf8'));
   assert.equal(claims.schemaVersion, 'deliver-task.claims.v1');
@@ -441,7 +441,7 @@ test('validate-task 要求 baseCommit 为完整 commit OID，不能用会漂移�
 test('caller 接受 direct 与通用 delegated name/ref，并拒绝旧 kind 和不完整 delegated', async () => {
   for (const caller of [
     { kind: 'direct' },
-    { kind: 'delegated', name: 'sliced-dev', ref: 'dev-plans/example/plan.md#S1' },
+    { kind: 'delegated', name: 'to-tickets', ref: '.scratch/example/issues/01-slug.md' },
     { kind: 'delegated', name: 'release-pipeline', ref: 'tasks/release-1' },
   ]) {
     const fixture = await createFixture({ caller });
@@ -451,10 +451,10 @@ test('caller 接受 direct 与通用 delegated name/ref，并拒绝旧 kind 和�
 
   for (const caller of [
     { kind: 'direct', ref: 'unexpected' },
-    { kind: 'delegated', ref: 'dev-plans/example/plan.md#S1' },
-    { kind: 'delegated', name: 'sliced-dev' },
-    { kind: 'delegated', name: 'SlicedDev', ref: 'x' },
-    { kind: 'sliced-dev', ref: 'dev-plans/example/plan.md#S1' },
+    { kind: 'delegated', ref: '.scratch/example/issues/01-slug.md' },
+    { kind: 'delegated', name: 'to-tickets' },
+    { kind: 'delegated', name: 'ToTickets', ref: 'x' },
+    { kind: 'planner', ref: '.scratch/example/issues/01-slug.md' },
     { kind: 'unknown' },
   ]) {
     const fixture = await createFixture({ caller });
