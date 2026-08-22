@@ -14,12 +14,8 @@ description: Use when `deliver-task` 已返回 `delivered`，用户或上游需�
 - 只有 live `<task-worktree>/.dev-task/` 能提供可重验的 delivery 证明；commits、branch、聊天摘要或
   handoff 文案都不能替代它。
 - 原 delivery 只证明 `baseCommit..headCommit`。它不自动证明该范围与目标分支组合后的结果。
-- 候选态 verification 只证明实际运行的检查通过；目标分支推进还必须取得绑定当前候选的 fresh
-  Integration General Review clean 结论。
-- Integration General Review 只审组合正确性，不重做 delivery 自身的代码质量 General Review
-  或 rules-review。
-- V1 只发现、阻断和上报组合 finding；不自动修改候选、创建 repair task、调用
-  `deliver-task` 返修或重新集成。
+- candidate verification 通过后仍要做一次 fresh 的宽视角 General Review；它审查当前完整
+  candidate，不把 task diff 或原 Task Review 的范围当作审查边界。
 - `commit-range` 选择 `keep` 时，结果包含 live task worktree 与 `.dev-task/`；只保留
   branch/commits 会丢失唯一可重验的 delivery proof，不能报告为完成的 `keep`。
 - 用户主 workspace 的 dirty 是合法状态；不得 stash、clean、reset、覆盖或归因这些修改。
@@ -84,8 +80,8 @@ description: Use when `deliver-task` 已返回 `delivered`，用户或上游需�
 
 | 策略 | 适用条件 | 结果 |
 | --- | --- | --- |
-| `merge` | 需要保留 source range 的拓扑与 commit identity | 在候选分支合入 `headCommit`，verification 和 Integration General Review clean 后再推进目标分支 |
-| `cherry-pick` | 明确只移植该 range 的线性提交 | 按拓扑顺序重放 `baseCommit..headCommit`，review clean 后形成可推进的新 commit identity |
+| `merge` | 需要保留 source range 的拓扑与 commit identity | 在候选分支合入 `headCommit`，验证和宽视角 General Review 后再推进目标分支 |
+| `cherry-pick` | 明确只移植该 range 的线性提交 | 按拓扑顺序重放 `baseCommit..headCommit`，形成新的 commit identity |
 | `keep` | 暂不集成、目标 workspace 正在使用或缺少本地写权限 | 保留 task branch/worktree 和固定 range，不改变目标分支 |
 
 range 含 merge commit、依赖 source 拓扑，或 cherry-pick 会改变语义时，不推荐 cherry-pick。用户未指定策略时，根据仓库规则与上述事实推荐，不根据个人偏好替用户选择。
@@ -98,32 +94,18 @@ merge 和 cherry-pick 都先在从目标 OID `D` 创建的临时 isolated integr
 2. merge 时引用固定 `headCommit`，不要依赖可能移动或被删除的 source branch 名。
 3. cherry-pick 时只选择 `baseCommit..headCommit` 中的 commits，并保持拓扑顺序；遇到 merge commit 或不明确的范围立即停止。
 4. 集成后读取原 verification evidence 中的可复现命令，并结合目标分支项目规则运行必要验证。
-5. 验证成功后，按 [INTEGRATION-REVIEWER.md](INTEGRATION-REVIEWER.md) 派发 fresh
-   Integration General Review。审查必须绑定目标 OID `D`、source
-   `baseCommit..headCommit`、候选 commit `I` 和集成策略；原 delivery 的 General Review、
-   rules-review 或本轮 verification 都不能替代该结论。
-6. 只有 reviewer 返回绑定当前候选的 `clean`，才继续：
+5. 验证成功后，派一个 fresh General Reviewer，把 isolated integration workspace 中的完整
+   candidate 交给它。以本次变更为起点，但不把 task diff、task package 或原 Task Review
+   当作范围边界；允许 reviewer 自由检查周边代码和调用链、existing consumers、整体架构和模块
+   职责、API / 数据 / 状态契约，以及与已有实现的重复或冲突。
+6. reviewer 可以报告当前结果中任何确实存在的问题，不要求 finding 必须由 integration
+   造成。发现 finding 时停止集成并直接上报用户；没有 finding 才继续：
    - 本地集成：只有目标 workspace 干净、目标分支仍为 `D` 时，才将目标分支快进到已验证候选 commit；
    - 目标 workspace dirty：不得移动其已检出分支，保留本地候选分支并返回当前事实；不要 stash、覆盖用户修改或自动切换到远端流程。
 
-原 delivery evidence 继续只证明 source range。最终说明必须单独记录候选 commit、目标分支集成前后 OID 和本次验证结果，不能把旧 General Review、rules-review 或 acceptance 描述成对组合结果的重新审查。
+原 delivery evidence 继续只证明 source range。最终说明必须单独记录候选 commit、目标分支集成前后 OID、本次验证和宽视角 General Review 结果；旧 Task Review 不能替代这次审查。
 
-## Integration General Review
-
-verification 通过后、目标分支移动前，对固定 candidate 做一次 fresh 组合审查。reviewer 可把原
-delivery review 和 verification 当作输入证据，但必须独立检查 delivery 与 `D` 上已有改动的
-接口、consumer、调用链、状态、数据流、生命周期、职责和架构边界。
-
-| reviewer 结论 | integrate-delivery 动作 |
-| --- | --- |
-| `clean` | 重新确认目标分支仍为 `D` 后，按既有门禁推进 |
-| `finding` | 不推进、不 cleanup；保留 candidate 与 source，原样上报 finding |
-| `cannot-verify` | 按阻断处理；保留 candidate 与 source，上报缺失输入或无法核验项 |
-
-`finding` 和 `cannot-verify` 都不触发自动返修、自动重派 `deliver-task` 或自动重新
-integration。用户或上游决定下一步后，再进入对应 owner 的新一轮动作。
-
-## 冲突、验证与审查失败
+## 冲突与验证失败
 
 冲突意味着需要新的业务判断，不是机械收尾：
 
@@ -134,19 +116,13 @@ integration。用户或上游决定下一步后，再进入对应 owner 的新�
 
 验证失败时同样不得推进目标分支或清理 source。保留候选分支供后续诊断，或在确认它没有唯一成果后做经授权的清理。
 
-Integration General Review 返回 `finding` 或 `cannot-verify` 时，目标分支保持 `D`；
-保留指向 `I` 的 candidate branch、isolated integration workspace、source task
-branch/worktree 及 live `.dev-task/`。返回绑定 identity 的 review 结论、finding 或缺失输入，
-等待用户或上游决定；不要在本轮修改候选或启动返修。
-
 ## 清理规则
 
 cleanup 是显式授权动作，不是成功集成的自动副作用。
 
 cleanup 授权只表示允许删除，不会改变删除资格：`commit-range + keep` 必须保留 task branch、task
-worktree 和其中的 `.dev-task/`。只有 `commit-range` candidate 已通过 verification 与
-Integration General Review、且已成功 merge/cherry-pick，或 `no-change` 已收口时，才可继续下面的
-task worktree cleanup。
+worktree 和其中的 `.dev-task/`。只有 `commit-range` 已成功 merge/cherry-pick，或 `no-change` 已
+收口时，才可继续下面的 task worktree cleanup。
 
 经授权删除脚本创建的 task worktree 时，worktree-local `.dev-task/` 会随 worktree 一起消失；
 必须先在 live 状态上完成本轮 `validate-result`、`close-check` 和下述 durable ref 检查。不得先删
@@ -163,9 +139,7 @@ task worktree cleanup。
 
 只删除 worktree 时保留 task branch。删除 branch 是另一项授权，并且必须先证明原 `headCommit` 仍可从目标分支或另一明确保留的本地 ref 到达。正常收尾使用安全删除，不使用 `-D`、force-remove、`git clean` 或宽泛路径。
 
-临时 integration worktree 在候选已推进目标分支后可以清理。验证失败、Integration General
-Review 为 `finding / cannot-verify` 或候选尚未推进时，保留 candidate branch 与 integration
-worktree；后续删除需要用户或上游在处理 review 结果后重新授权。删除候选 branch 也需要独立授权和同样的可达性检查。
+临时 integration worktree 在候选已推进目标分支后可以清理。失败或放弃候选时，只有确认它没有唯一成果且另有清理授权才可删除；否则保留候选 branch。删除候选 branch 也需要独立授权和同样的可达性检查。
 
 ## 返回结果
 
@@ -176,10 +150,10 @@ worktree；后续删除需要用户或上游在处理 review 结果后重新授�
 - 目标分支与集成前后完整 OID；
 - 候选 commit 或 keep 原因；
 - 实际运行的验证及结果；
-- Integration General Review 的绑定 identity、结论及 finding 或 cannot-verify 原因；
+- 宽视角 General Review 的结果及 findings；
 - task/integration worktree 和 branch 分别是 retained 还是 removed；
 - 未完成项、冲突或需要 upstream 决定的唯一下一步。
 
-目标分支推进且 verification 与 Integration General Review 都通过后，才把本地集成报告为完成；如果还授权了 cleanup，必须同时按要求完成 cleanup。`keep` 的完成含义只是稳定交付结果已保留，不表示已经集成。
+目标分支推进、验证通过且宽视角 General Review 没有 finding 后，才把本地集成报告为完成；如果还授权了 cleanup，必须同时按要求完成 cleanup。`keep` 的完成含义只是稳定交付结果已保留，不表示已经集成。
 `commit-range + keep` 返回时 task branch、task worktree 与 live `.dev-task/` 必须都是
 `retained`。
