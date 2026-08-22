@@ -10,7 +10,7 @@ disable-model-invocation: true
 
 在 task-scoped isolated workspace 中完成一个任务，返回一个交付结果；不接管 caller 的生命周期，也不负责把结果集成回 caller workspace。
 
-- 输入是一个已明确目标、验收、约束、用户禁止范围和调用策略的开发任务；具体执行路径由本 skill 读取真实上下文后确定。
+- 输入是一个已明确目标、验收、约束、用户禁止范围和调用策略的开发任务；`task.json` 是 caller 提供的 authoritative execution contract，implementer 必须直接读取，派生 brief 不能覆盖或弱化它；具体执行路径由本 skill 读取真实上下文后确定。
 - 输出只是一份 `delivered / needs-upstream / needs-reslice / blocked` 单任务结果。
 - task workspace 内的 `.dev-task/` 保存合同、证据和本地执行定位；业务代码与证明状态共享同一个 isolated workspace 生命周期。不写 caller 的 plan、任务编排状态或最终 closure。
 - 可以自行安排任务内部的实现步骤；不创建或管理正式多任务计划。
@@ -21,11 +21,14 @@ disable-model-invocation: true
 
 使用 [TASK-CONTRACT.md](TASK-CONTRACT.md) 的 exact task contract 作为 stdin 调用契约。
 
-- 直接调用：根据用户原始任务形成结构化合同，`caller` 固定为 `{ "kind": "direct" }`。
-- 上游委托：caller 只传递结构化 immutable task contract，使用通用
+- 直接调用：负责把用户原始 authority 无语义降级地投影成结构化合同，`caller` 固定为 `{ "kind": "direct" }`。
+- 上游委托：caller 对其收到的 upstream authority 负责，只传递无语义降级的结构化 immutable task contract，使用通用
   `{ "kind": "delegated", "name", "ref" }`；caller 不创建 task directory、不落盘 task state，
   也不填写 `execution.json`。
 - deliver-task 在 preflight 后创建和维护 `execution.json`；`start` 不提前生成。
+
+`deliver-task` 不能证明未随合同提供的 upstream projection 正确；它只从 `task.json` 起保留 authority。
+若执行中从可见 upstream evidence 发现合同本身已弱化，按 contract revision 回流，不继续当前实现 lineage。
 
 启动前按以下优先级选择 workspace，命中后停止：
 
@@ -111,9 +114,9 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
 
 完整执行规则见 [EXECUTION-RULES.md](EXECUTION-RULES.md)。固定顺序是：
 
-1. 生成 `artifacts/task-brief.md` 和默认 blocked 的 `artifacts/task-report.json`。
-2. 按 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 派发 fresh implementer；task workspace 同时只允许一个业务文件 writer。
-3. 接收后按当前 `execution.json` 及 task/execution 两层 forbidden paths 核对实际 diff、task report 和 claims，运行任务验证。
+1. 生成引用 `task.json` 的派生 `artifacts/task-brief.md` 和默认 blocked 的 `artifacts/task-report.json`；每次 implementer 派发都要求重读 `task.json`、`execution.json` 与 brief。
+2. controller 根据 `task.json` 语义判断是否命中具名源码的强制复制/移植要求。普通任务按 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 单次派发 fresh implementer；命中时先做 baseline-only Dispatch A 并停止，controller 对 live baseline 独立复验并在 `audits.md` 记录 accepted baseline A，再追加绑定它的 adaptation authorization A，最后才派发明确引用该 authorization 的 Dispatch B。task workspace 同时只允许一个业务文件 writer。
+3. 接收后按当前 `execution.json` 及 task/execution 两层 forbidden paths 核对实际 diff、task report 和 claims，运行任务验证；source-authoritative 分支的实现接收与验证证据继续引用 Dispatch B 的 authorization。
 4. 按 `commitPolicy` 固定 commit range、worktree snapshot 或 no-change target。
 5. 生成绑定 task、execution、target 三个 identity 的 review package，按 [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md) 派发独立 General Review。
 6. finding 进入有限 `repair → re-verify → review`；发生过 repair 后必须再做最终累计 full。

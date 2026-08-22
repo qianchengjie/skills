@@ -6,7 +6,7 @@
 <task-worktree>/
 ├── <业务代码与项目文件>
 └── .dev-task/        # taskDir；默认由自身 .gitignore 排除出 Git target
-    ├── task.json          # upstream immutable 输入合同；deliver-task 不擅自扩大
+    ├── task.json          # authoritative execution contract；deliver-task 不擅自扩大或弱化
     ├── execution.json     # preflight 后由 deliver-task 创建的当前执行边界
     ├── claims.json        # 声明、证据引用与状态真源
     ├── audits.md          # preflight / validation / review / acceptance / repair 审计真源
@@ -57,6 +57,16 @@ isolated workspace 生命周期；caller workspace 不保存 task state。rules-
 - task hash 是完整 `task.json` 的递归 key-sort canonical JSON SHA-256，格式为 `sha256:<hex>`。
 - bootstrap 时 caller 只把该对象写入 `start` 的 stdin；`start` 完整校验后才把它写入新建或
   首次绑定 workspace 的 `.dev-task/task.json`。
+
+`task.json` 是 caller 提供给 `deliver-task`、且 implementer 必须直接读取的最高执行合同。caller
+构造合同时必须保留可见 upstream authority 的语义强度：原要求中的必须、禁止、仅当、来源指定和
+实现方式限定，不能被投影成建议、偏好、参考实现或开放选择。direct caller 对用户原始要求负责；
+delegated caller 对其收到的上游 authority 负责。无法忠实投影时，caller 不得以弱化合同启动任务。
+
+这是 caller 的接口责任，不是 `deliver-task` 能凭空证明的事实。未随合同提供的上游要求不可审查时，
+`deliver-task` 只保证 `task.json` 之后的派生输入不再弱化；若执行中从可见上游证据发现
+`task.json` 已发生实质降级，则停止当前 lineage，按 `needs-upstream / contract-change` 回流合同修订，
+不能靠修正 brief 或返修实现补救。
 
 只有目标、验收、约束、非目标、用户禁止范围、caller、base、commit policy 或
 acceptance policy 变化时才递增 revision。执行路径选择和实际验收结果不属于 immutable
@@ -173,6 +183,20 @@ task identity。旧 task identity 下的证据不会自动证明新合同；cont
 - rules-review run 或 repair verification；
 - 回流、阻塞和 residual risk。
 
+当 `task.json` 的强约束把具名实现指定为复制或移植的 authoritative source 时，复用同一
+`audits.md` 追加两类 task-owned evidence，不新增状态文件或 schema：
+
+- baseline A：当前 task/execution identity、固定 source identity、`source → destination`
+  mapping、baseline snapshot identity、controller 在唯一 writer 停止时对 live baseline 的复验结果，
+  以及 `accepted / cannot-verify` 结论；
+- adaptation authorization A：当前 task/execution identity、baseline A 引用、同一 baseline
+  snapshot identity，以及允许 Dispatch B 开始适配的明确结论。
+
+authorization A 是审计证据，不是 task lifecycle state。Dispatch B 必须引用它；controller 接收实现
+和记录验证时，也在既有 A 条目或 task report handoff 中引用同一 authorization，形成可恢复的时间链。
+snapshot identity 使用与 `commitPolicy` 相容的既有 commit/tree 或 worktree/content snapshot；不得为
+provenance 人为创建 commit。
+
 不要在 `delivery.json` 重复这些内容。
 
 最终累计 General A 条目必须包含以下机器绑定块；三个 verdict、findings、package hash
@@ -271,10 +295,13 @@ task identity。旧 task identity 下的证据不会自动证明新合同；cont
 
 - `workspace.json`：当前 task workspace 的本地 locator；它是 live `.dev-task/` 证明闭包的一部分，
   丢失时 fail closed，不按 task branch 补写；
-- `task-brief.md`：task、当前 execution、preflight、claims、selected execution rules、修复输入；
+- `task-brief.md`：引用 authoritative `task.json` 的派生执行视图；只保存 task/execution identity、
+  preflight、已解析路径、claims、验证、selected rules、修复依据和本轮 task-owned evidence 引用
+  （条件分支下包括 authorization ref），不把目标、验收或约束转述成可独立覆盖合同的副本；
 - `task-report.json`：implementer 的 changed files、验证 handoff、blocked 原因；
 - `target.json`：`snapshot-target` 输出；
 - `review-package.md`：固定 task、execution、target 三个 identity 的 diff/snapshot、claims、验证和审查说明；
 - reviewer prompt / rule repair package。
 
-每次派发前刷新它们；旧 subagent 记忆不是事实源。
+每次派发前刷新它们；旧 subagent 记忆不是事实源。`task.json > task-brief.md`：brief 与合同冲突，
+或其本轮说明会遗漏合同义务时，不能开始修改业务文件。

@@ -41,9 +41,30 @@ evidence。不得在执行中自动 refresh base、同步文件、rebase、merge
 
 preflight 依据写入 `audits.md` 后，由 controller 创建当前 `execution.json`；caller 和 implementer 都不填写。用户没有提供文件清单时，controller 仍应根据真实代码、直接消费者、相邻测试和项目规则建立最小完整 allowlist。`execution.evidenceRefs` 引用本次判断依据，并运行 `validate-execution` 后才生成 brief。
 
+controller 同时直接阅读 `task.json` 的完整语义，判断它是否以强制复制、移植或等价方式把具名实现指定为 authoritative source。该判断属于合同解释，由 controller 结合目标、验收、约束和代码上下文负责；不得用 `must / copy / reuse` 等关键词扫描器代替。没有命中时继续普通单次派发，不能要求普通任务携带 mapping、snapshot 或 authorization。
+
 ## 实现派发
 
-controller 在 `artifacts/task-brief.md` 投影当前 task identity、execution identity、目标、验收、约束、preflight、claims、selected rules、允许/禁止路径和本轮修复依据。随后创建默认 blocked 的 task report，再派发 implementer。implementer 同时读取当前 `execution.json`，但不得修改它。每轮派发只以最新 task brief 为执行入口；需要新增业务取舍或返修约束时，先写回现有 task / execution / claims / audits 真源并重新生成 brief。`followup_task.message` 只要求重新读取该 brief、以其覆盖旧上下文，不承担第二份返修说明。
+controller 在 `artifacts/task-brief.md` 只收束当前 task/execution identity、preflight、已解析路径、claims、验证、selected rules、本轮修复依据与 task-owned evidence 引用，并引用 authoritative `task.json`；不把目标、验收或约束重新摘要成可独立执行的合同副本。随后创建默认 blocked 的 task report，再派发 implementer。
+
+每次 fresh 或 follow-up 派发都提供绝对 `taskDir` 与 `workspacePath`，要求 implementer 重新读取当前 `task.json`、`execution.json` 和 `artifacts/task-brief.md`。优先级固定为 `task.json > task-brief.md`；brief 冲突或本轮说明会遗漏合同义务时，implementer 必须在修改业务文件前 blocked 回 controller。仅 brief 投影错误时，controller 在同一 task identity 下修正并重新派发；若可见上游 authority 表明 `task.json` 已被弱化，则停止当前执行，按 `needs-upstream / contract-change` 回流，不能把它伪装成 brief 修复。
+
+需要新增业务取舍或返修约束时，先写回现有 task / execution / claims / audits 中职责相符的真源并重新生成 brief。`followup_task.message` 只携带 task directory 定位、三个必读输入的路径和本轮 task-owned evidence 引用，不携带目标、约束、实现取舍或第二份返修说明。
+
+### Source-authoritative 条件分支
+
+命中具名源码强约束时，controller 必须建立真实阶段边界：
+
+1. 固定 source identity 和完整 `source → destination` mapping，并把它们作为 Dispatch A 输入。
+2. Dispatch A 只建立 source-equivalent baseline，完成即停止；不得 adaptation，也不得把 task report 标为 `ready-for-review`。controller 等唯一业务 writer 停止后，才独立复验 live source、destination、mapping 与 baseline snapshot。
+3. controller 在 `audits.md` 追加 baseline A，记录当前 task/execution identity、固定 source identity、mapping、baseline snapshot identity、复验事实与 `accepted / cannot-verify`。implementer 的报告或“曾经比较一致”自述不能替代 live 复验。
+4. 只有 baseline A 为 `accepted` 且 live snapshot 仍匹配时，controller 才另行追加 adaptation authorization A，绑定当前 task/execution、baseline A 及其 snapshot，并明确允许 Dispatch B 开始适配。该 A 条目是 task-owned 审计证据，不是 lifecycle state。
+5. controller 刷新 brief，使其明确引用 authorization A；Dispatch B 也必须引用该 authorization，并要求 implementer 重读三个输入。缺少 baseline A、缺少 authorization A 或 Dispatch B 未引用 authorization 时，都不得开始 adaptation。
+6. controller 接收 Dispatch B 结果时，在既有实现接收或验证 A 条目中引用同一 authorization；task report 的现有验证 handoff 也引用它。由此持久化 `baseline accepted → adaptation authorized → Dispatch B → implementation/validation` 的顺序，不依赖聊天消息或会被覆盖的旧 brief。
+
+baseline snapshot identity 使用与 `commitPolicy` 相容的既有 commit/tree 或 worktree/content snapshot；不得为了 provenance 创建 commit。若 baseline snapshot identity、固定 source identity、mapping 或 execution binding 被替换、重建或失配，旧 authorization 失效，必须先重新建立 accepted baseline 与 authorization。授权后的正常 destination adaptation 不视为 baseline 变化；相同绑定下的适配和返修继续引用原 authorization。
+
+baseline `cannot-verify` 时不创建 authorization，也不派发 Dispatch B。合同或 source identity 不足按现有 `needs-upstream` 处理；现有合同内的环境或工具故障持续且不可恢复时按 `blocked` 处理。
 
 实现返回后逐项核对：
 
@@ -77,7 +98,7 @@ workspace 的 HEAD 和 dirty 不参与 snapshot 或 freshness。task workspace �
 
 ## General Review
 
-General reviewer 独立于 implementer，只消费当前 review package 和其中具名的 fixed target。协议保持现有单片语义：
+General reviewer 独立于 implementer，只消费当前 review package 和其中具名的 fixed target。普通任务的 package 保持现有内容；source-authoritative 分支额外纳入 authoritative `task.json`、baseline A、adaptation authorization A、固定 source/mapping/snapshot 证据、Dispatch B 与实现/验证证据中的 authorization ref，以及最终 adaptation diff。不增加 `delivery.json` 顶层字段，也不把这些内容改造成独立 artifact 类型。协议保持现有单片语义：
 
 1. 首次 `full` 审查 `base → current target`，给出需求符合性、任务边界/交付一致性、代码质量/AI 污染三个 verdict 和完整 open findings。
 2. 有 finding 时，implementer 返修并重新验证、固定新 target；`repair` 只裁决直接前序 finding 和 repair delta 新 finding，不继承最终三个 verdict。
@@ -114,7 +135,7 @@ General clean 后读取 `task.acceptancePolicy`：
 
 ## 返修与阻塞
 
-每轮返修先把验证、General、upstream feedback 或 rules-review 的失败依据写入 audits，再刷新 brief/report。最多 4 次实际业务修改。以下情况停止：
+每轮返修先把验证、General、upstream feedback 或 rules-review 的失败依据写入 audits，再刷新 brief/report。source-authoritative 分支在 baseline snapshot identity、固定 source identity、mapping 和 execution binding 均未被替换、重建或失配时，返修继续引用原 authorization；任一绑定失配则先重建 baseline 与 authorization，不能以返修名义绕过。最多 4 次实际业务修改。以下情况停止：
 
 - 多个独立工作单元：`needs-reslice`；
 - immutable task contract、授权或用户判断变化：`needs-upstream`；
