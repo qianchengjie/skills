@@ -60,7 +60,20 @@ description: 审查用户写的 skill、AGENTS.md、rules、workflow、prompt �
 
 低风险或人工闭环场景里，属于“可由 AI 说明 + 人 review 复核闭环”的点，不应直接判为 skill 契约缺口或脚本缺口。
 
-### 3. 审查边界和目标函数
+### 3. 审查源信息保真
+
+源信息保真：关键 upstream information 经 AI 转换后保持原义，并且 source information 与 AI-derived information 不被混淆。
+
+当被审对象包含总结、拆分、转述、压缩、handoff、resume、review 或 repair 等转换时，不论转换发生在多个主体之间，还是同一 agent 的不同阶段，都沿 `upstream source → transformation → downstream consumer` 检查：
+
+- **Source distortion**：是否静默缩窄、扩大、弱化、强化、补全或翻转了会影响下游授权、范围、行为、信任或状态的源语义；
+- **Source / derived confusion**：AI 的 interpretation、inference 或 suggestion 是否被写成用户要求、已确认决定、observed fact、finding、evidence 或 contract。
+
+重点保持约束、范围、非目标、已确认决定、finding、evidence、unknown / cannot-verify、风险、状态以及“必须 / 可以 / 不要”等强弱语义。允许 AI 忠实改写和压缩；不要求逐字复制，也不因存在 summary 就默认要求保存原文、固定 source 字段或新增 provenance 机制。
+
+先判断源语义和 source / derived 边界是否可靠，再按风险判断 carrier 是否足够。低风险、同一会话或人工可复核的转换可以使用轻量说明；只有当前载体不足以支持跨任务复用、独立恢复、拒收或高风险放行时，才建议增加 source 引用或 durable artifact。无法验证保真时，必须保留 unknown / cannot-verify，不得把派生内容提升为 source fact。
+
+### 4. 审查边界和目标函数
 
 硬边界优先保护用户授权、任务范围、公共 API / 契约、数据语义、安全 / 权限 / 隐私、测试信号、提交边界和外发 / 发布 / push / merge 等不可逆动作。硬边界过多、过宽或模糊时，缩窄为可判定边界，或重分类为风险门禁、目标函数、启发式或 evidence requirement。
 
@@ -85,7 +98,7 @@ description: 审查用户写的 skill、AGENTS.md、rules、workflow、prompt �
 
 被审对象包含模型、工具、subagent、重试或批处理时，把 token、调用次数、墙钟时长和串行关键路径作为边界内的次级目标函数。规则应允许 AI 根据风险、上下文变化和可复用证据选择复用、增量、并行、重跑或停止；不要假定复用或新建一定更省。只识别明显成本来源和选择规则；没有遥测时不要要求伪精确估算。
 
-### 4. 审查风险和审计
+### 5. 审查风险和审计
 
 风险标签必须改变执行权限：
 
@@ -98,7 +111,7 @@ description: 审查用户写的 skill、AGENTS.md、rules、workflow、prompt �
 
 审计机制只记录能支持复盘或改变后续执行边界的稳定结论、证据、分叉、风险、验证、剩余风险和偏离依据；不记录过程流水、不可验证状态或重复内容。
 
-### 5. 审查假控制和剪枝候选
+### 6. 审查假控制和剪枝候选
 
 识别没有执行作用的 status、只复述内容的 review、无证据的 passed / done、语义重复、已被其他规则完整覆盖，以及会遮蔽关键指令的内容。
 
@@ -117,6 +130,7 @@ description: 审查用户写的 skill、AGENTS.md、rules、workflow、prompt �
 - 需要辨认 claim、evidence、审计或假控制的常见形态时，读取「Claim 与 evidence 示例」和「审计机制与假控制示例」；
 - 需要检查目标函数冲突或给定向改写时，读取「目标函数冲突检查」和「定向改写模式」；
 - 审查 skill frontmatter / description 时，必须读取「Skill 触发范围检查」；
+- 审查包含总结、拆分、转述、压缩、handoff、resume、review 或 repair 的信息转换链时，必须读取「源信息保真检查」；
 - 审查分阶段执行、计划文件、审查材料或完成门禁类规则时，必须读取「分阶段执行类工作流检查」。
 
 ## 审查流程
@@ -166,6 +180,12 @@ description: 审查用户写的 skill、AGENTS.md、rules、workflow、prompt �
 证据义务：
 - <哪些 claim 要证据>
 
+源信息保真：
+- 关键 upstream source：<哪些源信息会约束 downstream>
+- 存在的转换：<总结 / 拆分 / 转述 / 压缩 / handoff / resume / review / repair>
+- 必须保持的语义：<哪些范围、强弱、认知状态或其他语义不能改变>
+- source / derived 边界：<哪些是源信息，哪些是 AI interpretation / inference / suggestion>
+
 风险 / 升级：
 - <何时自动，何时确认，何时停止>
 
@@ -175,6 +195,8 @@ description: 审查用户写的 skill、AGENTS.md、rules、workflow、prompt �
 压缩规则：
 - <低风险如何跳过重流程>
 ```
+
+没有信息转换链时，省略「源信息保真」或写 `N/A`；不要用 `是 / 部分 / 否` 代替上述内容检查。
 
 ### 步骤 4：分类关键规则
 
@@ -289,6 +311,14 @@ description: 审查用户写的 skill、AGENTS.md、rules、workflow、prompt �
 | 审计机制 | 是 / 部分 / 否 | <诊断> |
 | 低风险压缩 | 是 / 部分 / 否 | <诊断> |
 
+<存在信息转换链时增加；否则省略或写 `N/A`。>
+
+源信息保真：
+- 关键 upstream source：<source>
+- 存在的转换：<transformation>
+- 必须保持的语义：<meaning>
+- source / derived 边界：<boundary>
+
 ## 规则分类
 | 章节 / 规则 | 当前类型 | 建议类型 | 诊断 |
 | --- | --- | --- | --- |
@@ -334,8 +364,9 @@ description: 审查用户写的 skill、AGENTS.md、rules、workflow、prompt �
 1. 已声明材料覆盖，覆盖不足时没有给出强结论；
 2. 已区分硬边界、目标函数、启发式、流程、审计格式和 AI 的选择空间；
 3. 已检查 evidence obligation，并且没有把会话说明 + 人 review 能闭环的事项误判成脚本或 durable artifact 缺口；
-4. 已检查风险是否改变行为、审计是否有真值，以及模型 / 工具 / subagent / 重试 / 批处理的明显执行成本；
-5. 已检查影响闭环或使闭环不可信的职责归属、必要 handoff 与跨生命周期错位；稳定独立职责信号成立时，已明确评估独立 skill 是否应列为候选载体；
-6. 已按统一判据识别剪枝候选并输出剪枝判断；
-7. 每条真实 finding 都有具体证据、行为影响、定向建议和修复投入；没有真实问题时未制造 finding；
-8. 已使用固定结论枚举、执行后果和与风险匹配的输出深度。
+4. 材料存在信息转换链时，已记录关键 upstream source、转换、必须保持的语义和 source / derived 边界，并检查 distortion 与 derived-to-source promotion；没有用无 evidence 的状态代替内容检查；
+5. 已检查风险是否改变行为、审计是否有真值，以及模型 / 工具 / subagent / 重试 / 批处理的明显执行成本；
+6. 已检查影响闭环或使闭环不可信的职责归属、必要 handoff 与跨生命周期错位；稳定独立职责信号成立时，已明确评估独立 skill 是否应列为候选载体；
+7. 已按统一判据识别剪枝候选并输出剪枝判断；
+8. 每条真实 finding 都有具体证据、行为影响、定向建议和修复投入；没有真实问题时未制造 finding；
+9. 已使用固定结论枚举、执行后果和与风险匹配的输出深度。

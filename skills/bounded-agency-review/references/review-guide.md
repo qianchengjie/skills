@@ -9,6 +9,7 @@
 - [目标函数冲突检查](#目标函数冲突检查)
 - [定向改写模式](#定向改写模式)
 - [Skill 触发范围检查](#skill-触发范围检查)
+- [源信息保真检查](#源信息保真检查)
 - [分阶段执行类工作流检查](#分阶段执行类工作流检查)
 
 ## Claim 与 evidence 示例
@@ -106,6 +107,37 @@
 
 触发范围本身也是边界。触发过宽会制造流程污染；触发过窄会造成安全缺口。
 
+## 源信息保真检查
+
+当 upstream information 会被 AI 总结、拆分、转述、压缩、handoff、resume、review 或 repair 后供 downstream consumer 使用时，按以下内容检查，不把“有来源引用”当成“语义已保真”：
+
+```md
+源信息保真：
+- 关键 upstream source：<会约束 downstream 行为、信任或状态的源信息>
+- 存在的转换：<source 如何变成 downstream 实际消费的内容>
+- 必须保持的语义：<范围、非目标、强弱、确认状态、认知状态等>
+- source / derived 边界：<源信息与 AI interpretation / inference / suggestion 如何区分>
+```
+
+优先检查：
+
+- 用户要求、spec、ticket、task contract、已确认约束 / 范围 / 非目标和既有决定是否保持原义；
+- reviewer finding、observed fact、evidence、test result、风险和状态是否保持其适用范围与结论强度；
+- `unknown / cannot-verify` 是否仍是不确定，而不是被转述成“没有问题”或通过；
+- “必须 / 可以 / 不要”、已确认 / 建议、observed / inferred 等语义是否被弱化、强化或混淆；
+- AI 补全的解释、推断和建议是否明确保持 derived 性质，没有被写成 source fact 或已授权 contract。
+
+修复先落在已经存在的转换责任和 carrier 上：让摘要保留关键语义、让 handoff 标清 derived 内容、让无法确认的内容保持 unknown，或让 consumer 在冲突时回到现有 source / owner。按风险选择最小足够载体；不要因为发现 source fidelity 风险就默认要求全文复制、永久保存原文、固定 provenance 字段、hash、ledger、状态机或新 skill。
+
+| 场景 | 判断 |
+| --- | --- |
+| `原样复制，只改 import` 被写成 `行为一致实现` | Source distortion：允许的实现空间被扩大，应列 finding。 |
+| `cannot verify` 被写成 `没有发现问题` | Epistemic distortion：不确定性被改成可放行结论，应列 finding。 |
+| 用户只要求 A，AI 推断 B 也应修改，downstream task 把 A+B 都写成既定要求 | Source / derived confusion：derived information 被提升为 source fact，应列 finding。 |
+| 不影响授权、范围、状态或验收语义的长文本被忠实摘要，且摘要没有冒充 source | Faithful compression：不应列 finding，也不应仅为保留原文而增加重载体。 |
+
+Finding 继续按主要行为影响使用现有类型，例如 `缺少边界`、`状态语义`、`确认语义`、`缺少证据` 或 `审计缺口`；不要新增 source fidelity finding taxonomy。
+
 ## 分阶段执行类工作流检查
 
 如果审查分阶段执行、计划文件、审查材料、完成门禁类规则，特别检查：
@@ -114,6 +146,8 @@
 - 分叉记录是否只记录真正会约束后续执行的决策；
 - 审计文件是否只记录长证据，而不是过程流水；
 - 审查材料是否有拒收能力，而不是只做总结；
+- 关键 upstream information 经阶段拆分、摘要、handoff 或 resume 后，是否仍保持会约束后续行为、信任或状态的源语义；
+- downstream consumer 是否能区分 source information 与 AI-derived information；
 - 风险等级是否改变执行权限；
 - 固定口令是否保护授权语义，而不是纯仪式；
 - 完成态是否被硬门禁和独立审查阻塞；
