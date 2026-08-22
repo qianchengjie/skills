@@ -98,8 +98,9 @@ merge 和 cherry-pick 都先在从目标 OID `D` 创建的临时 isolated integr
    candidate 交给它。以本次变更为起点，但不把 task diff、task package 或原 Task Review
    当作范围边界；允许 reviewer 自由检查周边代码和调用链、existing consumers、整体架构和模块
    职责、API / 数据 / 状态契约，以及与已有实现的重复或冲突。
-6. reviewer 可以报告当前结果中任何确实存在的问题，不要求 finding 必须由 integration
-   造成。发现 finding 时停止集成并直接上报用户；没有 finding 才继续：
+6. reviewer 可以报告当前 delivery 在真实项目上下文中暴露出的任何实际问题，不要求问题必须由
+   integration 本身造成；与本次 delivery 及其影响无关的既有问题不阻断本次集成。发现 finding
+   时停止集成并直接上报用户；没有 finding 才继续：
    - 本地集成：只有目标 workspace 干净、目标分支仍为 `D` 时，才将目标分支快进到已验证候选 commit；
    - 目标 workspace dirty：不得移动其已检出分支，保留本地候选分支并返回当前事实；不要 stash、覆盖用户修改或自动切换到远端流程。
 
