@@ -58,10 +58,55 @@ isolated workspace 生命周期；caller workspace 不保存 task state。rules-
 - bootstrap 时 caller 只把该对象写入 `start` 的 stdin；`start` 完整校验后才把它写入新建或
   首次绑定 workspace 的 `.dev-task/task.json`。
 
-`task.json` 是 caller 提供给 `deliver-task`、且 implementer 必须直接读取的最高执行合同。caller
-构造合同时必须保留可见 upstream authority 的语义强度：原要求中的必须、禁止、仅当、来源指定和
-实现方式限定，不能被投影成建议、偏好、参考实现或开放选择。direct caller 对用户原始要求负责；
-delegated caller 对其收到的上游 authority 负责。无法忠实投影时，caller 不得以弱化合同启动任务。
+`task.json` 是 caller 提供给 `deliver-task`、且 implementer 必须直接读取的最高执行合同；它是
+authority carrier，不是 authority source，也不自行证明其中的文本已获 upstream 授权。首跳不变量是：
+
+```text
+authority preservation = extraction, not summarization
+```
+
+`objective / acceptanceCriteria / constraints / nonGoals` 中承载 authority 的文本，以及
+`forbiddenPaths` 的来源，都必须从 caller 可见且实际拥有的 upstream authority 机械摘录。direct
+caller 从用户原始要求摘录；delegated caller 从其实际收到且有权继续传递的 authority 摘录。assistant、
+tool、JSON 或引用文本自行生成的摘要，只有在可见的更高层 authority 明确委托其承载相应决定时，才可
+作为摘录来源；把摘要写进 `task.json` 本身不会提升它的 authority。
+
+机械摘录先找全相关 authority，再允许按字段选择连续原文片段、拆分和重复；只做 JSON 转义、列表分项
+及 schema 要求的路径规范化。摘录集合必须保留原要求中的必须、禁止、仅当、来源指定和实现方式限定。
+按以下形状构造文本字段：
+
+| 字段 | 机械摘录规则 |
+| --- | --- |
+| `objective` | 摘录覆盖交付目标及其不可分割限定的原文；保留原措辞和语气强度。 |
+| `acceptanceCriteria` | 摘录用户或 upstream 明示的验收/结果原文；没有单独验收条件时，重复相关目标或整段原要求，保持数组非空。 |
+| `constraints` | 把明确约束拆成原文片段；允许与 objective / acceptance 重复。 |
+| `nonGoals` | 只摘录明确排除的原文；没有明确非目标时使用空数组。 |
+| `forbiddenPaths` | 只保存用户或 caller 明确禁止的路径，并只做 schema 要求的路径规范化。 |
+
+例如，上游原文是：
+
+> 把 A 的实现完整复制到 B，只允许修改接口适配，不要重新实现算法。
+
+没有单独验收条件时，可以保留冗余：
+
+```json
+{
+  "objective": "把 A 的实现完整复制到 B，只允许修改接口适配，不要重新实现算法。",
+  "acceptanceCriteria": [
+    "把 A 的实现完整复制到 B，只允许修改接口适配，不要重新实现算法。"
+  ],
+  "constraints": [
+    "把 A 的实现完整复制到 B",
+    "只允许修改接口适配",
+    "不要重新实现算法"
+  ]
+}
+```
+
+可执行验证解释、影响范围、实现步骤和其它 AI 推导写入职责相符的 `execution.json` / `audits.md`，
+不反写成 immutable task authority。`taskId`、JSON 结构和固定调用上下文可以机械生成；
+`commitPolicy / acceptancePolicy` 只能使用 caller 已明确提供的值。必填字段无法从 authority 或固定调用
+上下文机械填充时，caller 在 `start` 前向 upstream 请求补充，不用推导内容补空。
 
 这是 caller 的接口责任，不是 `deliver-task` 能凭空证明的事实。未随合同提供的上游要求不可审查时，
 `deliver-task` 只保证 `task.json` 之后的派生输入不再弱化；若执行中从可见上游证据发现

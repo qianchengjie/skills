@@ -10,7 +10,7 @@ disable-model-invocation: true
 
 在 task-scoped isolated workspace 中完成一个任务，返回一个交付结果；不接管 caller 的生命周期，也不负责把结果集成回 caller workspace。
 
-- 输入是一个已明确目标、验收、约束、用户禁止范围和调用策略的开发任务；`task.json` 是 caller 提供的 authoritative execution contract，implementer 必须直接读取，派生 brief 不能覆盖或弱化它；具体执行路径由本 skill 读取真实上下文后确定。
+- 输入是一个已明确目标、验收、约束、用户禁止范围和调用策略的开发任务；`task.json` 是 deliver-task 内的 authoritative execution contract，不是 upstream authority 的授权证明；其中承载 authority 的文本必须按 [TASK-CONTRACT.md](TASK-CONTRACT.md) 从可见 upstream authority 机械摘录。implementer 必须直接读取，派生 brief 不能覆盖或弱化它；具体执行路径由本 skill 读取真实上下文后确定。
 - 输出只是一份 `delivered / needs-upstream / needs-reslice / blocked` 单任务结果。
 - task workspace 内的 `.dev-task/` 保存合同、证据和本地执行定位；业务代码与证明状态共享同一个 isolated workspace 生命周期。不写 caller 的 plan、任务编排状态或最终 closure。
 - 可以自行安排任务内部的实现步骤；不创建或管理正式多任务计划。
@@ -21,14 +21,16 @@ disable-model-invocation: true
 
 使用 [TASK-CONTRACT.md](TASK-CONTRACT.md) 的 exact task contract 作为 stdin 调用契约。
 
-- 直接调用：负责把用户原始 authority 无语义降级地投影成结构化合同，`caller` 固定为 `{ "kind": "direct" }`。
-- 上游委托：caller 对其收到的 upstream authority 负责，只传递无语义降级的结构化 immutable task contract，使用通用
+- 直接调用：按合同的 source-fidelity 规则，把用户原始 authority 机械摘录成结构化合同，`caller` 固定为 `{ "kind": "direct" }`。
+- 上游委托：caller 对其实际收到的 upstream authority 负责，只传递按同一规则机械摘录的 immutable task contract，使用通用
   `{ "kind": "delegated", "name", "ref" }`；caller 不创建 task directory、不落盘 task state，
   也不填写 `execution.json`。
 - deliver-task 在 preflight 后创建和维护 `execution.json`；`start` 不提前生成。
 
-`deliver-task` 不能证明未随合同提供的 upstream projection 正确；它只从 `task.json` 起保留 authority。
-若执行中从可见 upstream evidence 发现合同本身已弱化，按 contract revision 回流，不继续当前实现 lineage。
+`deliver-task` 不能证明未随合同提供的 upstream source fidelity；把 caller 或 AI 生成的摘要写进
+`task.json` 也不会使它自动获得 upstream authority。只有可见的更高层 authority 明确委托某个中间
+载体承载相应决定时，caller 才能从该载体摘录。若执行中从可见 upstream evidence 发现合同本身已
+弱化，按 contract revision 回流，不继续当前实现 lineage。
 
 启动前按以下优先级选择 workspace，命中后停止：
 
