@@ -121,9 +121,11 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
 3. 接收后按当前 `execution.json` 及 task/execution 两层 forbidden paths 核对实际 diff、task report 和 claims，运行任务验证；source-authoritative 分支的实现接收与验证证据继续引用 Dispatch B 的 authorization。
 4. 按 `commitPolicy` 固定 commit range、worktree snapshot 或 no-change target。
 5. 生成绑定 task、execution、target 三个 identity 的 review package，按 [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md) 派发独立 General Review。
-6. finding 进入有限 repair。repair 返回后先按 [EXECUTION-RULES.md](EXECUTION-RULES.md)
-   核对实际 repair delta：只有严格满足 non-semantic invariant 时进入单跳 lightweight repair
-   closure；其余情况继续既有 `repair → 完整 re-verify → review → 最终累计 full`。
+6. finding 进入有限 repair。repair 返回后、运行任何完整 re-validation 前，先按
+   [EXECUTION-RULES.md](EXECUTION-RULES.md) 核对实际 repair delta：non-semantic 范围和
+   证明条件均明确成立时进入 lightweight verification，其余条件也通过后建立单跳
+   closure；任一条件为 no / uncertain 则继续既有
+   `repair → 完整 re-verify → review → 最终累计 full`。
 7. General clean 后按 `acceptancePolicy` 处理 upstream acceptance；`required` 且当前 target 没有 `passed / skipped` A 条目时返回 `needs-upstream / user-acceptance`。验收结果留在 `audits.md`，不改变 task identity，也不使同一 target 的 General evidence stale。
 8. 按当前单片语义执行适用的最终 rules-review；finding 返修默认重新固定 target、重做
    General 和 rules-review fresh full。只有实际 delta 通过同一个 non-semantic invariant 时，才由

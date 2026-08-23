@@ -101,7 +101,12 @@ workspace 的 HEAD 和 dirty 不参与 snapshot 或 freshness。task workspace �
 General reviewer 独立于 implementer，只消费当前 review package 和其中具名的 fixed target。普通任务的 package 保持现有内容；source-authoritative 分支额外纳入 authoritative `task.json`、baseline A、adaptation authorization A、固定 source/mapping/snapshot 证据、Dispatch B 与实现/验证证据中的 authorization ref，以及最终 adaptation diff。不增加 `delivery.json` 顶层字段，也不把这些内容改造成独立 artifact 类型。协议保持现有单片语义：
 
 1. 首次 `full` 审查 `base → current target`，给出需求符合性、任务边界/交付一致性、代码质量/AI 污染三个 verdict 和完整 open findings。
-2. 有 finding 时，implementer 返修并重新验证、固定新 target；`repair` 只裁决直接前序 finding 和 repair delta 新 finding，不继承最终三个 verdict。
+2. 有 finding 时，implementer 返修；writer 停止后，controller 先核对直接前序
+   reviewed target 到当前 live content 的实际 repair delta，不得先无条件运行完整
+   re-validation。non-semantic 范围或证明条件任一为 no / uncertain 时，进入完整
+   re-validation 并固定新 target；否则只运行与 delta 直接相关的最小机械验证，
+   再固定新 target。随后的 `repair` 只裁决直接前序 finding 和 repair delta 新
+   finding，不继承最终三个 verdict。
 3. repair 后开放集合清零默认仍要对最终 target 再做累计 `full`，最终三个 verdict 只来自这轮。
    唯一例外是 controller 已对实际 repair delta 完成下文 non-semantic eligibility 判断：此时本轮
    `repair` 可作为 finding verification，由 task-owned lightweight closure 组合直接前序 full 的
@@ -150,7 +155,9 @@ closure，不生成、伪装或修改 rules-review run，也不改变 rules-revi
 这是 review finding 返修后的窄例外，不是通用 bounded repair 或 impact analysis。首次实现、验证失败、
 用户拒收和普通语义返修保持原流程。controller 在唯一业务 writer 停止后，以直接前序 reviewed target
 和当前 live repaired content 计算实际 repair delta；不能按 finding 描述、implementer 自述、文件数、
-行数或“改动很小”分类。
+行数或“改动很小”分类。在任何完整 re-validation 前先核对下文 1–5；任一项为
+no / uncertain 就进入完整返修链。只有这些条件成立时，才运行第 6 项所需的最小机械
+验证和 finding verification；不得为判断是否可以跳过完整 re-validation 而先执行它。
 
 ### Eligibility invariant
 
@@ -171,31 +178,33 @@ closure，不生成、伪装或修改 rules-review run，也不改变 rules-revi
    flow、API / type / schema / 数据结构、dependency / config / build / test、shared helper / consumer
    关系，或可能影响程序引用、字符串协议、序列化的 rename。mixed diff 整体不 eligible；类别不明
    或证明不完整也不 eligible。
-5. finding 已按原要求验证为 `addressed`，repair delta 没有新 finding；同时运行并通过与该修改直接相关的
-   最小 formatter / parser / lint / render / text check。检查集合只证明本次机械变化，不冒充全套验证。
-6. 本轮 source review 是直接前序的普通 General full 或 rules-review full，不是另一个 lightweight
+5. 本轮 source review 是直接前序的普通 General full 或 rules-review full，不是另一个 lightweight
    closure；closure 只允许一跳，不能递归累积 evidence。
+6. finding 已按原要求验证为 `addressed`，repair delta 没有新 finding；同时运行并通过与该修改直接相关的
+   最小 formatter / parser / lint / render / text check。检查集合只证明本次机械变化，不冒充全套验证。
 
 任一条件为 no 或 uncertain，立即回到既有完整 `re-verify → General repair / 累计 full → acceptance
 → rules-review fresh full`，不保留“部分 eligible”结论。
 
 ### Lightweight closure
 
-eligible 后按以下顺序收口：
+前五项成立后，按以下顺序完成 lightweight verification 与收口：
 
-1. 在 `audits.md` 分别固定直接前序 finding、从 reviewed target 到 repaired content 的实际 delta 与
-   hunk-to-finding 映射、non-semantic 证明和最小机械验证。
-2. General finding 复用现有 General `repair`，其 `addressed` 且 delta 无新 finding 的 A 条目作为
-   `findingVerificationRef`。rules-review finding 只在原 finding 有可直接机械复验的通过条件时，记录
-   focused task-owned finding verification；需要重新解释规则语义时不 eligible，走 fresh full。
+1. 在 `audits.md` 分别固定直接前序 finding、从 reviewed target 到 repaired content 的实际 delta、
+   hunk-to-finding 映射和 non-semantic 证明。
+2. 运行并记录与 delta 直接相关的最小机械验证；失败或出现新的 uncertain 时进入完整返修链。
 3. 按 commitPolicy 固定新 target 并运行 `snapshot-target`；execution hash 必须与前序 target 相同。
-4. 追加一个 closure A，同时写当前 target 的普通 `deliver-task-binding` 和
+4. General finding 复用现有 General `repair`，其 `addressed` 且 delta 无新 finding 的 A 条目作为
+   `findingVerificationRef`。rules-review finding 只在原 finding 有可直接机械复验的通过条件时，记录
+   focused task-owned finding verification；需要重新解释规则语义时进入完整返修链。
+   finding 未闭合或 delta 出现新 finding 时也进入完整返修链。
+5. 追加一个 closure A，同时写当前 target 的普通 `deliver-task-binding` 和
    `deliver-task-repair-closure` 块。该 A 组合旧 semantic evidence 与本轮 delta evidence，成为当前
    target 的 composite verification / General evidence；若 source 是 rules-review，也成为 composite
    rules-review evidence。
-5. 不重跑与 delta 无关的完整 validation、累计 General full 或 rules-review fresh full。若 source 是
+6. 不重跑与 delta 无关的完整 validation、累计 General full 或 rules-review fresh full。若 source 是
    General 且当前 target 尚未执行适用的最终 rules-review，仍按正常首次路径执行；这不是“重跑”。
-6. `acceptancePolicy=required` 时重新取得绑定新 target 的 `passed / skipped` A。旧 target acceptance
+7. `acceptancePolicy=required` 时重新取得绑定新 target 的 `passed / skipped` A。旧 target acceptance
    不继承。随后按普通 delivery、`validate-result`、`close-check` 收口。
 
 允许继承的是 task / execution / preflight、未失配的 source authorization、返修前完整 validation 的

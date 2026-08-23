@@ -4,10 +4,14 @@ reviewer 不修改业务文件、task durable state 或 caller state。每轮使
 
 ## 固定输入
 
-派发前 controller 已完成边界核对、验证、commit/worktree/no-change target 固定，并在 live
+派发前 controller 已完成边界核对、固定 commit/worktree/no-change target，并在 live
 `<task-worktree>/.dev-task/artifacts/review-package.md` 生成绑定 task、execution、target 三个
-identity 的当前 package。reviewer 不从 `git status`、当前 HEAD、index、branch、聊天摘要或同名
-工作区路径重建范围；`.dev-task/` 缺失或 package 无法绑定时返回 cannot-verify。
+identity 的当前 package。非 lightweight 的 full / repair 路径在派发前完成全部要求的
+re-validation；
+已由 controller 按实际 delta 确认 non-semantic 范围和证明条件无 no / uncertain 的
+General repair，派发前只要求直接相关的最小机械验证，不要求完整 re-validation。
+reviewer 不从 `git status`、当前 HEAD、index、branch、聊天摘要或同名工作区路径重建范围；
+`.dev-task/` 缺失或 package 无法绑定时返回 cannot-verify。
 
 commit-range 只由 package 具名的 task workspace Git objects `baseCommit..headCommit` 确定。
 caller workspace 的当前 branch、HEAD、dirty 或同名文件不是审查输入，也不能使 package stale。
@@ -46,13 +50,15 @@ baseline snapshot identity、固定 source identity、mapping 或 execution bind
 
 只处理直接前序 open findings 与 repair delta：每个旧 finding 恰好返回 `addressed / not_addressed`，再报告 delta 新 finding。不要生成或继承最终三个 verdict，不把 repair 扩成开放式累计 full。
 
-repair 后必须由另一个 fresh reviewer 对最终 target 做累计 full；其 verdict 才能收口。
+repair 后默认由另一个 fresh reviewer 对最终 target 做累计 full；其 verdict 用于普通返修收口。
 
-例外只由 controller 在 reviewer 返回后按实际 repair delta 判定：若满足
-[EXECUTION-RULES.md](EXECUTION-RULES.md) 的完整 non-semantic invariant，本轮 `repair` 的
-`addressed` 与“delta 无新 finding”可作为 lightweight closure 的 finding verification，直接前序
-full 的其它 verdict 由 closure 引用。reviewer 不按文件数、行数或 finding 类型决定 eligibility，也
-不在输出中生成最终三个 verdict。条件缺失或不确定时仍执行上述累计 full。
+controller 在任何完整 re-validation 前已按实际 repair delta 判断是否可进入
+non-semantic lightweight verification；reviewer 不决定该分类。若本轮 `repair` 返回
+`addressed` 且“delta 无新 finding”，controller 再结合已通过的最小机械验证确认
+[EXECUTION-RULES.md](EXECUTION-RULES.md) 的完整 non-semantic invariant；本轮 `repair` 作为
+lightweight closure 的 finding verification，直接前序 full 的其它 verdict 由 closure 引用。
+reviewer 不按文件数、行数或 finding 类型决定 eligibility，也不在输出中生成最终三个
+verdict。任一条件失败或不确定时进入上述完整返修链。
 
 ## Rules reviewer
 
