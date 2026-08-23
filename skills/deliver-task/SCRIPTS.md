@@ -46,8 +46,8 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
 | `task-hash` | 输出已有 task state 的 canonical task hash |
 | `validate-execution` | 校验 deliver-owned `execution.json`、task binding、路径和 evidence refs，并输出 canonical execution hash |
 | `snapshot-target` | 从当前 execution boundary 按 commitPolicy 输出带 execution hash 的薄 target identity |
-| `validate-result` | 校验 delivery schema、identity binding、acceptance、non-delivered evidence 和薄结构 |
-| `close-check` | 对 delivered 重验 claims、evidence refs、review/acceptance binding 与当前 Git target |
+| `validate-result` | 校验 delivery schema、identity binding、Review Wave history/count、acceptance、non-delivered evidence 和薄结构 |
+| `close-check` | 对 delivered 重验 claims、evidence refs、review-wave/acceptance binding 与当前 Git target |
 
 退出码：`0` 通过，`1` 协议或门禁失败，`2` 参数/路径错误。
 
@@ -101,13 +101,14 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
 - execution allowlist、两层 forbidden path 和 `.dev-task/` 写边界；
 - claim 明确终态与 evidence ref 存在；
 - General 的 task/execution/target 显式绑定；
-- lightweight repair closure 的 exact block、直接前序/当前 target 形状、固定终态、task-owned refs、
-  非递归引用，以及 composite delivery evidence ref；
+- Review Wave 的 exact block、连续 wave 编号、直接前序/当前 target chain、双域 scoped / 单域 Full
+  升级状态、task-owned refs、merged result、累计 failed-wave 计数与 4 次停止边界；
 - acceptance 的 task/target/status 显式绑定及 task-owned evidence ref 存在；
 - non-delivered request 的 kind、非空 evidence refs 及存在性；
 - delivery 没有内嵌完整证据。
 
-机器明确不检查：provided workspace 是否真实独占、目标是否正确、验收是否充分、测试是否证明
-行为、review finding 是否正确、repair delta 是否真的 non-semantic / finding-only、机械复验是否足以
-证明语义等价、rules 是否适用、回流理由是否正确、证据强度或用户确认真实性。这些由运行环境保证，
-或由 controller/reviewer 裁决并记录在 audits/rules-review run。
+机器明确不检查：provided workspace 是否真实独占、目标是否正确、验收是否充分、targeted / affected
+validation 是否足以覆盖实际 repair delta、影响面是否可可靠限定、scoped reviewer 是否应返回
+`clean / findings / cannot-bound`、Full 升级是否语义上必要、review finding 是否正确、rules 是否适用、
+回流理由是否正确、证据强度或用户确认真实性。这些由运行环境保证，或由 controller/reviewer 裁决并
+记录在 audits/rules-review run。

@@ -1,6 +1,6 @@
 ---
 name: deliver-task
-description: Use when 用户或上游 skill 已提供边界明确的软件开发任务，需要在 task-scoped isolated workspace 中完成实现、验证、提交、独立审查、返修和交付结果收口。
+description: 当用户或上游 skill 已提供边界明确的软件开发任务，需要在 task-scoped isolated workspace 中完成实现、验证、提交、独立审查、返修和交付结果收口时使用。
 disable-model-invocation: true
 ---
 
@@ -121,50 +121,23 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
 2. controller 根据 `task.json` 语义判断是否命中具名源码的强制复制/移植要求。普通任务按 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 单次派发 fresh implementer；命中时先做 baseline-only Dispatch A 并停止，controller 对 live baseline 独立复验并在 `audits.md` 记录 accepted baseline A，再追加绑定它的 adaptation authorization A，最后才派发明确引用该 authorization 的 Dispatch B。task workspace 同时只允许一个业务文件 writer。
 3. 接收后按当前 `execution.json` 及 task/execution 两层 forbidden paths 核对实际 diff、task report 和 claims，运行任务验证；source-authoritative 分支的实现接收与验证证据继续引用 Dispatch B 的 authorization。
 4. 按 `commitPolicy` 固定 commit range、worktree snapshot 或 no-change target。
-5. 生成绑定 task、execution、target 三个 identity 的 review package，按 [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md) 派发独立 General Review。
-6. finding 进入有限 repair。repair 返回后、运行任何完整 re-validation 前，先按
-   [EXECUTION-RULES.md](EXECUTION-RULES.md) 核对实际 repair delta：non-semantic 范围和
-   证明条件均明确成立时进入 lightweight verification，其余条件也通过后建立单跳
-   closure；任一条件为 no / uncertain 则继续既有
-   `repair → 完整 re-verify → review → 最终累计 full`。
-7. General clean 后按 `acceptancePolicy` 处理 upstream acceptance；`required` 且当前 target 没有 `passed / skipped` A 条目时返回 `needs-upstream / user-acceptance`。`not-required` 只取消 upstream acceptance gate，不削弱 `acceptanceCriteria`、任务验证、General Review 或适用的 rules-review。验收结果留在 `audits.md`，不改变 task identity，也不使同一 target 的 General evidence stale。
-8. 按当前单片语义执行适用的最终 rules-review；finding 返修默认重新固定 target、重做
-   General 和 rules-review fresh full。只有实际 delta 通过同一个 non-semantic invariant 时，才由
-   deliver-task 写 lightweight closure；这不是 rules-review incremental run。
-9. 把事实证据分别写入 `claims.json`、`audits.md`、review 工件和 rules-review run；最后只在 `delivery.json` 写引用。
-10. 运行 `validate-result`；仅 `delivered` 再运行 `close-check`。
+5. 生成绑定 task、execution、target 三个 identity 的首次 review package。并行派发 General Full Review，以及 active rule catalog 非空时由 `rules-review` v8 执行的 Rules Full Review；两边都是 discovery，合并 findings 后再决定 repair。首次 Full 不属于 repair Review Wave，也不消耗 failed-wave budget。
+6. 有 finding 时尽量把 General 与 Rules findings 合并成同一次 repair。writer 停止后固定从直接前序 target 到 live content 的实际 repair delta；controller 根据真实因果影响与既有验证契约选择 targeted / affected validation，只有无法可靠限定、涉及广泛 runtime / contract / shared behavior，或验证契约明确要求时才升级完整 validation。不得按文件类型、行数、finding 类型或“改动很小”自动分类。
+7. validation 通过后固定新 target，并按 [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md) 并行派发 General Scoped Repair Verification 与 Rules Scoped Repair Verification；不要根据 finding 来源只跑一边。active rule catalog 为空时 Rules 明确记为 `not-applicable`。任一 domain 返回 `cannot-bound` 时只把该 domain 升级 Full，保留另一 domain 已完成的 clean 结论。
+8. controller 把两个 domain 的最终结果合并为一个 Review Wave。任一 domain 有 findings，整个 wave 只失败一次并进入下一轮 repair；scoped 发现由 repair 引入的新相关 finding 也同样处理。连续累计 4 个 failed Review Waves 后停止自动 repair，由 controller adjudication / escalation；不能因预算耗尽而交付。clean wave 不增加失败计数，首次 Full discovery 也不计数。
+9. Review closure clean 后按 `acceptancePolicy` 处理 upstream acceptance；`required` 且当前 target 没有 `passed / skipped` A 条目时返回 `needs-upstream / user-acceptance`。`not-required` 只取消 upstream acceptance gate，不削弱 `acceptanceCriteria`、任务 validation、General 或适用的 Rules closure。验收结果留在 `audits.md`，不改变 task identity。
+10. 把事实证据分别写入 `claims.json`、`audits.md`、review 工件和 rules-review run；最后只在 `delivery.json` 写引用。运行 `validate-result`；仅 `delivered` 再运行 `close-check`。
 
-## 有限返修
+## Review Wave 与有限返修
 
 - General Review、验证、用户拒收或项目规则 finding 触发返修时，先把失败依据写入 `audits.md`，再刷新 brief。用户拒收但 immutable task contract 未变化时保持同一 task identity；返修形成新 target 后旧验收证据自然失效。
-- 同一任务最多自动修改业务文件 4 次；只有实际修改任务范围内文件才计次。
+- 每个 repair target 只形成一个合并 Review Wave；General / Rules scoped、某个 domain 的 Full 升级、reviewer 调用或 finding 数量都不单独计次。wave 只有合并后仍有 finding 时才让 `failedWaveCount + 1`。
+- 最多允许 4 个 failed Review Waves。第 4 次失败后不再自动修改业务文件；controller 根据现有 result taxonomy 选择 `blocked`，或在确需改变合同、授权、边界或用户判断时选择 `needs-upstream`，并保留当前证据引用。
 - 安全返修优先复用原 implementer；目标、验收、公共契约、用户禁止范围、调用策略或 claims 契约实质变化时停止并回流。
-- 结构合法的负审查结论不能靠重派 reviewer 洗掉。reviewer 未返回、越界写文件或结果无法绑定输入时，同一输入最多 fresh 重派一次。
-- 次数用尽、工具持续不可用或现有边界内无法完成时返回 `blocked`，保留当前证据引用。
+- repair 明显越过原 finding 的因果范围或原 implementation boundary 时，不能用连续 scoped review 掩盖扩边：在当前 task / execution 内能够重新界定时升级受影响 domain 的 Full；需要扩大 immutable contract 或授权时回流 upstream。
+- 结构合法的负审查结论不能靠重派 reviewer 洗掉。reviewer 未返回、越界写文件或结果无法绑定输入时，同一输入最多 fresh 重派一次；这类调用故障不是 failed Review Wave。
 
-### Review 后的 non-semantic repair
-
-该路径只处理 General 或 rules-review finding 的直接返修，不适用于首次实现、验证失败、用户拒收或
-任意局部语义修改。controller 必须审查实际 repair delta，而不是 finding 文案、计划、文件数或修改
-行数；以下条件全部有正向证据时才 eligible：
-
-- task / execution identity 与公共契约未变，直接前序 reviewed target 及其完整 evidence 可访问；
-- 每个 changed hunk 都只为直接前序 open finding 所要求，全部 finding 已 addressed，且没有额外修改；
-- 每个 hunk 都有适合当前语言或工件的机械证据，明确证明程序语义及 API / type / schema / 数据、
-  配置、build、test、依赖、字符串协议、序列化、共享 helper / consumer 关系未变；
-- 新运行的直接 finding verification 与最小机械验证均通过。
-
-formatter-only、whitespace / indentation / wrapping、惰性 comment 格式和明确 typo / 展示格式修正可以
-成为候选，但类别名本身不是证明；例如语义相关缩进、directive comment、协议字符串或测试 snapshot
-仍不 eligible。除已证明不承担程序或协议语义、且被 finding 精确指定的 typo / 展示文本修正外，
-runtime behavior、expression / condition / control flow、API / type / schema / 数据结构、dependency /
-config / build / test、可能影响程序引用或协议的 rename、mixed diff、额外修改或任何不确定情况，
-都进入原完整返修链。
-
-eligible closure 只能从一个直接前序非 closure review 单跳建立，不递归继承另一个 closure。它复用
-返修前仍成立的 validation / General / rules-review evidence，只新建 repair delta、finding
-verification、直接机械验证、当前 target 与 closure A；required acceptance 仍按新 target 重新取得，
-尚未执行的下游 review 仍正常执行。精确记录和 binding 见 [TASK-CONTRACT.md](TASK-CONTRACT.md)。
+精确记录和 binding 见 [TASK-CONTRACT.md](TASK-CONTRACT.md)。`rules-review` v8 继续只负责完整 Rules discovery / Full 升级；Rules Scoped Repair Verification 是 deliver-task 自己的 reviewer 能力，不生成或伪装 v8 run。
 
 ## 结果选择
 

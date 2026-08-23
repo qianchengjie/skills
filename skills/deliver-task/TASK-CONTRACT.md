@@ -230,9 +230,10 @@ task identity。旧 task identity 下的证据不会自动证明新合同；cont
 
 - 上下文预检与项目 rules；
 - 验证命令及公开结果；
-- 每轮 General full / repair 的输入绑定、findings 和 verdict；
+- 首次 General / Rules Full 的输入 identity、findings 和 verdict；
+- 每轮 actual repair delta、targeted / affected validation、双域 scoped 结果、必要的单域 Full 升级和合并 Review Wave；
 - 适用的 upstream acceptance；
-- rules-review run 或 eligible lightweight repair closure；
+- rules-review Full run 与 deliver-task-owned Rules Scoped Repair Verification；
 - 回流、阻塞和 residual risk。
 
 当 `task.json` 的强约束把具名实现指定为复制或移植的 authoritative source 时，复用同一
@@ -251,9 +252,7 @@ provenance 人为创建 commit。
 
 不要在 `delivery.json` 重复这些内容。
 
-正常路径的最终累计 General A 条目必须包含以下机器绑定块；三个 verdict、findings、package hash
-和其它既有审查内容仍按执行协议记录，不塞进这个绑定块。eligible non-semantic repair 的 closure A
-也使用同一个块绑定 repaired target，但不能把 closure 表述成重新执行过累计 General full：
+首次 General Full A 与最终 clean Review Wave A 都必须包含以下机器绑定块；verdict、findings、package identity 和其它审查内容仍按执行协议记录，不塞进这个块。Rules Full 继续引用 `rules-review` v8 的 TARGET/run identity，不新增 binding / re-anchor 块：
 
 ````markdown
 ```deliver-task-binding
@@ -261,38 +260,45 @@ provenance 人为创建 commit。
 ```
 ````
 
-eligible lightweight closure 的同一 A 条目还必须包含恰好一个：
+每个 repair target 在同一 A 条目写恰好一个合并 Review Wave：
 
 ````markdown
-```deliver-task-repair-closure
+```deliver-task-review-wave
 {
   "task": {"taskId":"fix-slug-whitespace","revision":1,"taskHash":"sha256:..."},
   "executionHash": "sha256:...",
+  "wave": 1,
+  "failedWaveCount": 0,
   "previousTarget": {"kind":"commit-range","baseCommit":"...","headCommit":"...","executionHash":"sha256:..."},
   "target": {"kind":"commit-range","baseCommit":"...","headCommit":"...","executionHash":"sha256:..."},
-  "sourceReviewKind": "general",
-  "findingRefs": ["audits.md#A4"],
+  "repairInputRefs": ["audits.md#A4"],
   "repairDiffRef": "audits.md#A5",
-  "findingVerificationRef": "audits.md#A6",
-  "mechanicalVerificationRefs": ["audits.md#A7"],
-  "reusedEvidenceRefs": ["audits.md#A2", "audits.md#A4"],
-  "classification": "non-semantic",
-  "findingDisposition": "addressed",
-  "repairScope": "finding-only"
+  "validationRefs": ["audits.md#A6"],
+  "general": {
+    "scopedRef": "audits.md#A7",
+    "scopedResult": "clean",
+    "fullRef": null,
+    "fullResult": null
+  },
+  "rules": {
+    "scopedRef": "audits.md#A8",
+    "scopedResult": "clean",
+    "fullRef": null,
+    "fullResult": null
+  },
+  "mergedFindingRefs": [],
+  "result": "clean"
 }
 ```
 ````
 
-- `sourceReviewKind` 只允许 `general / rules-review`；`previousTarget` 是直接前序 reviewed target，
-  `target` 是当前 repaired target，二者必须不同并绑定同一 current execution hash。
-- 所有 `*Ref / *Refs` 都引用存在的 task-owned `audits.md#A*`。它们分别固定直接前序 findings、
-  实际 repair delta、finding 复验、当前最小机械验证与被复用的旧 validation / review evidence。
-- 这些 refs 不能指向另一个 `deliver-task-repair-closure`；closure 只能单跳，不能递归继承。
-- 三个终态字段只能是示例中的固定值。机器要求这些结论被显式记录，但不根据 diff 内容推断
-  non-semantic、finding 是否真的 addressed 或机械验证是否充分。
-- closure A 同时作为 `delivery.evidenceRefs.verification` 与 `generalReview`。若
-  `sourceReviewKind=rules-review`，也作为 `rulesReview`；若 source 是 General，当前 target 尚未执行的
-  首次 rules-review 仍使用其正常 evidence ref或 `not-applicable`。
+- `wave` 从 1 连续递增；`failedWaveCount` 是截至本 wave 的累计 failed Review Wave 数。首次 Full discovery 不写这个 block，也不进入计数。前一 wave 已累计 4 次失败时不得再出现下一自动 wave。
+- `previousTarget` 是直接前序 target，`target` 是当前 repaired target，二者必须不同并绑定同一 current execution hash；从第二个 wave 起，`previousTarget` 必须等于前一 wave 的 `target`。
+- `repairInputRefs`、`repairDiffRef`、`validationRefs`、domain refs 与 `mergedFindingRefs` 都引用存在的 task-owned `audits.md#A*`。机器只检查引用与结构，不判断 repair input、delta、validation 或 findings 的语义真实性。
+- 每个 domain 的 `scopedResult` 只允许 `clean / findings / cannot-bound`。只有 `cannot-bound` 时才必须填写同一 domain 的 `fullRef` 与 `fullResult`；`fullResult` 只允许 `clean / findings`。Full 仍为 cannot-verify / blocked 时不写伪终态 wave，使用现有 non-delivered evidence。另一个已 clean domain 的 Full fields 保持 `null`。active catalog 为空时整个 `rules` 值写字符串 `not-applicable`。
+- 两个 domain 的最终结果只要一个是 `findings`，`result` 就是 `failed`、`mergedFindingRefs` 非空，且累计失败只增加 1；两边最终 clean 时 `result=clean`、`mergedFindingRefs=[]` 且失败计数不增加。
+- 最终 clean wave A 同时作为 `delivery.evidenceRefs.generalReview`；Rules applicable 时也作为 `rulesReview`，Rules 不适用时后者为 `not-applicable`。`delivery.evidenceRefs.verification` 必须引用该 wave 的 `validationRefs` 之一。该 A 记录当前 target 的直接 closure，不继承或重锚旧 Full proof。
+- 旧 `deliver-task-repair-closure` block 不再受支持。
 
 实际验收使用 A 条目，并包含：
 
@@ -377,9 +383,7 @@ eligible lightweight closure 的同一 A 条目还必须包含恰好一个：
 
 禁止新增 `changedFiles / verification / generalReview / rulesReview / claims` 等顶层证据副本。目标、证据和风险只能通过固定 target 与 refs 表达。
 
-lightweight repair closure 不改变 `delivery.json` schema。它只让既有 evidence ref 指向上述绑定当前
-target 的 composite closure A；required acceptance 仍必须绑定当前 target，不能通过 closure 继承旧
-target 的 acceptance。
+Review Wave 不改变 `delivery.json` schema。最终 clean wave A 直接绑定当前 target，并由既有 evidence refs 引用；required acceptance 仍必须绑定当前 target，不能从旧 target 继承。
 
 ## artifacts
 

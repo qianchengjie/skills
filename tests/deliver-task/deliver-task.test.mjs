@@ -161,7 +161,7 @@ async function appendGeneralReview(fixture, target, { anchor = 'A2' } = {}) {
   const hash = await taskHash(fixture);
   await appendFile(
     path.join(fixture.taskDir, 'audits.md'),
-    `\n### ${anchor}：General Review\n\n最终累计 full clean。\n\n${bindingBlock(fixture, hash, target)}\n`,
+    `\n### ${anchor}：General Review\n\nGeneral Full clean。\n\n${bindingBlock(fixture, hash, target)}\n`,
   );
   return `audits.md#${anchor}`;
 }
@@ -243,53 +243,66 @@ async function writeDelivery(
   return delivery;
 }
 
-async function appendRepairClosure(
+async function appendReviewWave(
   fixture,
   previousTarget,
   target,
   {
-    anchor = 'A6',
-    sourceReviewKind = 'general',
-    findingRefs = ['audits.md#A2'],
+    anchor = 'A7',
+    wave = 1,
+    failedWaveCount = 0,
+    repairInputRefs = ['audits.md#A2'],
     repairDiffRef = 'audits.md#A3',
-    findingVerificationRef = 'audits.md#A4',
-    mechanicalVerificationRefs = ['audits.md#A5'],
-    reusedEvidenceRefs = ['audits.md#A1', 'audits.md#A2'],
+    validationRefs = ['audits.md#A4'],
+    general = {
+      scopedRef: 'audits.md#A5',
+      scopedResult: 'clean',
+      fullRef: null,
+      fullResult: null,
+    },
+    rules = {
+      scopedRef: 'audits.md#A6',
+      scopedResult: 'clean',
+      fullRef: null,
+      fullResult: null,
+    },
+    mergedFindingRefs = [],
+    result = 'clean',
     overrides = {},
   } = {},
 ) {
   const hash = await taskHash(fixture);
-  const closure = {
+  const reviewWave = {
     task: taskBinding(fixture, hash),
     executionHash: target.executionHash,
+    wave,
+    failedWaveCount,
     previousTarget,
     target,
-    sourceReviewKind,
-    findingRefs,
+    repairInputRefs,
     repairDiffRef,
-    findingVerificationRef,
-    mechanicalVerificationRefs,
-    reusedEvidenceRefs,
-    classification: 'non-semantic',
-    findingDisposition: 'addressed',
-    repairScope: 'finding-only',
+    validationRefs,
+    general,
+    rules,
+    mergedFindingRefs,
+    result,
     ...overrides,
   };
   await appendFile(
     path.join(fixture.taskDir, 'audits.md'),
     [
       '',
-      `### ${anchor}：Non-semantic repair closure`,
+      `### ${anchor}：Review Wave ${wave}`,
       '',
       bindingBlock(fixture, hash, target),
       '',
-      '```deliver-task-repair-closure',
-      JSON.stringify(closure),
+      '```deliver-task-review-wave',
+      JSON.stringify(reviewWave),
       '```',
       '',
     ].join('\n'),
   );
-  return { closure, reference: `audits.md#${anchor}` };
+  return { reviewWave, reference: `audits.md#${anchor}` };
 }
 
 async function prepareDelivered(fixture, { acceptanceStatus } = {}) {
@@ -306,13 +319,13 @@ async function prepareDelivered(fixture, { acceptanceStatus } = {}) {
   return { target, generalReview, acceptance, hash };
 }
 
-async function prepareRepairClosureDelivery(
+async function prepareReviewWaveDelivery(
   fixture,
   {
-    sourceReviewKind = 'general',
-    closureOverrides = {},
+    waveOptions = {},
     verification,
     rulesReview,
+    deliveryResult = 'delivered',
   } = {},
 ) {
   await initTask(fixture);
@@ -336,28 +349,41 @@ async function prepareRepairClosureDelivery(
       '',
       '已固定 directly reviewed target 到当前 target 的实际 repair delta。',
       '',
-      '### A4：finding verification',
+      '### A4：Affected validation',
       '',
-      '直接前序 finding 已 addressed，未发现 delta 新 finding。',
+      '直接相关测试通过。',
       '',
-      '### A5：最小机械验证',
+      '### A5：General scoped repair verification',
       '',
-      'formatter check passed。',
+      '原 finding 已解决，repair 的功能影响面 clean。',
+      '',
+      '### A6：Rules scoped repair verification',
+      '',
+      '原 finding 已解决，repair 的规则影响面 clean。',
       '',
     ].join('\n'),
   );
-  const { reference } = await appendRepairClosure(fixture, previousTarget, target, {
-    sourceReviewKind,
-    overrides: closureOverrides,
-  });
+  const { reference } = await appendReviewWave(fixture, previousTarget, target, waveOptions);
   const hash = await taskHash(fixture);
   await writeVerifiedClaims(fixture, hash, [reference]);
-  await writeDelivery(fixture, {
-    target,
-    verification: verification ?? reference,
-    generalReview: reference,
-    rulesReview: rulesReview ?? (sourceReviewKind === 'rules-review' ? reference : 'not-applicable'),
-  });
+  if (deliveryResult === 'delivered') {
+    await writeDelivery(fixture, {
+      target,
+      verification: verification ?? 'audits.md#A4',
+      generalReview: reference,
+      rulesReview: rulesReview ?? (waveOptions.rules === 'not-applicable' ? 'not-applicable' : reference),
+    });
+  } else {
+    await writeDelivery(fixture, {
+      result: deliveryResult,
+      target,
+      upstreamRequest: {
+        kind: 'blocker',
+        summary: 'Review Wave 尚有 finding，停止交付。',
+        evidenceRefs: [reference],
+      },
+    });
+  }
   return { previousTarget, target, reference };
 }
 
@@ -936,14 +962,14 @@ test('execution boundary 变化会生成新 hash 并使旧 General binding 失�
   assert.match(result.stderr, /General Review.*stale.*execution|generalReview.*binding/i);
 });
 
-test('non-semantic repair closure 以当前 target binding 和 task-owned refs 闭合 delivery', async () => {
+test('clean Review Wave 以当前 target、affected validation 和双域 scoped refs 闭合 delivery', async () => {
   const fixture = await createFixture();
-  const { reference } = await prepareRepairClosureDelivery(fixture);
+  const { reference } = await prepareReviewWaveDelivery(fixture);
 
   const delivery = JSON.parse(await readFile(path.join(fixture.taskDir, 'delivery.json'), 'utf8'));
-  assert.equal(delivery.evidenceRefs.verification, reference);
+  assert.equal(delivery.evidenceRefs.verification, 'audits.md#A4');
   assert.equal(delivery.evidenceRefs.generalReview, reference);
-  assert.equal(delivery.evidenceRefs.rulesReview, 'not-applicable');
+  assert.equal(delivery.evidenceRefs.rulesReview, reference);
 
   let result = run(fixture.root, ['validate-result', fixture.taskDir]);
   assert.equal(result.status, 0, result.stderr);
@@ -951,67 +977,243 @@ test('non-semantic repair closure 以当前 target binding 和 task-owned refs �
   assert.equal(result.status, 0, result.stderr);
 });
 
-test('repair closure 只接受显式 non-semantic 单跳终态并约束 composite evidence refs', async () => {
+test('Review Wave 把双域 findings 合并为一次 failed-wave 计数', async () => {
   const cases = [
     {
-      name: 'semantic classification',
-      options: { closureOverrides: { classification: 'semantic' } },
-      pattern: /classification must be non-semantic/i,
+      name: 'Rules finding only',
+      general: { scopedRef: 'audits.md#A5', scopedResult: 'clean', fullRef: null, fullResult: null },
+      rules: { scopedRef: 'audits.md#A6', scopedResult: 'findings', fullRef: null, fullResult: null },
+      mergedFindingRefs: ['audits.md#A6'],
     },
     {
-      name: 'unchanged target',
-      buildOptions: ({ target }) => ({ overrides: { previousTarget: target } }),
-      pattern: /requires a changed target/i,
-    },
-    {
-      name: 'recursive closure evidence',
-      options: { closureOverrides: { reusedEvidenceRefs: ['audits.md#A6'] } },
-      pattern: /cannot inherit or chain another repair closure/i,
-    },
-    {
-      name: 'stale verification ref',
-      options: { verification: 'audits.md#A1' },
-      pattern: /repair closure must be the delivery verification evidence ref/i,
-    },
-    {
-      name: 'rules-review ref is not closure',
-      options: { sourceReviewKind: 'rules-review', rulesReview: 'audits.md#A2' },
-      pattern: /rules-review repair closure must be the delivery rulesReview evidence ref/i,
+      name: 'General and Rules findings',
+      general: { scopedRef: 'audits.md#A5', scopedResult: 'findings', fullRef: null, fullResult: null },
+      rules: { scopedRef: 'audits.md#A6', scopedResult: 'findings', fullRef: null, fullResult: null },
+      mergedFindingRefs: ['audits.md#A5', 'audits.md#A6'],
     },
   ];
 
   for (const testCase of cases) {
     const fixture = await createFixture();
-    if (testCase.buildOptions) {
-      await initTask(fixture);
-      await writeExecution(fixture);
-      const previousTarget = await snapshotTarget(fixture);
-      await appendGeneralReview(fixture, previousTarget, { anchor: 'A2' });
-      await writeFile(
-        path.join(fixture.workspacePath, 'src/slug.mjs'),
-        "export const slug = (value) =>\n  value.trim().toLowerCase().replaceAll(' ', '-');\n",
-      );
-      const target = await snapshotTarget(fixture);
-      await appendFile(
-        path.join(fixture.taskDir, 'audits.md'),
-        '\n### A3：repair diff\n\nfixed.\n\n### A4：finding verification\n\naddressed.\n\n### A5：mechanical verification\n\npassed.\n',
-      );
-      const options = testCase.buildOptions({ previousTarget, target });
-      const { reference } = await appendRepairClosure(fixture, previousTarget, target, options);
-      const hash = await taskHash(fixture);
-      await writeVerifiedClaims(fixture, hash, [reference]);
-      await writeDelivery(fixture, {
-        target,
-        verification: reference,
-        generalReview: reference,
-      });
-    } else {
-      await prepareRepairClosureDelivery(fixture, testCase.options);
+    await prepareReviewWaveDelivery(fixture, {
+      waveOptions: {
+        failedWaveCount: 1,
+        general: testCase.general,
+        rules: testCase.rules,
+        mergedFindingRefs: testCase.mergedFindingRefs,
+        result: 'failed',
+      },
+      deliveryResult: 'blocked',
+    });
+    let result = run(fixture.root, ['validate-result', fixture.taskDir]);
+    assert.equal(result.status, 0, `${testCase.name}: ${result.stderr}`);
+
+    const auditsPath = path.join(fixture.taskDir, 'audits.md');
+    const audits = await readFile(auditsPath, 'utf8');
+    await writeFile(auditsPath, audits.replace('"failedWaveCount":1', '"failedWaveCount":2'));
+    result = run(fixture.root, ['validate-result', fixture.taskDir]);
+    assert.equal(result.status, 1, `${testCase.name} accepted per-domain counting`);
+    assert.match(result.stderr, /failedWaveCount.*cumulative failed Review Wave count.*1/i);
+  }
+});
+
+test('cannot-bound 只要求同一 domain 的 Full，并保持一次 wave failure', async () => {
+  {
+    const fixture = await createFixture();
+    await prepareReviewWaveDelivery(fixture, {
+      waveOptions: {
+        failedWaveCount: 1,
+        rules: {
+          scopedRef: 'audits.md#A6',
+          scopedResult: 'cannot-bound',
+          fullRef: 'audits.md#A2',
+          fullResult: 'findings',
+        },
+        mergedFindingRefs: ['audits.md#A2'],
+        result: 'failed',
+      },
+      deliveryResult: 'blocked',
+    });
+    const result = run(fixture.root, ['validate-result', fixture.taskDir]);
+    assert.equal(result.status, 0, result.stderr);
+  }
+
+  {
+    const fixture = await createFixture();
+    await prepareReviewWaveDelivery(fixture, {
+      waveOptions: {
+        general: {
+          scopedRef: 'audits.md#A5',
+          scopedResult: 'cannot-bound',
+          fullRef: 'audits.md#A2',
+          fullResult: 'clean',
+        },
+      },
+    });
+    const result = run(fixture.root, ['validate-result', fixture.taskDir]);
+    assert.equal(result.status, 0, result.stderr);
+  }
+
+  {
+    const fixture = await createFixture();
+    await prepareReviewWaveDelivery(fixture, {
+      waveOptions: {
+        general: {
+          scopedRef: 'audits.md#A5',
+          scopedResult: 'cannot-bound',
+          fullRef: null,
+          fullResult: null,
+        },
+      },
+    });
+    const result = run(fixture.root, ['validate-result', fixture.taskDir]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /General.*cannot-bound.*fullRef.*fullResult/i);
+  }
+});
+
+test('Review Wave 拒绝错误 state、target、evidence 和 legacy repair closure', async () => {
+  const cases = [
+    {
+      name: 'unchanged target',
+      waveOptions: ({ target }) => ({ overrides: { previousTarget: target } }),
+      pattern: /Review Wave.*requires a changed target/i,
+    },
+    {
+      name: 'clean with findings',
+      waveOptions: () => ({ mergedFindingRefs: ['audits.md#A5'] }),
+      pattern: /clean.*mergedFindingRefs.*empty/i,
+    },
+    {
+      name: 'failed without findings',
+      waveOptions: () => ({ result: 'failed', failedWaveCount: 1 }),
+      pattern: /failed.*mergedFindingRefs.*not be empty/i,
+    },
+    {
+      name: 'verification ref outside wave',
+      deliveryOptions: { verification: 'audits.md#A1' },
+      pattern: /verification.*validationRefs/i,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const fixture = await createFixture();
+    const prepared = await prepareReviewWaveDelivery(fixture, {
+      ...(testCase.deliveryOptions ?? {}),
+    });
+    if (testCase.waveOptions) {
+      const auditsPath = path.join(fixture.taskDir, 'audits.md');
+      const audits = await readFile(auditsPath, 'utf8');
+      const options = testCase.waveOptions(prepared);
+      const block = /```deliver-task-review-wave\r?\n([^\r\n]+)\r?\n```/.exec(audits);
+      const record = { ...JSON.parse(block[1]), ...(options.overrides ?? options) };
+      await writeFile(auditsPath, audits.replace(block[1], JSON.stringify(record)));
     }
     const result = run(fixture.root, ['validate-result', fixture.taskDir]);
     assert.equal(result.status, 1, `${testCase.name} unexpectedly passed`);
     assert.match(result.stderr, testCase.pattern, testCase.name);
   }
+
+  const fixture = await createFixture();
+  await initTask(fixture);
+  await writeExecution(fixture);
+  const previousTarget = await snapshotTarget(fixture);
+  await appendGeneralReview(fixture, previousTarget, { anchor: 'A2' });
+  await writeFile(path.join(fixture.workspacePath, 'src/slug.mjs'), "export const slug = () => 'legacy';\n");
+  const target = await snapshotTarget(fixture);
+  await appendFile(
+    path.join(fixture.taskDir, 'audits.md'),
+    '\n### A3：repair diff\n\nfixed.\n\n### A4：finding verification\n\naddressed.\n\n### A5：mechanical verification\n\npassed.\n',
+  );
+  const hash = await taskHash(fixture);
+  const legacy = {
+    task: taskBinding(fixture, hash),
+    executionHash: target.executionHash,
+    previousTarget,
+    target,
+    sourceReviewKind: 'general',
+    findingRefs: ['audits.md#A2'],
+    repairDiffRef: 'audits.md#A3',
+    findingVerificationRef: 'audits.md#A4',
+    mechanicalVerificationRefs: ['audits.md#A5'],
+    reusedEvidenceRefs: ['audits.md#A1', 'audits.md#A2'],
+    classification: 'non-semantic',
+    findingDisposition: 'addressed',
+    repairScope: 'finding-only',
+  };
+  await appendFile(
+    path.join(fixture.taskDir, 'audits.md'),
+    `\n### A6：Legacy closure\n\n${bindingBlock(fixture, hash, target)}\n\n\`\`\`deliver-task-repair-closure\n${JSON.stringify(legacy)}\n\`\`\`\n`,
+  );
+  await writeVerifiedClaims(fixture, hash, ['audits.md#A6']);
+  await writeDelivery(fixture, {
+    target,
+    verification: 'audits.md#A6',
+    generalReview: 'audits.md#A6',
+  });
+  const legacyResult = run(fixture.root, ['validate-result', fixture.taskDir]);
+  assert.equal(legacyResult.status, 1);
+  assert.match(legacyResult.stderr, /deliver-task-repair-closure.*no longer supported/i);
+});
+
+test('连续 4 个 failed Review Waves 后拒绝第 5 个自动 wave', async () => {
+  const fixture = await createFixture();
+  await initTask(fixture);
+  await writeExecution(fixture);
+  let previousTarget = await snapshotTarget(fixture);
+  await appendGeneralReview(fixture, previousTarget, { anchor: 'A2' });
+  let lastReference = 'audits.md#A2';
+  let lastTarget = previousTarget;
+
+  for (let wave = 1; wave <= 5; wave += 1) {
+    const base = 3 + (wave - 1) * 5;
+    await writeFile(
+      path.join(fixture.workspacePath, 'src/slug.mjs'),
+      `export const slug = () => 'wave-${wave}';\n`,
+    );
+    lastTarget = await snapshotTarget(fixture);
+    await appendFile(
+      path.join(fixture.taskDir, 'audits.md'),
+      `\n### A${base}：repair diff\n\nwave ${wave}.\n\n### A${base + 1}：validation\n\npassed.\n\n### A${base + 2}：General scoped\n\nfinding.\n\n### A${base + 3}：Rules scoped\n\nclean.\n`,
+    );
+    const appended = await appendReviewWave(fixture, previousTarget, lastTarget, {
+      anchor: `A${base + 4}`,
+      wave,
+      failedWaveCount: wave,
+      repairInputRefs: [lastReference],
+      repairDiffRef: `audits.md#A${base}`,
+      validationRefs: [`audits.md#A${base + 1}`],
+      general: {
+        scopedRef: `audits.md#A${base + 2}`,
+        scopedResult: 'findings',
+        fullRef: null,
+        fullResult: null,
+      },
+      rules: {
+        scopedRef: `audits.md#A${base + 3}`,
+        scopedResult: 'clean',
+        fullRef: null,
+        fullResult: null,
+      },
+      mergedFindingRefs: [`audits.md#A${base + 2}`],
+      result: 'failed',
+    });
+    previousTarget = lastTarget;
+    lastReference = appended.reference;
+  }
+
+  await writeDelivery(fixture, {
+    result: 'blocked',
+    target: lastTarget,
+    upstreamRequest: {
+      kind: 'blocker',
+      summary: 'failed Review Wave budget exhausted',
+      evidenceRefs: [lastReference],
+    },
+  });
+  const result = run(fixture.root, ['validate-result', fixture.taskDir]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /4 failed Review Waves.*stop automatic repair.*wave 5/i);
 });
 
 test('required acceptance 的 passed/skipped 只绑定 target，不改变 task 或 General identity', async () => {

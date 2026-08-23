@@ -15,7 +15,9 @@ const RESULT_STATUSES = new Set(['delivered', 'needs-upstream', 'needs-reslice',
 const CLAIM_STATUSES = new Set(['proposed', 'implemented', 'verified', 'blocked', 'waived']);
 const ACCEPTANCE_POLICIES = new Set(['required', 'not-required']);
 const ACCEPTANCE_RESULTS = new Set(['passed', 'skipped', 'rejected']);
-const REPAIR_CLOSURE_SOURCES = new Set(['general', 'rules-review']);
+const SCOPED_REVIEW_RESULTS = new Set(['clean', 'findings', 'cannot-bound']);
+const FULL_REVIEW_RESULTS = new Set(['clean', 'findings']);
+const REVIEW_WAVE_RESULTS = new Set(['clean', 'failed']);
 const UPSTREAM_KINDS = new Set([
   'target-change',
   'acceptance-change',
@@ -1135,93 +1137,171 @@ function validateGeneralBinding(record, task, execution, target, label) {
   }
 }
 
-async function resolveNonClosureAuditRef(context, reference, label) {
+async function resolveReviewWaveAuditRef(context, reference, label) {
   assertAuditRef(reference, label);
-  const evidence = await resolveEvidenceRef(context, reference, { allowNotApplicable: false });
-  const nestedClosures = protocolBlocks(
-    evidence.section,
-    'deliver-task-repair-closure',
-    `${label} evidence`,
-  );
-  if (nestedClosures.length > 0) {
-    throw gateError(`${label} cannot inherit or chain another repair closure`);
-  }
+  await resolveEvidenceRef(context, reference, { allowNotApplicable: false });
 }
 
-async function validateRepairClosure(record, context, task, execution, target, label) {
+async function validateReviewDomain(record, context, label) {
+  assertExactObject(
+    record,
+    ['scopedRef', 'scopedResult', 'fullRef', 'fullResult'],
+    [],
+    label,
+  );
+  await resolveReviewWaveAuditRef(context, record.scopedRef, `${label}.scopedRef`);
+  if (!SCOPED_REVIEW_RESULTS.has(record.scopedResult)) {
+    throw gateError(`${label}.scopedResult must be clean, findings, or cannot-bound`);
+  }
+  if (record.scopedResult === 'cannot-bound') {
+    if (record.fullRef === null || record.fullResult === null) {
+      throw gateError(`${label} scoped cannot-bound requires fullRef and fullResult`);
+    }
+    await resolveReviewWaveAuditRef(context, record.fullRef, `${label}.fullRef`);
+    if (!FULL_REVIEW_RESULTS.has(record.fullResult)) {
+      throw gateError(`${label}.fullResult must be clean or findings after scoped cannot-bound`);
+    }
+    return record.fullResult;
+  }
+  if (record.fullRef !== null || record.fullResult !== null) {
+    throw gateError(`${label} Full Review is only allowed after scoped cannot-bound`);
+  }
+  return record.scopedResult;
+}
+
+async function validateReviewWave(
+  record,
+  context,
+  task,
+  execution,
+  expectedWave,
+  priorFailedWaveCount,
+  previousWaveTarget,
+) {
+  const label = `Review Wave ${expectedWave}`;
   assertExactObject(
     record,
     [
       'task',
       'executionHash',
+      'wave',
+      'failedWaveCount',
       'previousTarget',
       'target',
-      'sourceReviewKind',
-      'findingRefs',
+      'repairInputRefs',
       'repairDiffRef',
-      'findingVerificationRef',
-      'mechanicalVerificationRefs',
-      'reusedEvidenceRefs',
-      'classification',
-      'findingDisposition',
-      'repairScope',
+      'validationRefs',
+      'general',
+      'rules',
+      'mergedFindingRefs',
+      'result',
     ],
     [],
     label,
   );
+  if (priorFailedWaveCount >= 4) {
+    throw gateError(`4 failed Review Waves require controller adjudication/escalation; stop automatic repair before wave ${expectedWave}`);
+  }
   validateBinding(record.task, task, `${label}.task`);
   if (record.executionHash !== executionHash(execution)) {
     throw gateError(`${label} has stale execution binding`);
+  }
+  if (record.wave !== expectedWave) {
+    throw gateError(`${label}.wave must equal ${expectedWave}`);
+  }
+  if (!Number.isSafeInteger(record.failedWaveCount) || record.failedWaveCount < 0) {
+    throw gateError(`${label}.failedWaveCount must be a non-negative integer`);
   }
   validateTarget(record.previousTarget, task, execution, `${label}.previousTarget`);
   validateTarget(record.target, task, execution, `${label}.target`);
   if (record.previousTarget.baseCommit !== task.baseCommit) {
     throw gateError(`${label}.previousTarget must use task.baseCommit`);
   }
-  if (canonicalJson(record.target) !== canonicalJson(target)) {
-    throw gateError(`${label} has stale target binding`);
-  }
   if (canonicalJson(record.previousTarget) === canonicalJson(record.target)) {
     throw gateError(`${label} requires a changed target`);
   }
-  if (!REPAIR_CLOSURE_SOURCES.has(record.sourceReviewKind)) {
-    throw gateError(`${label}.sourceReviewKind must be general or rules-review`);
+  if (
+    previousWaveTarget !== null
+    && canonicalJson(record.previousTarget) !== canonicalJson(previousWaveTarget)
+  ) {
+    throw gateError(`${label}.previousTarget must equal the preceding Review Wave target`);
   }
-  assertStringArray(record.findingRefs, `${label}.findingRefs`, { nonEmpty: true });
+  assertStringArray(record.repairInputRefs, `${label}.repairInputRefs`, { nonEmpty: true });
   assertString(record.repairDiffRef, `${label}.repairDiffRef`);
-  assertString(record.findingVerificationRef, `${label}.findingVerificationRef`);
-  assertStringArray(
-    record.mechanicalVerificationRefs,
-    `${label}.mechanicalVerificationRefs`,
-    { nonEmpty: true },
-  );
-  assertStringArray(record.reusedEvidenceRefs, `${label}.reusedEvidenceRefs`, { nonEmpty: true });
-  if (record.classification !== 'non-semantic') {
-    throw gateError(`${label}.classification must be non-semantic`);
-  }
-  if (record.findingDisposition !== 'addressed') {
-    throw gateError(`${label}.findingDisposition must be addressed`);
-  }
-  if (record.repairScope !== 'finding-only') {
-    throw gateError(`${label}.repairScope must be finding-only`);
-  }
-
+  assertStringArray(record.validationRefs, `${label}.validationRefs`, { nonEmpty: true });
+  assertStringArray(record.mergedFindingRefs, `${label}.mergedFindingRefs`);
   const references = [
-    ...record.findingRefs.map((reference, index) => [reference, `${label}.findingRefs[${index}]`]),
+    ...record.repairInputRefs.map((reference, index) => [reference, `${label}.repairInputRefs[${index}]`]),
     [record.repairDiffRef, `${label}.repairDiffRef`],
-    [record.findingVerificationRef, `${label}.findingVerificationRef`],
-    ...record.mechanicalVerificationRefs.map((reference, index) => [
+    ...record.validationRefs.map((reference, index) => [
       reference,
-      `${label}.mechanicalVerificationRefs[${index}]`,
+      `${label}.validationRefs[${index}]`,
     ]),
-    ...record.reusedEvidenceRefs.map((reference, index) => [
+    ...record.mergedFindingRefs.map((reference, index) => [
       reference,
-      `${label}.reusedEvidenceRefs[${index}]`,
+      `${label}.mergedFindingRefs[${index}]`,
     ]),
   ];
   for (const [reference, referenceLabel] of references) {
-    await resolveNonClosureAuditRef(context, reference, referenceLabel);
+    await resolveReviewWaveAuditRef(context, reference, referenceLabel);
   }
+
+  const generalResult = await validateReviewDomain(record.general, context, `${label}.General`);
+  let rulesResult = 'clean';
+  if (record.rules === 'not-applicable') {
+    rulesResult = 'clean';
+  } else {
+    rulesResult = await validateReviewDomain(record.rules, context, `${label}.Rules`);
+  }
+  if (!REVIEW_WAVE_RESULTS.has(record.result)) {
+    throw gateError(`${label}.result must be clean or failed`);
+  }
+  if (record.result === 'clean' && record.mergedFindingRefs.length !== 0) {
+    throw gateError(`${label} clean requires mergedFindingRefs to be empty`);
+  }
+  if (record.result === 'failed' && record.mergedFindingRefs.length === 0) {
+    throw gateError(`${label} failed requires mergedFindingRefs to not be empty`);
+  }
+  const expectedResult = generalResult === 'findings' || rulesResult === 'findings' ? 'failed' : 'clean';
+  if (record.result !== expectedResult) {
+    throw gateError(`${label}.result must match the merged General and Rules outcomes: ${expectedResult}`);
+  }
+  const expectedFailedWaveCount = priorFailedWaveCount + (record.result === 'failed' ? 1 : 0);
+  if (record.failedWaveCount !== expectedFailedWaveCount) {
+    throw gateError(
+      `${label}.failedWaveCount must equal cumulative failed Review Wave count ${expectedFailedWaveCount}`,
+    );
+  }
+  return { record, failedWaveCount: expectedFailedWaveCount };
+}
+
+async function validateReviewWaveHistory(context, task, execution) {
+  const audits = await readJsonOrText(path.join(context.taskDir, 'audits.md'), 'audits.md');
+  if (protocolBlocks(audits, 'deliver-task-repair-closure', 'audits.md').length > 0) {
+    throw gateError('deliver-task-repair-closure is no longer supported; use deliver-task-review-wave');
+  }
+  const records = protocolBlocks(audits, 'deliver-task-review-wave', 'audits.md');
+  if (records.length > 0 && execution === null) {
+    throw gateError('Review Wave history requires delivery.target and execution.json binding');
+  }
+  const validated = [];
+  let failedWaveCount = 0;
+  let previousWaveTarget = null;
+  for (const [index, record] of records.entries()) {
+    const result = await validateReviewWave(
+      record,
+      context,
+      task,
+      execution,
+      index + 1,
+      failedWaveCount,
+      previousWaveTarget,
+    );
+    validated.push(result.record);
+    failedWaveCount = result.failedWaveCount;
+    previousWaveTarget = result.record.target;
+  }
+  return { records: validated, failedWaveCount };
 }
 
 function validateAcceptanceShape(record, label) {
@@ -1235,7 +1315,7 @@ function validateAcceptanceShape(record, label) {
   return record;
 }
 
-async function validateDeliveredBindings(context, task, execution, delivery) {
+async function validateDeliveredBindings(context, task, execution, delivery, reviewWaveHistory) {
   const generalRef = delivery.evidenceRefs.generalReview;
   assertAuditRef(generalRef, 'delivery.evidenceRefs.generalReview');
   const generalEvidence = await resolveEvidenceRef(context, generalRef, { allowNotApplicable: false });
@@ -1246,32 +1326,38 @@ async function validateDeliveredBindings(context, task, execution, delivery) {
   );
   validateGeneralBinding(generalBinding, task, execution, delivery.target, 'General Review binding');
 
-  const repairClosures = protocolBlocks(
+  const evidenceWaves = protocolBlocks(
     generalEvidence.section,
-    'deliver-task-repair-closure',
+    'deliver-task-review-wave',
     'General Review evidence',
   );
-  if (repairClosures.length > 1) {
-    throw gateError('General Review evidence must contain at most one deliver-task-repair-closure block');
-  }
-  if (repairClosures.length === 1) {
-    const closure = repairClosures[0];
-    await validateRepairClosure(
-      closure,
-      context,
-      task,
-      execution,
-      delivery.target,
-      'repair closure',
-    );
-    if (delivery.evidenceRefs.verification !== generalRef) {
-      throw gateError('repair closure must be the delivery verification evidence ref');
+  if (reviewWaveHistory.records.length > 0) {
+    if (evidenceWaves.length !== 1) {
+      throw gateError('final Review Wave evidence must contain exactly one deliver-task-review-wave block');
     }
-    if (
-      closure.sourceReviewKind === 'rules-review'
-      && delivery.evidenceRefs.rulesReview !== generalRef
-    ) {
-      throw gateError('rules-review repair closure must be the delivery rulesReview evidence ref');
+    const finalWave = reviewWaveHistory.records.at(-1);
+    if (canonicalJson(evidenceWaves[0]) !== canonicalJson(finalWave)) {
+      throw gateError('delivery.evidenceRefs.generalReview must reference the final Review Wave');
+    }
+    if (finalWave.result !== 'clean') {
+      throw gateError('delivered requires the final Review Wave to be clean');
+    }
+    if (canonicalJson(finalWave.target) !== canonicalJson(delivery.target)) {
+      throw gateError('final Review Wave has stale target binding');
+    }
+    if (!finalWave.validationRefs.includes(delivery.evidenceRefs.verification)) {
+      throw gateError('delivery.evidenceRefs.verification must reference final Review Wave validationRefs');
+    }
+    if (finalWave.rules === 'not-applicable') {
+      if (delivery.evidenceRefs.rulesReview !== 'not-applicable') {
+        throw gateError('Rules not-applicable Review Wave requires delivery rulesReview not-applicable');
+      }
+    } else if (delivery.evidenceRefs.rulesReview !== generalRef) {
+      throw gateError('applicable Rules scoped verification requires the merged Review Wave evidence ref');
+    }
+  } else {
+    if (evidenceWaves.length !== 0) {
+      throw gateError('delivery General evidence contains an untracked Review Wave');
     }
   }
 
@@ -1332,8 +1418,9 @@ async function readDelivery(context, task) {
   const raw = await readJson(path.join(context.taskDir, 'delivery.json'), 'delivery.json');
   const execution = raw?.target != null ? await readExecution(context, task) : null;
   const delivery = validateDelivery(raw, task, execution);
+  const reviewWaveHistory = await validateReviewWaveHistory(context, task, execution);
   if (delivery.result === 'delivered') {
-    await validateDeliveredBindings(context, task, execution, delivery);
+    await validateDeliveredBindings(context, task, execution, delivery, reviewWaveHistory);
   } else {
     for (const reference of delivery.upstreamRequest.evidenceRefs) {
       await resolveEvidenceRef(context, reference, { allowNotApplicable: false });
