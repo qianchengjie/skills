@@ -1043,13 +1043,13 @@ function loadRepository(dispatchPath) {
   const absoluteDispatchPath = path.resolve(dispatchPath);
   const dispatchStat = fs.lstatSync(absoluteDispatchPath);
   if (dispatchStat.isSymbolicLink() || !dispatchStat.isFile()) throw new Error('dispatch input must be a regular non-symlink file');
-  const realDispatchPath = fs.realpathSync(absoluteDispatchPath);
+  const realDispatchPath = fs.realpathSync.native(absoluteDispatchPath);
   const rootOutput = execFileSync('git', ['-C', path.dirname(realDispatchPath), 'rev-parse', '--show-toplevel'], {
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
   }).trim();
   if (!rootOutput || rootOutput.includes('\n')) throw new Error('unable to determine a single Git worktree root');
-  const root = fs.realpathSync(rootOutput);
+  const root = fs.realpathSync.native(rootOutput);
   assertPathInsideRoot(root, realDispatchPath, 'dispatch input');
   return { root, dispatchPath: realDispatchPath };
 }

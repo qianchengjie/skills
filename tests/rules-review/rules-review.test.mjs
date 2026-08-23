@@ -411,7 +411,7 @@ function draft({
 }
 
 function createDraft(root, options = {}) {
-  if (options.candidateRuleRefs?.includes("AUX-001")) {
+  if (options.candidateRuleRefs?.includes("EXTRA-001")) {
     writeTestRuleStore(root, options.candidateRuleRefs);
   }
   const runId = testRunId(options.runId || "run-v8");
@@ -595,19 +595,19 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
   const dispatchFile = createDraft(root, { runId: "root-cause-grouping" });
   const draftDispatch = readJson(dispatchFile);
   draftDispatch.ruleSet.ruleSources[0].ruleLevel = "SHOULD";
-  draftDispatch.ruleSet.candidateRuleRefs.push("AUX-001");
-  draftDispatch.ruleSet.selectedRuleRefs.push("AUX-001");
+  draftDispatch.ruleSet.candidateRuleRefs.push("EXTRA-001");
+  draftDispatch.ruleSet.selectedRuleRefs.push("EXTRA-001");
   draftDispatch.ruleSet.ruleSources.push({
     ...draftDispatch.ruleSet.ruleSources[0],
-    namespace: "AUX",
-    ruleRef: "AUX-001",
-    sourceFile: ".agents/rules/concerns/aux.md",
+    namespace: "EXTRA",
+    ruleRef: "EXTRA-001",
+    sourceFile: ".agents/rules/concerns/extra.md",
   });
-  writeTestRuleStore(root, ["CORE-001", "AUX-001"]);
+  writeTestRuleStore(root, ["CORE-001", "EXTRA-001"]);
   const targetSpecs = [
     ["T001", "src/main.js", "CI 是否组装 backend 制品", "CORE-001"],
     ["T002", "src/other.js", "WebView 是否允许进入 /backend", "CORE-001"],
-    ["T003", "src/host.js", "独立宿主是否生成 /backend 路由", "AUX-001"],
+    ["T003", "src/host.js", "独立宿主是否生成 /backend 路由", "EXTRA-001"],
   ];
   draftDispatch.targets.changedUnits = targetSpecs.map(([targetId, inputRef, summary]) => ({
     targetId,
@@ -736,14 +736,14 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
   assert.equal(finalReview.findings.length, 1);
   assert.equal(finalReview.findings[0].rootCause, rootCause);
   assert.deepEqual(finalReview.findings[0].evidenceGroups.map((group) => group.reviewItemId), ["RI001", "RI002", "RI003"]);
-  assert.deepEqual(finalReview.findings[0].evidenceGroups.map((group) => group.ruleRef), ["CORE-001", "CORE-001", "AUX-001"]);
+  assert.deepEqual(finalReview.findings[0].evidenceGroups.map((group) => group.ruleRef), ["CORE-001", "CORE-001", "EXTRA-001"]);
   assert.deepEqual(finalReview.findings[0].evidenceGroups.map((group) => group.priority), ["must_fix", "should_fix", "should_fix"]);
   assert.equal(finalReview.findings[0].evidenceGroups.length, 3);
   assert.equal("otherConcerns" in finalReview, false);
   assert.equal(response.split(rootCause).length - 1, 1);
   assert.match(response, /## 问题/);
   assert.doesNotMatch(response, /## 审查结果/);
-  const repositoryRoot = fs.realpathSync(root);
+  const repositoryRoot = fs.realpathSync.native(root);
   assert.ok(finalMarkdown.includes([
     `#### F001：${rootCause}`,
     "- RI001｜CORE-001（SHOULD）｜T001｜本次引入",
@@ -751,11 +751,11 @@ test("语义切片分别审查，同一 batch 的 finding 按显式 rootCause �
     `  - CI 是否组装 backend 制品｜[src/main.js:1](${path.join(repositoryRoot, "src/main.js")}:1)`,
     "- RI002｜CORE-001（SHOULD）｜T002｜本次引入",
     `  - WebView 是否允许进入 /backend｜[src/other.js:1](${path.join(repositoryRoot, "src/other.js")}:1)`,
-    "- RI003｜AUX-001（SHOULD）｜T003｜本次引入",
+    "- RI003｜EXTRA-001（SHOULD）｜T003｜本次引入",
     `  - 独立宿主是否生成 /backend 路由｜[src/host.js:1](${path.join(repositoryRoot, "src/host.js")}:1)`,
   ].join("\n")));
   assert.ok(response.split("\n").includes(`- F001：${rootCause}`));
-  assert.doesNotMatch(response, /CORE-001|AUX-001|src\/(?:main|other|host)\.js:1|目标：T00[123]|来源：|优先级：(must_fix|should_fix)/);
+  assert.doesNotMatch(response, /CORE-001|EXTRA-001|src\/(?:main|other|host)\.js:1|目标：T00[123]|来源：|优先级：(must_fix|should_fix)/);
 
   const schema = readJson(path.join(repoRoot, "skills/rules-review/schemas/final-review.schema.json"));
   for (const definition of ["issueSummary", "cannotVerifyItem", "validationResult", "finding", "findingEvidenceGroup", "observation", "evidence"]) {
@@ -852,7 +852,7 @@ test("render-handoff 生成不含本机路径的可转发修复说明", async (t
   assert.match(handoff, /F001：主文件缺少必要保护。/);
   assert.match(handoff, /RI001｜CORE-001（MUST）｜T001｜本次引入/);
   assert.match(handoff, /变更直接暴露未保护入口｜`src\/main\.js:1`/);
-  assert.doesNotMatch(handoff, new RegExp(fs.realpathSync(root).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(handoff, new RegExp(fs.realpathSync.native(root).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 
   shard.results[0] = {
     reviewItemId: "RI001",
@@ -1760,13 +1760,13 @@ test("target-commit 拒绝文件排除，但仍允许 excludedRuleRefs", async (
   const excludedRule = createDraft(root, {
     runId: "commit-excluded-rule",
     inputRefs: ["src/main.js", "src/other.js"],
-    candidateRuleRefs: ["CORE-001", "AUX-001"],
+    candidateRuleRefs: ["CORE-001", "EXTRA-001"],
     selectedRuleRefs: ["CORE-001"],
-    excludedRuleRefs: ["AUX-001"],
+    excludedRuleRefs: ["EXTRA-001"],
   });
   const dispatch = await seal(excludedRule, target, base);
   assert.equal(dispatch.reviewRange.boundCommit, target);
-  assert.deepEqual(dispatch.ruleSet.excludedRuleRefs, ["AUX-001"]);
+  assert.deepEqual(dispatch.ruleSet.excludedRuleRefs, ["EXTRA-001"]);
 });
 
 test("显式 base 到 target commit 累计包含多次已提交变更", async (t) => {
@@ -1795,16 +1795,16 @@ test("commit 文件范围必须完整，scopeMode 只由规则排除事实派生
   fs.writeFileSync(path.join(root, "src/other.js"), "export const other = 2;\n");
   const file = createDraft(root, {
     inputRefs: ["src/main.js", "src/other.js"],
-    candidateRuleRefs: ["CORE-001", "AUX-001"],
+    candidateRuleRefs: ["CORE-001", "EXTRA-001"],
     selectedRuleRefs: ["CORE-001"],
-    excludedRuleRefs: ["AUX-001"],
+    excludedRuleRefs: ["EXTRA-001"],
   });
   const dispatch = await seal(file);
   const runDir = await materializePassingRun(file);
   const finalReview = readJson(path.join(runDir, "finalReview.json"));
   assert.equal(finalReview.scopeMode, "scoped");
   assert.deepEqual(finalReview.excludedFiles, []);
-  assert.deepEqual(finalReview.excludedRuleRefs, ["AUX-001"]);
+  assert.deepEqual(finalReview.excludedRuleRefs, ["EXTRA-001"]);
   const result = await runJson(["--mode", "run", "--dir", runDir]);
   assert.equal(result.ok, true);
 
