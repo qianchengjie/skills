@@ -48,11 +48,20 @@ baseline snapshot identity、固定 source identity、mapping 或 execution bind
 
 repair 后必须由另一个 fresh reviewer 对最终 target 做累计 full；其 verdict 才能收口。
 
+例外只由 controller 在 reviewer 返回后按实际 repair delta 判定：若满足
+[EXECUTION-RULES.md](EXECUTION-RULES.md) 的完整 non-semantic invariant，本轮 `repair` 的
+`addressed` 与“delta 无新 finding”可作为 lightweight closure 的 finding verification，直接前序
+full 的其它 verdict 由 closure 引用。reviewer 不按文件数、行数或 finding 类型决定 eligibility，也
+不在输出中生成最终三个 verdict。条件缺失或不确定时仍执行上述累计 full。
+
 ## Rules reviewer
 
 仅在 General clean 且 upstream acceptance 已满足后派发。使用现有 `rules-review` 完成最终独立分类和 full review；不要从 execution-time selected rules 继承最终范围。active catalog 为空才 not-applicable。
 
-规则 finding 只返回 controller 向前返修；reviewer 不修改 preflight、task contract 或 caller lifecycle。合法的一跳 repair verification 仍使用当前单任务协议的证明义务，不能创建递归链或冒充 fresh full。
+规则 finding 只返回 controller 向前返修；reviewer 不修改 preflight、task contract 或 caller
+lifecycle。rules-review v8 没有 incremental / repair verification；默认新 TARGET 使用 fresh full。
+deliver-task controller 对 eligible non-semantic repair 写入的 task-owned closure 不是 rules-review
+run，reviewer 不为它伪造 shard、finalReview 或 `ready_for_merge`。
 
 reviewer 不执行或建议自动 merge、cherry-pick、rebase、push、publish；integration 不属于本次交付审查。
 

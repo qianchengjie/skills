@@ -15,6 +15,7 @@ const RESULT_STATUSES = new Set(['delivered', 'needs-upstream', 'needs-reslice',
 const CLAIM_STATUSES = new Set(['proposed', 'implemented', 'verified', 'blocked', 'waived']);
 const ACCEPTANCE_POLICIES = new Set(['required', 'not-required']);
 const ACCEPTANCE_RESULTS = new Set(['passed', 'skipped', 'rejected']);
+const REPAIR_CLOSURE_SOURCES = new Set(['general', 'rules-review']);
 const UPSTREAM_KINDS = new Set([
   'target-change',
   'acceptance-change',
@@ -922,16 +923,16 @@ function validateTargetIdentity(target, label) {
   }
 }
 
-function validateTarget(target, task, execution) {
-  validateTargetIdentity(target, 'delivery.target');
+function validateTarget(target, task, execution, label = 'delivery.target') {
+  validateTargetIdentity(target, label);
   if (target.kind === 'commit-range' && task.commitPolicy === 'forbidden') {
-    throw gateError('commitPolicy forbidden cannot use a commit-range target');
+    throw gateError(`${label} cannot use a commit-range target with commitPolicy forbidden`);
   }
   if (target.kind === 'worktree' && task.commitPolicy === 'required') {
-    throw gateError('commitPolicy required cannot use a worktree target');
+    throw gateError(`${label} cannot use a worktree target with commitPolicy required`);
   }
   if (target.executionHash !== executionHash(execution)) {
-    throw gateError('delivery.target has stale execution binding');
+    throw gateError(`${label} has stale execution binding`);
   }
 }
 
@@ -1134,6 +1135,95 @@ function validateGeneralBinding(record, task, execution, target, label) {
   }
 }
 
+async function resolveNonClosureAuditRef(context, reference, label) {
+  assertAuditRef(reference, label);
+  const evidence = await resolveEvidenceRef(context, reference, { allowNotApplicable: false });
+  const nestedClosures = protocolBlocks(
+    evidence.section,
+    'deliver-task-repair-closure',
+    `${label} evidence`,
+  );
+  if (nestedClosures.length > 0) {
+    throw gateError(`${label} cannot inherit or chain another repair closure`);
+  }
+}
+
+async function validateRepairClosure(record, context, task, execution, target, label) {
+  assertExactObject(
+    record,
+    [
+      'task',
+      'executionHash',
+      'previousTarget',
+      'target',
+      'sourceReviewKind',
+      'findingRefs',
+      'repairDiffRef',
+      'findingVerificationRef',
+      'mechanicalVerificationRefs',
+      'reusedEvidenceRefs',
+      'classification',
+      'findingDisposition',
+      'repairScope',
+    ],
+    [],
+    label,
+  );
+  validateBinding(record.task, task, `${label}.task`);
+  if (record.executionHash !== executionHash(execution)) {
+    throw gateError(`${label} has stale execution binding`);
+  }
+  validateTarget(record.previousTarget, task, execution, `${label}.previousTarget`);
+  validateTarget(record.target, task, execution, `${label}.target`);
+  if (record.previousTarget.baseCommit !== task.baseCommit) {
+    throw gateError(`${label}.previousTarget must use task.baseCommit`);
+  }
+  if (canonicalJson(record.target) !== canonicalJson(target)) {
+    throw gateError(`${label} has stale target binding`);
+  }
+  if (canonicalJson(record.previousTarget) === canonicalJson(record.target)) {
+    throw gateError(`${label} requires a changed target`);
+  }
+  if (!REPAIR_CLOSURE_SOURCES.has(record.sourceReviewKind)) {
+    throw gateError(`${label}.sourceReviewKind must be general or rules-review`);
+  }
+  assertStringArray(record.findingRefs, `${label}.findingRefs`, { nonEmpty: true });
+  assertString(record.repairDiffRef, `${label}.repairDiffRef`);
+  assertString(record.findingVerificationRef, `${label}.findingVerificationRef`);
+  assertStringArray(
+    record.mechanicalVerificationRefs,
+    `${label}.mechanicalVerificationRefs`,
+    { nonEmpty: true },
+  );
+  assertStringArray(record.reusedEvidenceRefs, `${label}.reusedEvidenceRefs`, { nonEmpty: true });
+  if (record.classification !== 'non-semantic') {
+    throw gateError(`${label}.classification must be non-semantic`);
+  }
+  if (record.findingDisposition !== 'addressed') {
+    throw gateError(`${label}.findingDisposition must be addressed`);
+  }
+  if (record.repairScope !== 'finding-only') {
+    throw gateError(`${label}.repairScope must be finding-only`);
+  }
+
+  const references = [
+    ...record.findingRefs.map((reference, index) => [reference, `${label}.findingRefs[${index}]`]),
+    [record.repairDiffRef, `${label}.repairDiffRef`],
+    [record.findingVerificationRef, `${label}.findingVerificationRef`],
+    ...record.mechanicalVerificationRefs.map((reference, index) => [
+      reference,
+      `${label}.mechanicalVerificationRefs[${index}]`,
+    ]),
+    ...record.reusedEvidenceRefs.map((reference, index) => [
+      reference,
+      `${label}.reusedEvidenceRefs[${index}]`,
+    ]),
+  ];
+  for (const [reference, referenceLabel] of references) {
+    await resolveNonClosureAuditRef(context, reference, referenceLabel);
+  }
+}
+
 function validateAcceptanceShape(record, label) {
   assertExactObject(record, ['task', 'target', 'status', 'evidenceRefs'], [], label);
   validateBindingShape(record.task, `${label}.task`);
@@ -1155,6 +1245,35 @@ async function validateDeliveredBindings(context, task, execution, delivery) {
     'General Review evidence',
   );
   validateGeneralBinding(generalBinding, task, execution, delivery.target, 'General Review binding');
+
+  const repairClosures = protocolBlocks(
+    generalEvidence.section,
+    'deliver-task-repair-closure',
+    'General Review evidence',
+  );
+  if (repairClosures.length > 1) {
+    throw gateError('General Review evidence must contain at most one deliver-task-repair-closure block');
+  }
+  if (repairClosures.length === 1) {
+    const closure = repairClosures[0];
+    await validateRepairClosure(
+      closure,
+      context,
+      task,
+      execution,
+      delivery.target,
+      'repair closure',
+    );
+    if (delivery.evidenceRefs.verification !== generalRef) {
+      throw gateError('repair closure must be the delivery verification evidence ref');
+    }
+    if (
+      closure.sourceReviewKind === 'rules-review'
+      && delivery.evidenceRefs.rulesReview !== generalRef
+    ) {
+      throw gateError('rules-review repair closure must be the delivery rulesReview evidence ref');
+    }
+  }
 
   const acceptanceRef = delivery.evidenceRefs.acceptance;
   if (task.acceptancePolicy === 'not-required') {

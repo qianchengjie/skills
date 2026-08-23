@@ -225,7 +225,7 @@ task identity。旧 task identity 下的证据不会自动证明新合同；cont
 - 验证命令及公开结果；
 - 每轮 General full / repair 的输入绑定、findings 和 verdict；
 - 适用的 upstream acceptance；
-- rules-review run 或 repair verification；
+- rules-review run 或 eligible lightweight repair closure；
 - 回流、阻塞和 residual risk。
 
 当 `task.json` 的强约束把具名实现指定为复制或移植的 authoritative source 时，复用同一
@@ -244,14 +244,48 @@ provenance 人为创建 commit。
 
 不要在 `delivery.json` 重复这些内容。
 
-最终累计 General A 条目必须包含以下机器绑定块；三个 verdict、findings、package hash
-和其它既有审查内容仍按执行协议记录，不塞进这个绑定块：
+正常路径的最终累计 General A 条目必须包含以下机器绑定块；三个 verdict、findings、package hash
+和其它既有审查内容仍按执行协议记录，不塞进这个绑定块。eligible non-semantic repair 的 closure A
+也使用同一个块绑定 repaired target，但不能把 closure 表述成重新执行过累计 General full：
 
 ````markdown
 ```deliver-task-binding
 {"task":{"taskId":"fix-slug-whitespace","revision":1,"taskHash":"sha256:..."},"executionHash":"sha256:...","target":{"kind":"no-change","baseCommit":"...","executionHash":"sha256:..."}}
 ```
 ````
+
+eligible lightweight closure 的同一 A 条目还必须包含恰好一个：
+
+````markdown
+```deliver-task-repair-closure
+{
+  "task": {"taskId":"fix-slug-whitespace","revision":1,"taskHash":"sha256:..."},
+  "executionHash": "sha256:...",
+  "previousTarget": {"kind":"commit-range","baseCommit":"...","headCommit":"...","executionHash":"sha256:..."},
+  "target": {"kind":"commit-range","baseCommit":"...","headCommit":"...","executionHash":"sha256:..."},
+  "sourceReviewKind": "general",
+  "findingRefs": ["audits.md#A4"],
+  "repairDiffRef": "audits.md#A5",
+  "findingVerificationRef": "audits.md#A6",
+  "mechanicalVerificationRefs": ["audits.md#A7"],
+  "reusedEvidenceRefs": ["audits.md#A2", "audits.md#A4"],
+  "classification": "non-semantic",
+  "findingDisposition": "addressed",
+  "repairScope": "finding-only"
+}
+```
+````
+
+- `sourceReviewKind` 只允许 `general / rules-review`；`previousTarget` 是直接前序 reviewed target，
+  `target` 是当前 repaired target，二者必须不同并绑定同一 current execution hash。
+- 所有 `*Ref / *Refs` 都引用存在的 task-owned `audits.md#A*`。它们分别固定直接前序 findings、
+  实际 repair delta、finding 复验、当前最小机械验证与被复用的旧 validation / review evidence。
+- 这些 refs 不能指向另一个 `deliver-task-repair-closure`；closure 只能单跳，不能递归继承。
+- 三个终态字段只能是示例中的固定值。机器要求这些结论被显式记录，但不根据 diff 内容推断
+  non-semantic、finding 是否真的 addressed 或机械验证是否充分。
+- closure A 同时作为 `delivery.evidenceRefs.verification` 与 `generalReview`。若
+  `sourceReviewKind=rules-review`，也作为 `rulesReview`；若 source 是 General，当前 target 尚未执行的
+  首次 rules-review 仍使用其正常 evidence ref或 `not-applicable`。
 
 实际验收使用 A 条目，并包含：
 
@@ -333,6 +367,10 @@ provenance 人为创建 commit。
 是否正确。
 
 禁止新增 `changedFiles / verification / generalReview / rulesReview / claims` 等顶层证据副本。目标、证据和风险只能通过固定 target 与 refs 表达。
+
+lightweight repair closure 不改变 `delivery.json` schema。它只让既有 evidence ref 指向上述绑定当前
+target 的 composite closure A；required acceptance 仍必须绑定当前 target，不能通过 closure 继承旧
+target 的 acceptance。
 
 ## artifacts
 

@@ -207,8 +207,10 @@ async function writeDelivery(
   {
     result = 'delivered',
     target,
+    verification = 'audits.md#A1',
     generalReview = 'audits.md#A2',
     acceptance = null,
+    rulesReview = 'not-applicable',
     upstreamRequest = null,
   } = {},
 ) {
@@ -222,10 +224,10 @@ async function writeDelivery(
       result === 'delivered'
         ? {
             claims: 'claims.json',
-            verification: 'audits.md#A1',
+            verification,
             generalReview,
             acceptance,
-            rulesReview: 'not-applicable',
+            rulesReview,
           }
         : {
             claims: 'claims.json',
@@ -241,6 +243,55 @@ async function writeDelivery(
   return delivery;
 }
 
+async function appendRepairClosure(
+  fixture,
+  previousTarget,
+  target,
+  {
+    anchor = 'A6',
+    sourceReviewKind = 'general',
+    findingRefs = ['audits.md#A2'],
+    repairDiffRef = 'audits.md#A3',
+    findingVerificationRef = 'audits.md#A4',
+    mechanicalVerificationRefs = ['audits.md#A5'],
+    reusedEvidenceRefs = ['audits.md#A1', 'audits.md#A2'],
+    overrides = {},
+  } = {},
+) {
+  const hash = await taskHash(fixture);
+  const closure = {
+    task: taskBinding(fixture, hash),
+    executionHash: target.executionHash,
+    previousTarget,
+    target,
+    sourceReviewKind,
+    findingRefs,
+    repairDiffRef,
+    findingVerificationRef,
+    mechanicalVerificationRefs,
+    reusedEvidenceRefs,
+    classification: 'non-semantic',
+    findingDisposition: 'addressed',
+    repairScope: 'finding-only',
+    ...overrides,
+  };
+  await appendFile(
+    path.join(fixture.taskDir, 'audits.md'),
+    [
+      '',
+      `### ${anchor}：Non-semantic repair closure`,
+      '',
+      bindingBlock(fixture, hash, target),
+      '',
+      '```deliver-task-repair-closure',
+      JSON.stringify(closure),
+      '```',
+      '',
+    ].join('\n'),
+  );
+  return { closure, reference: `audits.md#${anchor}` };
+}
+
 async function prepareDelivered(fixture, { acceptanceStatus } = {}) {
   await initTask(fixture);
   await writeExecution(fixture);
@@ -253,6 +304,61 @@ async function prepareDelivered(fixture, { acceptanceStatus } = {}) {
   await writeVerifiedClaims(fixture, hash);
   await writeDelivery(fixture, { target, generalReview, acceptance });
   return { target, generalReview, acceptance, hash };
+}
+
+async function prepareRepairClosureDelivery(
+  fixture,
+  {
+    sourceReviewKind = 'general',
+    closureOverrides = {},
+    verification,
+    rulesReview,
+  } = {},
+) {
+  await initTask(fixture);
+  await writeExecution(fixture);
+  const previousTarget = await snapshotTarget(fixture);
+  await appendGeneralReview(fixture, previousTarget, { anchor: 'A2' });
+  await writeFile(
+    path.join(fixture.workspacePath, 'src/slug.mjs'),
+    [
+      'export const slug = (value) =>',
+      "  value.trim().toLowerCase().replaceAll(' ', '-');",
+      '',
+    ].join('\n'),
+  );
+  const target = await snapshotTarget(fixture);
+  await appendFile(
+    path.join(fixture.taskDir, 'audits.md'),
+    [
+      '',
+      '### A3：实际 repair diff',
+      '',
+      '已固定 directly reviewed target 到当前 target 的实际 repair delta。',
+      '',
+      '### A4：finding verification',
+      '',
+      '直接前序 finding 已 addressed，未发现 delta 新 finding。',
+      '',
+      '### A5：最小机械验证',
+      '',
+      'formatter check passed。',
+      '',
+    ].join('\n'),
+  );
+  const { reference } = await appendRepairClosure(fixture, previousTarget, target, {
+    sourceReviewKind,
+    overrides: closureOverrides,
+  });
+  const hash = await taskHash(fixture);
+  await writeVerifiedClaims(fixture, hash, [reference]);
+  await writeDelivery(fixture, {
+    target,
+    verification: verification ?? reference,
+    generalReview: reference,
+    rulesReview: rulesReview ?? (sourceReviewKind === 'rules-review' ? reference : 'not-applicable'),
+  });
+  return { previousTarget, target, reference };
 }
 
 test('start 是唯一 bootstrap，并在 task workspace 内原子初始化固定状态', async () => {
@@ -826,6 +932,84 @@ test('execution boundary 变化会生成新 hash 并使旧 General binding 失�
   const result = run(fixture.root, ['validate-result', path.relative(fixture.root, fixture.taskDir)]);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /General Review.*stale.*execution|generalReview.*binding/i);
+});
+
+test('non-semantic repair closure 以当前 target binding 和 task-owned refs 闭合 delivery', async () => {
+  const fixture = await createFixture();
+  const { reference } = await prepareRepairClosureDelivery(fixture);
+
+  const delivery = JSON.parse(await readFile(path.join(fixture.taskDir, 'delivery.json'), 'utf8'));
+  assert.equal(delivery.evidenceRefs.verification, reference);
+  assert.equal(delivery.evidenceRefs.generalReview, reference);
+  assert.equal(delivery.evidenceRefs.rulesReview, 'not-applicable');
+
+  let result = run(fixture.root, ['validate-result', fixture.taskDir]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fixture.root, ['close-check', fixture.taskDir]);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('repair closure 只接受显式 non-semantic 单跳终态并约束 composite evidence refs', async () => {
+  const cases = [
+    {
+      name: 'semantic classification',
+      options: { closureOverrides: { classification: 'semantic' } },
+      pattern: /classification must be non-semantic/i,
+    },
+    {
+      name: 'unchanged target',
+      buildOptions: ({ target }) => ({ overrides: { previousTarget: target } }),
+      pattern: /requires a changed target/i,
+    },
+    {
+      name: 'recursive closure evidence',
+      options: { closureOverrides: { reusedEvidenceRefs: ['audits.md#A6'] } },
+      pattern: /cannot inherit or chain another repair closure/i,
+    },
+    {
+      name: 'stale verification ref',
+      options: { verification: 'audits.md#A1' },
+      pattern: /repair closure must be the delivery verification evidence ref/i,
+    },
+    {
+      name: 'rules-review ref is not closure',
+      options: { sourceReviewKind: 'rules-review', rulesReview: 'audits.md#A2' },
+      pattern: /rules-review repair closure must be the delivery rulesReview evidence ref/i,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const fixture = await createFixture();
+    if (testCase.buildOptions) {
+      await initTask(fixture);
+      await writeExecution(fixture);
+      const previousTarget = await snapshotTarget(fixture);
+      await appendGeneralReview(fixture, previousTarget, { anchor: 'A2' });
+      await writeFile(
+        path.join(fixture.workspacePath, 'src/slug.mjs'),
+        "export const slug = (value) =>\n  value.trim().toLowerCase().replaceAll(' ', '-');\n",
+      );
+      const target = await snapshotTarget(fixture);
+      await appendFile(
+        path.join(fixture.taskDir, 'audits.md'),
+        '\n### A3：repair diff\n\nfixed.\n\n### A4：finding verification\n\naddressed.\n\n### A5：mechanical verification\n\npassed.\n',
+      );
+      const options = testCase.buildOptions({ previousTarget, target });
+      const { reference } = await appendRepairClosure(fixture, previousTarget, target, options);
+      const hash = await taskHash(fixture);
+      await writeVerifiedClaims(fixture, hash, [reference]);
+      await writeDelivery(fixture, {
+        target,
+        verification: reference,
+        generalReview: reference,
+      });
+    } else {
+      await prepareRepairClosureDelivery(fixture, testCase.options);
+    }
+    const result = run(fixture.root, ['validate-result', fixture.taskDir]);
+    assert.equal(result.status, 1, `${testCase.name} unexpectedly passed`);
+    assert.match(result.stderr, testCase.pattern, testCase.name);
+  }
 });
 
 test('required acceptance 的 passed/skipped 只绑定 target，不改变 task 或 General identity', async () => {

@@ -121,9 +121,13 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
 3. 接收后按当前 `execution.json` 及 task/execution 两层 forbidden paths 核对实际 diff、task report 和 claims，运行任务验证；source-authoritative 分支的实现接收与验证证据继续引用 Dispatch B 的 authorization。
 4. 按 `commitPolicy` 固定 commit range、worktree snapshot 或 no-change target。
 5. 生成绑定 task、execution、target 三个 identity 的 review package，按 [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md) 派发独立 General Review。
-6. finding 进入有限 `repair → re-verify → review`；发生过 repair 后必须再做最终累计 full。
+6. finding 进入有限 repair。repair 返回后先按 [EXECUTION-RULES.md](EXECUTION-RULES.md)
+   核对实际 repair delta：只有严格满足 non-semantic invariant 时进入单跳 lightweight repair
+   closure；其余情况继续既有 `repair → 完整 re-verify → review → 最终累计 full`。
 7. General clean 后按 `acceptancePolicy` 处理 upstream acceptance；`required` 且当前 target 没有 `passed / skipped` A 条目时返回 `needs-upstream / user-acceptance`。验收结果留在 `audits.md`，不改变 task identity，也不使同一 target 的 General evidence stale。
-8. 按当前单片语义执行适用的最终 rules-review；finding 返修后重新固定 target、重做 General，随后 fresh full 或合法的一跳 repair verification。
+8. 按当前单片语义执行适用的最终 rules-review；finding 返修默认重新固定 target、重做
+   General 和 rules-review fresh full。只有实际 delta 通过同一个 non-semantic invariant 时，才由
+   deliver-task 写 lightweight closure；这不是 rules-review incremental run。
 9. 把事实证据分别写入 `claims.json`、`audits.md`、review 工件和 rules-review run；最后只在 `delivery.json` 写引用。
 10. 运行 `validate-result`；仅 `delivered` 再运行 `close-check`。
 
@@ -134,6 +138,30 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
 - 安全返修优先复用原 implementer；目标、验收、公共契约、用户禁止范围、调用策略或 claims 契约实质变化时停止并回流。
 - 结构合法的负审查结论不能靠重派 reviewer 洗掉。reviewer 未返回、越界写文件或结果无法绑定输入时，同一输入最多 fresh 重派一次。
 - 次数用尽、工具持续不可用或现有边界内无法完成时返回 `blocked`，保留当前证据引用。
+
+### Review 后的 non-semantic repair
+
+该路径只处理 General 或 rules-review finding 的直接返修，不适用于首次实现、验证失败、用户拒收或
+任意局部语义修改。controller 必须审查实际 repair delta，而不是 finding 文案、计划、文件数或修改
+行数；以下条件全部有正向证据时才 eligible：
+
+- task / execution identity 与公共契约未变，直接前序 reviewed target 及其完整 evidence 可访问；
+- 每个 changed hunk 都只为直接前序 open finding 所要求，全部 finding 已 addressed，且没有额外修改；
+- 每个 hunk 都有适合当前语言或工件的机械证据，明确证明程序语义及 API / type / schema / 数据、
+  配置、build、test、依赖、字符串协议、序列化、共享 helper / consumer 关系未变；
+- 新运行的直接 finding verification 与最小机械验证均通过。
+
+formatter-only、whitespace / indentation / wrapping、惰性 comment 格式和明确 typo / 展示格式修正可以
+成为候选，但类别名本身不是证明；例如语义相关缩进、directive comment、协议字符串或测试 snapshot
+仍不 eligible。除已证明不承担程序或协议语义、且被 finding 精确指定的 typo / 展示文本修正外，
+runtime behavior、expression / condition / control flow、API / type / schema / 数据结构、dependency /
+config / build / test、可能影响程序引用或协议的 rename、mixed diff、额外修改或任何不确定情况，
+都进入原完整返修链。
+
+eligible closure 只能从一个直接前序非 closure review 单跳建立，不递归继承另一个 closure。它复用
+返修前仍成立的 validation / General / rules-review evidence，只新建 repair delta、finding
+verification、直接机械验证、当前 target 与 closure A；required acceptance 仍按新 target 重新取得，
+尚未执行的下游 review 仍正常执行。精确记录和 binding 见 [TASK-CONTRACT.md](TASK-CONTRACT.md)。
 
 ## 结果选择
 

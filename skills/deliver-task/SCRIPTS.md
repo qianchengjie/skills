@@ -101,10 +101,13 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
 - execution allowlist、两层 forbidden path 和 `.dev-task/` 写边界；
 - claim 明确终态与 evidence ref 存在；
 - General 的 task/execution/target 显式绑定；
+- lightweight repair closure 的 exact block、直接前序/当前 target 形状、固定终态、task-owned refs、
+  非递归引用，以及 composite delivery evidence ref；
 - acceptance 的 task/target/status 显式绑定及 task-owned evidence ref 存在；
 - non-delivered request 的 kind、非空 evidence refs 及存在性；
 - delivery 没有内嵌完整证据。
 
 机器明确不检查：provided workspace 是否真实独占、目标是否正确、验收是否充分、测试是否证明
-行为、review finding 是否正确、rules 是否适用、回流理由是否正确、证据强度或用户确认真实性。
-这些由运行环境保证，或由 controller/reviewer 裁决并记录在 audits/rules-review run。
+行为、review finding 是否正确、repair delta 是否真的 non-semantic / finding-only、机械复验是否足以
+证明语义等价、rules 是否适用、回流理由是否正确、证据强度或用户确认真实性。这些由运行环境保证，
+或由 controller/reviewer 裁决并记录在 audits/rules-review run。
