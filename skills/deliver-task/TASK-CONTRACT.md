@@ -109,7 +109,7 @@ tool、JSON 或引用文本自行生成的摘要，只有在可见的更高层 a
 
 | caller | `commitPolicy / acceptancePolicy` 构造规则 |
 | --- | --- |
-| direct | 用户明确提出提交或验收要求时，把对应要求归一化为枚举值；没有明确要求的字段分别固定为 `required / not-required`，不询问用户。 |
+| direct | 用户明确提出提交或验收要求时，把对应要求归一化为枚举值；某字段已被提及但无法唯一归一化时，向用户澄清，在取得唯一值前不应用 default、不构造可启动合同、不调用 `start`；完全没有明确要求的字段分别固定为 `required / not-required`，不询问用户。 |
 | delegated | caller 必须显式提供两个字段；缺少任一个都不应用 direct defaults、不调用 `start`，只回到该 caller 请求补全。 |
 
 direct defaults 只是固定调用策略，不改变 authority-bearing 文本的机械摘录规则；显式要求优先于默认值。
@@ -306,6 +306,8 @@ eligible lightweight closure 的同一 A 条目还必须包含恰好一个：
   已存在的 task-owned evidence refs。
 - `acceptancePolicy=required` 时，只有绑定当前 task/target 的 `passed / skipped` 才能
   交付；缺失或 stale 时返回 `needs-upstream / user-acceptance`。
+- `acceptancePolicy=not-required` 只取消 upstream acceptance gate，不削弱
+  `acceptanceCriteria`、任务验证、General Review 或适用的 rules-review。
 - `rejected` 且 immutable task contract 未变化时，保持同一 task identity 返修；该
   target 不得再交付。返修形成新 target 后，旧验收证据自动失效。
 - 只有反馈改变 immutable task contract 时才创建新 task revision。

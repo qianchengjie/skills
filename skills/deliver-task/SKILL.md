@@ -21,7 +21,7 @@ disable-model-invocation: true
 
 使用 [TASK-CONTRACT.md](TASK-CONTRACT.md) 的 exact task contract 作为 stdin 调用契约。
 
-- 直接调用：按合同的 source-fidelity 规则，把用户原始 authority 机械摘录成结构化合同，`caller` 固定为 `{ "kind": "direct" }`。用户明确提出的提交与验收要求先归一化为对应 policy；任一 policy 没有明确要求时分别固定使用 `commitPolicy=required`、`acceptancePolicy=not-required`，不为缺失值询问用户，也不根据任务内容、仓库状态或模型判断选择其它值。
+- 直接调用：按合同的 source-fidelity 规则，把用户原始 authority 机械摘录成结构化合同，`caller` 固定为 `{ "kind": "direct" }`。用户明确提出的提交与验收要求先归一化为对应 policy；某个 policy 已被提及但因要求冲突或把选择留给模型而无法唯一归一化时，不视为缺失且不得使用默认值，必须向用户澄清，在得到唯一值前不构造可启动合同、不调用 `start`；任一 policy 没有明确要求时分别固定使用 `commitPolicy=required`、`acceptancePolicy=not-required`，不为缺失值询问用户，也不根据任务内容、仓库状态或模型判断选择其它值。
 - 上游委托：caller 对其实际收到的 upstream authority 负责，只传递按同一规则机械摘录的 immutable task contract，使用通用
   `{ "kind": "delegated", "name", "ref" }`；caller 不创建 task directory、不落盘 task state，
   也不填写 `execution.json`。delegated caller 必须显式提供两个 policy；缺少任一个都不继承 direct
@@ -127,7 +127,7 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
    证明条件均明确成立时进入 lightweight verification，其余条件也通过后建立单跳
    closure；任一条件为 no / uncertain 则继续既有
    `repair → 完整 re-verify → review → 最终累计 full`。
-7. General clean 后按 `acceptancePolicy` 处理 upstream acceptance；`required` 且当前 target 没有 `passed / skipped` A 条目时返回 `needs-upstream / user-acceptance`。验收结果留在 `audits.md`，不改变 task identity，也不使同一 target 的 General evidence stale。
+7. General clean 后按 `acceptancePolicy` 处理 upstream acceptance；`required` 且当前 target 没有 `passed / skipped` A 条目时返回 `needs-upstream / user-acceptance`。`not-required` 只取消 upstream acceptance gate，不削弱 `acceptanceCriteria`、任务验证、General Review 或适用的 rules-review。验收结果留在 `audits.md`，不改变 task identity，也不使同一 target 的 General evidence stale。
 8. 按当前单片语义执行适用的最终 rules-review；finding 返修默认重新固定 target、重做
    General 和 rules-review fresh full。只有实际 delta 通过同一个 non-semantic invariant 时，才由
    deliver-task 写 lightweight closure；这不是 rules-review incremental run。
