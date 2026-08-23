@@ -104,9 +104,16 @@ tool、JSON 或引用文本自行生成的摘要，只有在可见的更高层 a
 ```
 
 可执行验证解释、影响范围、实现步骤和其它 AI 推导写入职责相符的 `execution.json` / `audits.md`，
-不反写成 immutable task authority。`taskId`、JSON 结构和固定调用上下文可以机械生成；
-`commitPolicy / acceptancePolicy` 只能使用 caller 已明确提供的值。必填字段无法从 authority 或固定调用
-上下文机械填充时，caller 在 `start` 前向 upstream 请求补充，不用推导内容补空。
+不反写成 immutable task authority。`taskId`、JSON 结构和固定调用上下文可以机械生成。两个 policy
+按 caller 边界构造：
+
+| caller | `commitPolicy / acceptancePolicy` 构造规则 |
+| --- | --- |
+| direct | 用户明确提出提交或验收要求时，把对应要求归一化为枚举值；没有明确要求的字段分别固定为 `required / not-required`，不询问用户。 |
+| delegated | caller 必须显式提供两个字段；缺少任一个都不应用 direct defaults、不调用 `start`，只回到该 caller 请求补全。 |
+
+direct defaults 只是固定调用策略，不改变 authority-bearing 文本的机械摘录规则；显式要求优先于默认值。
+不得根据任务内容、仓库状态或模型判断为 direct 选择其它 policy。
 
 这是 caller 的接口责任，不是 `deliver-task` 能凭空证明的事实。未随合同提供的上游要求不可审查时，
 `deliver-task` 只保证 `task.json` 之后的派生输入不再弱化；若执行中从可见上游证据发现

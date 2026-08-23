@@ -757,6 +757,8 @@ test('start 接受 exact task schema 与通用 caller，并拒绝旧字段或非
     (task) => ({ ...task, caller: { kind: 'delegated', ref: 'tickets/slug-whitespace' } }),
     (task) => ({ ...task, caller: { kind: 'delegated', name: 'ToTickets', ref: 'x' } }),
     (task) => ({ ...task, caller: { kind: 'planner', ref: 'x' } }),
+    (task) => Object.fromEntries(Object.entries(task).filter(([key]) => key !== 'commitPolicy')),
+    (task) => Object.fromEntries(Object.entries(task).filter(([key]) => key !== 'acceptancePolicy')),
   ];
   for (const buildTask of invalidTasks) {
     const fixture = await createFixture();
