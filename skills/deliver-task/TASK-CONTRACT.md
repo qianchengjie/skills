@@ -260,6 +260,18 @@ provenance 人为创建 commit。
 ```
 ````
 
+凡被 Review Wave 的 `general/rules.scopedRef/fullRef` 引用，task-owned A 条目都必须包含恰好一个以下机器绑定块：
+
+````markdown
+```deliver-task-review-result
+{"task":{"taskId":"fix-slug-whitespace","revision":1,"taskHash":"sha256:..."},"executionHash":"sha256:...","target":{"kind":"no-change","baseCommit":"...","executionHash":"sha256:..."},"domain":"general","mode":"scoped","result":"clean"}
+```
+````
+
+- `domain` 只允许 `general / rules`，并与引用它的 Review Wave domain 相同；`mode` 只允许 `scoped / full`，并与 ref slot 相同。
+- `scoped` 的 `result` 只允许 `clean / findings / cannot-bound`；`full` 只允许 `clean / findings`。该结果必须与 Review Wave 中相邻的 result 字段相同。
+- task、execution 和 target 必须绑定产生该结论的当前 review package；不能拿旧 target、另一 domain 或另一 mode 的 A 代替。Rules Full A 继续引用 `rules-review` v8 的 TARGET/run identity；这个 block 只提供 task-owned 结构绑定，不复制或重锚 v8 proof。
+
 每个 repair target 在同一 A 条目写恰好一个合并 Review Wave：
 
 ````markdown
@@ -293,8 +305,9 @@ provenance 人为创建 commit。
 ````
 
 - `wave` 从 1 连续递增；`failedWaveCount` 是截至本 wave 的累计 failed Review Wave 数。首次 Full discovery 不写这个 block，也不进入计数。前一 wave 已累计 4 次失败时不得再出现下一自动 wave。
-- `previousTarget` 是直接前序 target，`target` 是当前 repaired target，二者必须不同并绑定同一 current execution hash；从第二个 wave 起，`previousTarget` 必须等于前一 wave 的 `target`。
-- `repairInputRefs`、`repairDiffRef`、`validationRefs`、domain refs 与 `mergedFindingRefs` 都引用存在的 task-owned `audits.md#A*`。机器只检查引用与结构，不判断 repair input、delta、validation 或 findings 的语义真实性。
+- `executionHash` 必须等于本 wave `target.executionHash`。`previousTarget` 是保留其原始 execution identity 的直接前序 target，`target` 是当前 repaired target，二者必须不同；从第二个 wave 起，`previousTarget` 必须完整等于前一 wave 的 `target`。execution 在两轮之间合法变化时，不重写或重锚历史 target。
+- 历史 wave 按各自记录的 task、execution 和 target identity 校验；只有最新 wave 必须绑定当前 `execution.json`。因此 `audits.md` 可追加保留 E1 wave，再由 E2 wave 继续同一 task history。
+- `repairInputRefs`、`repairDiffRef`、`validationRefs`、domain refs 与 `mergedFindingRefs` 都必须引用当前 Review Wave A 之前已经追加的 task-owned `audits.md#A*`；禁止引用当前 wave 自身或之后的 A。机器只检查引用顺序与结构，不判断 repair input、delta、validation 或 findings 的语义真实性。
 - 每个 domain 的 `scopedResult` 只允许 `clean / findings / cannot-bound`。只有 `cannot-bound` 时才必须填写同一 domain 的 `fullRef` 与 `fullResult`；`fullResult` 只允许 `clean / findings`。Full 仍为 cannot-verify / blocked 时不写伪终态 wave，使用现有 non-delivered evidence。另一个已 clean domain 的 Full fields 保持 `null`。active catalog 为空时整个 `rules` 值写字符串 `not-applicable`。
 - 两个 domain 的最终结果只要一个是 `findings`，`result` 就是 `failed`、`mergedFindingRefs` 非空，且累计失败只增加 1；两边最终 clean 时 `result=clean`、`mergedFindingRefs=[]` 且失败计数不增加。
 - 最终 clean wave A 同时作为 `delivery.evidenceRefs.generalReview`；Rules applicable 时也作为 `rulesReview`，Rules 不适用时后者为 `not-applicable`。`delivery.evidenceRefs.verification` 必须引用该 wave 的 `validationRefs` 之一。该 A 记录当前 target 的直接 closure，不继承或重锚旧 Full proof。

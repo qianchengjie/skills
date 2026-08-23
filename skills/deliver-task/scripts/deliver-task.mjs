@@ -925,7 +925,7 @@ function validateTargetIdentity(target, label) {
   }
 }
 
-function validateTarget(target, task, execution, label = 'delivery.target') {
+function validateTargetForTask(target, task, label) {
   validateTargetIdentity(target, label);
   if (target.kind === 'commit-range' && task.commitPolicy === 'forbidden') {
     throw gateError(`${label} cannot use a commit-range target with commitPolicy forbidden`);
@@ -933,6 +933,13 @@ function validateTarget(target, task, execution, label = 'delivery.target') {
   if (target.kind === 'worktree' && task.commitPolicy === 'required') {
     throw gateError(`${label} cannot use a worktree target with commitPolicy required`);
   }
+  if (target.baseCommit !== task.baseCommit) {
+    throw gateError(`${label} must use task.baseCommit`);
+  }
+}
+
+function validateTarget(target, task, execution, label = 'delivery.target') {
+  validateTargetForTask(target, task, label);
   if (target.executionHash !== executionHash(execution)) {
     throw gateError(`${label} has stale execution binding`);
   }
@@ -1107,6 +1114,28 @@ function singleProtocolBlock(source, blockName, label) {
   return blocks[0];
 }
 
+function auditEntries(source) {
+  const lines = source.split(/\r?\n/);
+  const headings = [];
+  const anchors = new Set();
+  for (const [lineIndex, line] of lines.entries()) {
+    const match = /^###\s+(A[1-9][0-9]*)(?:[：:].*)?$/.exec(line);
+    if (!match) continue;
+    const anchor = match[1];
+    if (anchors.has(anchor)) throw gateError(`audits.md has duplicate anchor ${anchor}`);
+    anchors.add(anchor);
+    headings.push({ anchor, lineIndex });
+  }
+  return headings.map((heading, index) => {
+    const end = headings[index + 1]?.lineIndex ?? lines.length;
+    return {
+      index,
+      reference: `audits.md#${heading.anchor}`,
+      section: lines.slice(heading.lineIndex + 1, end).join('\n'),
+    };
+  });
+}
+
 function assertAuditRef(reference, label) {
   if (!/^audits\.md#A[1-9][0-9]*$/.test(reference || '')) {
     throw gateError(`${label} must reference an audits.md A entry`);
@@ -1137,30 +1166,124 @@ function validateGeneralBinding(record, task, execution, target, label) {
   }
 }
 
-async function resolveReviewWaveAuditRef(context, reference, label) {
+function resolvePriorReviewWaveAuditRef(reviewHistory, reference, currentEntry, label) {
   assertAuditRef(reference, label);
-  await resolveEvidenceRef(context, reference, { allowNotApplicable: false });
+  const evidence = reviewHistory.entriesByRef.get(reference);
+  if (!evidence) throw gateError(`evidence ref missing anchor: ${reference}`);
+  if (evidence.index >= currentEntry.index) {
+    throw gateError(`${label} must reference an earlier audits.md A entry`);
+  }
+  return evidence;
 }
 
-async function validateReviewDomain(record, context, label) {
+function validateReviewResultBinding(
+  record,
+  task,
+  target,
+  executionHashValue,
+  { domain, mode, result, label },
+) {
+  assertExactObject(
+    record,
+    ['task', 'executionHash', 'target', 'domain', 'mode', 'result'],
+    [],
+    `${label} review result`,
+  );
+  validateBinding(record.task, task, `${label} review result.task`);
+  if (record.domain !== domain) {
+    throw gateError(`${label} review result.domain must be ${domain}`);
+  }
+  if (record.mode !== mode) {
+    throw gateError(`${label} review result.mode must be ${mode}`);
+  }
+  if (record.result !== result) {
+    throw gateError(`${label} review result.result must be ${result}`);
+  }
+  if (record.executionHash !== executionHashValue) {
+    throw gateError(`${label} review result has stale execution binding`);
+  }
+  if (canonicalJson(record.target) !== canonicalJson(target)) {
+    throw gateError(`${label} review result has stale target binding`);
+  }
+}
+
+function validateReviewResultRef(
+  reviewHistory,
+  reference,
+  currentEntry,
+  task,
+  target,
+  executionHashValue,
+  expected,
+) {
+  const evidence = resolvePriorReviewWaveAuditRef(
+    reviewHistory,
+    reference,
+    currentEntry,
+    expected.label,
+  );
+  const binding = singleProtocolBlock(
+    evidence.section,
+    'deliver-task-review-result',
+    expected.label,
+  );
+  validateReviewResultBinding(binding, task, target, executionHashValue, expected);
+}
+
+function validateReviewDomain(
+  record,
+  reviewHistory,
+  currentEntry,
+  task,
+  target,
+  executionHashValue,
+  domain,
+  label,
+) {
   assertExactObject(
     record,
     ['scopedRef', 'scopedResult', 'fullRef', 'fullResult'],
     [],
     label,
   );
-  await resolveReviewWaveAuditRef(context, record.scopedRef, `${label}.scopedRef`);
   if (!SCOPED_REVIEW_RESULTS.has(record.scopedResult)) {
     throw gateError(`${label}.scopedResult must be clean, findings, or cannot-bound`);
   }
+  validateReviewResultRef(
+    reviewHistory,
+    record.scopedRef,
+    currentEntry,
+    task,
+    target,
+    executionHashValue,
+    {
+      domain,
+      mode: 'scoped',
+      result: record.scopedResult,
+      label: `${label}.scopedRef`,
+    },
+  );
   if (record.scopedResult === 'cannot-bound') {
     if (record.fullRef === null || record.fullResult === null) {
       throw gateError(`${label} scoped cannot-bound requires fullRef and fullResult`);
     }
-    await resolveReviewWaveAuditRef(context, record.fullRef, `${label}.fullRef`);
     if (!FULL_REVIEW_RESULTS.has(record.fullResult)) {
       throw gateError(`${label}.fullResult must be clean or findings after scoped cannot-bound`);
     }
+    validateReviewResultRef(
+      reviewHistory,
+      record.fullRef,
+      currentEntry,
+      task,
+      target,
+      executionHashValue,
+      {
+        domain,
+        mode: 'full',
+        result: record.fullResult,
+        label: `${label}.fullRef`,
+      },
+    );
     return record.fullResult;
   }
   if (record.fullRef !== null || record.fullResult !== null) {
@@ -1169,11 +1292,11 @@ async function validateReviewDomain(record, context, label) {
   return record.scopedResult;
 }
 
-async function validateReviewWave(
+function validateReviewWave(
   record,
-  context,
   task,
-  execution,
+  reviewHistory,
+  currentEntry,
   expectedWave,
   priorFailedWaveCount,
   previousWaveTarget,
@@ -1203,8 +1326,8 @@ async function validateReviewWave(
     throw gateError(`4 failed Review Waves require controller adjudication/escalation; stop automatic repair before wave ${expectedWave}`);
   }
   validateBinding(record.task, task, `${label}.task`);
-  if (record.executionHash !== executionHash(execution)) {
-    throw gateError(`${label} has stale execution binding`);
+  if (record.executionHash !== record.target?.executionHash) {
+    throw gateError(`${label}.executionHash must equal ${label}.target.executionHash`);
   }
   if (record.wave !== expectedWave) {
     throw gateError(`${label}.wave must equal ${expectedWave}`);
@@ -1212,11 +1335,8 @@ async function validateReviewWave(
   if (!Number.isSafeInteger(record.failedWaveCount) || record.failedWaveCount < 0) {
     throw gateError(`${label}.failedWaveCount must be a non-negative integer`);
   }
-  validateTarget(record.previousTarget, task, execution, `${label}.previousTarget`);
-  validateTarget(record.target, task, execution, `${label}.target`);
-  if (record.previousTarget.baseCommit !== task.baseCommit) {
-    throw gateError(`${label}.previousTarget must use task.baseCommit`);
-  }
+  validateTargetForTask(record.previousTarget, task, `${label}.previousTarget`);
+  validateTargetForTask(record.target, task, `${label}.target`);
   if (canonicalJson(record.previousTarget) === canonicalJson(record.target)) {
     throw gateError(`${label} requires a changed target`);
   }
@@ -1243,15 +1363,33 @@ async function validateReviewWave(
     ]),
   ];
   for (const [reference, referenceLabel] of references) {
-    await resolveReviewWaveAuditRef(context, reference, referenceLabel);
+    resolvePriorReviewWaveAuditRef(reviewHistory, reference, currentEntry, referenceLabel);
   }
 
-  const generalResult = await validateReviewDomain(record.general, context, `${label}.General`);
+  const generalResult = validateReviewDomain(
+    record.general,
+    reviewHistory,
+    currentEntry,
+    task,
+    record.target,
+    record.executionHash,
+    'general',
+    `${label}.General`,
+  );
   let rulesResult = 'clean';
   if (record.rules === 'not-applicable') {
     rulesResult = 'clean';
   } else {
-    rulesResult = await validateReviewDomain(record.rules, context, `${label}.Rules`);
+    rulesResult = validateReviewDomain(
+      record.rules,
+      reviewHistory,
+      currentEntry,
+      task,
+      record.target,
+      record.executionHash,
+      'rules',
+      `${label}.Rules`,
+    );
   }
   if (!REVIEW_WAVE_RESULTS.has(record.result)) {
     throw gateError(`${label}.result must be clean or failed`);
@@ -1280,19 +1418,33 @@ async function validateReviewWaveHistory(context, task, execution) {
   if (protocolBlocks(audits, 'deliver-task-repair-closure', 'audits.md').length > 0) {
     throw gateError('deliver-task-repair-closure is no longer supported; use deliver-task-review-wave');
   }
-  const records = protocolBlocks(audits, 'deliver-task-review-wave', 'audits.md');
+  const entries = auditEntries(audits);
+  const entriesByRef = new Map(entries.map((entry) => [entry.reference, entry]));
+  const records = [];
+  for (const entry of entries) {
+    const blocks = protocolBlocks(entry.section, 'deliver-task-review-wave', entry.reference);
+    if (blocks.length > 1) {
+      throw gateError(`${entry.reference} must contain at most one deliver-task-review-wave block`);
+    }
+    if (blocks.length === 1) records.push({ record: blocks[0], entry });
+  }
+  const allBlocks = protocolBlocks(audits, 'deliver-task-review-wave', 'audits.md');
+  if (allBlocks.length !== records.length) {
+    throw gateError('each deliver-task-review-wave block must be inside one audits.md A entry');
+  }
   if (records.length > 0 && execution === null) {
     throw gateError('Review Wave history requires delivery.target and execution.json binding');
   }
+  const reviewHistory = { entriesByRef };
   const validated = [];
   let failedWaveCount = 0;
   let previousWaveTarget = null;
-  for (const [index, record] of records.entries()) {
-    const result = await validateReviewWave(
+  for (const [index, { record, entry }] of records.entries()) {
+    const result = validateReviewWave(
       record,
-      context,
       task,
-      execution,
+      reviewHistory,
+      entry,
       index + 1,
       failedWaveCount,
       previousWaveTarget,
@@ -1300,6 +1452,16 @@ async function validateReviewWaveHistory(context, task, execution) {
     validated.push(result.record);
     failedWaveCount = result.failedWaveCount;
     previousWaveTarget = result.record.target;
+  }
+  if (validated.length > 0) {
+    const currentExecutionHash = executionHash(execution);
+    const finalWave = validated.at(-1);
+    if (
+      finalWave.executionHash !== currentExecutionHash
+      || finalWave.target.executionHash !== currentExecutionHash
+    ) {
+      throw gateError('final Review Wave must bind the current execution.json');
+    }
   }
   return { records: validated, failedWaveCount };
 }

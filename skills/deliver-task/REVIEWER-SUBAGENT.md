@@ -22,7 +22,9 @@ source-authoritative 分支的 package 还必须提供 authoritative `task.json`
 
 - 需求、acceptance criteria、功能与行为正确性；
 - task 边界、non-goals、公共契约与交付一致性；
-- 可维护性、测试质量、错误处理、性能、项目风格和 AI 污染。
+- 可观察的错误/性能风险，以及证明需求与功能结论所需的测试。
+
+active rules、项目风格和代码规范属于 Rules Review；General 不替 Rules disposition 这些 finding。
 
 source-authoritative 分支还要审计 `baseline accepted → adaptation authorized → Dispatch B → implementation / validation` 的完整顺序与 identity binding。已有证据显示越序、错误 source / mapping / binding 或未授权适配时返回 findings；材料不足以复验时返回 cannot-verify。最终代码相似、测试通过或 implementer 自述不能替代证据链。
 
@@ -32,30 +34,30 @@ source-authoritative 分支还要审计 `baseline accepted → adaptation author
 
 只围绕本次 repair 的因果影响面检查：
 
-- 原 General finding 或其它 repair input 是否解决；
+- 对原 General findings 给出 disposition；
 - repair 本身在功能与行为上是否正确；
 - repair 直接相关的调用、边界和行为是否 regression；
 - 是否产生由此次 repair 导致的新相关 General finding。
 
-不要重新随机扫描整个 task，也不要因为 repair 修改了新 target 就自动改做 General Full。只有影响面无法在 package 给出的 repair causal boundary 内可靠验证时返回 `cannot-bound`；能界定时返回 `clean` 或 `findings`。
+其它 domain finding 仍作为 repair input 提供完整因果上下文；General 检查对应 repair delta 的功能影响，但不替另一 domain disposition 原 finding。不要重新随机扫描整个 task，也不要因为 repair 修改了新 target 就自动改做 General Full。只有影响面无法在 package 给出的 repair causal boundary 内可靠验证时返回 `cannot-bound`；能界定时返回 `clean` 或 `findings`。
 
 ## Rules Scoped Repair Verification
 
 这是 deliver-task 的 scoped reviewer 能力，不是 `rules-review` v8 run。只围绕本次 repair 的规则影响检查：
 
-- 原 Rules finding 或其它 repair input 是否解决；
+- 对原 Rules findings 给出 disposition；
 - repair 是否引入新的相关规则违规；
 - repair 是否改变相关规则 applicability；
 - repair 是否击穿直接相关的既有规则结论。
 
-不要执行完整 rules discovery，不生成或伪装 v8 的 dispatch、shard、finalReview 或 `ready_for_merge`。影响面无法可靠限定时返回 `cannot-bound`；否则返回 `clean` 或 `findings`。active rule catalog 真实为空时由 controller 记录 `not-applicable`，不派发本 reviewer。
+其它 domain finding 仍作为 repair input 提供完整因果上下文；Rules 检查对应 repair delta 的规则影响，但不替另一 domain disposition 原 finding。不要执行完整 rules discovery，不生成或伪装 v8 的 dispatch、shard、finalReview 或 `ready_for_merge`。影响面无法可靠限定时返回 `cannot-bound`；否则返回 `clean` 或 `findings`。active rule catalog 真实为空时由 controller 记录 `not-applicable`，不派发本 reviewer。
 
 ## Scoped 结果与 Full 升级
 
 General 与 Rules scoped 默认并行，不根据 finding 来源只跑其中一个。每个 domain 恰好返回：
 
 - `clean`：该 domain 在本次 repair causal boundary 内闭合；
-- `findings`：返回原 input disposition 与 repair 引入的新相关 findings；
+- `findings`：返回本 domain 原 finding dispositions 与 repair 引入的新相关 findings；
 - `cannot-bound`：说明无法可靠限定的边界与证据缺口，不猜 clean。
 
 controller 只把 `cannot-bound` 的 domain 升级 Full：General 使用 General Full Review；Rules 使用现有 `rules-review` v8 完整审查当前 TARGET。已经 clean 的另一个 domain 不重跑。Full 新发现 finding 时进入下一轮 repair，再执行双 scoped。

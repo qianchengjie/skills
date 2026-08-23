@@ -102,12 +102,12 @@ reviewer 独立于 implementer，只消费当前 review package 和其中具名�
 
 Review 分成两个 concern：
 
-- **General Review**：审查需求、acceptance criteria、功能与行为、task 边界、公共契约、可维护性、测试质量、错误处理、性能、项目风格和 AI 污染；
+- **General Review**：审查需求、acceptance criteria、功能与行为、task 边界、公共契约、可观察的错误/性能风险，以及证明这些功能结论所需的测试；不 disposition active rules 或项目代码规范；
 - **Rules Review**：审查 active rules 与项目代码规范。Full discovery 继续使用 `rules-review` v8；execution-time selected rules 不替代其独立分类。
 
 首次 implementation 与 validation 完成并固定 target 后，并行执行 General Full Review 与适用的 Rules Full Review，再合并两边 findings。active rule catalog 真实为空时 Rules 记录 `not-applicable`；catalog 非空时 Rules Full 使用现有 `rules-review` v8 完整审查当前 TARGET。首次两个 Full 是 discovery baseline，不是 repair Review Wave，不进入 failed-wave budget。General 与 Rules findings 尽量合并为同一次 repair，不按 reviewer 或 domain 拆成两轮。
 
-General Full A 在 `audits.md` 记录 review type、task / execution / target identity、package identity、verdict 和完整 findings，并写 [TASK-CONTRACT.md](TASK-CONTRACT.md) 的 `deliver-task-binding`。Rules Full 继续沿用 `rules-review` v8 自己的 TARGET/run identity；本轮不新增 rules Full binding 或 re-anchor 协议。机器不判断 reviewer 结论是否正确。execution hash 变化后旧 General binding 失效，必须为新 execution 重新 discovery。
+General Full A 在 `audits.md` 记录 review type、task / execution / target identity、package identity、verdict 和完整 findings，并写 [TASK-CONTRACT.md](TASK-CONTRACT.md) 的 `deliver-task-binding`。Rules Full 继续沿用 `rules-review` v8 自己的 TARGET/run identity；当某个 Full 结果被 Review Wave 引用时，对应 task-owned A 只增加 `deliver-task-review-result` 结构绑定，不复制或重锚 v8 proof。机器不判断 reviewer 结论是否正确。execution hash 变化后旧 General binding 不能作为当前 delivery proof，必须为新 execution 重新 discovery；已追加的历史 Review Wave 仍保留并校验自身 execution identity。
 
 ## Upstream acceptance
 
@@ -125,20 +125,20 @@ General Full A 在 `audits.md` 记录 review type、task / execution / target id
 Full Review 用于 discovery；Repair Verification 用于 closure。首次 Full 合并出 open findings 后，按以下顺序处理每个 repair target：
 
 1. 把 General 与 Rules findings 合并进同一次 repair input；不得根据 `sourceReviewKind` 拆成单域 repair。writer 停止后记录直接前序 target、实际 repair delta 与 repair input refs。repair 明显越过原 finding 因果范围或原 implementation boundary 时，先由 controller reopen review boundary；若因此需要改变 immutable task contract、execution 授权或用户判断，停止并回流。
-2. 按“验证与 target”规则执行 targeted / affected validation；只有语义影响无法可靠限定、涉及广泛 runtime / contract / shared behavior，或已有验证契约明确要求时才执行完整 validation。validation 通过后固定新 target，package 同时携带 previous/current target、actual delta、repair input 和 validation refs。
+2. 按“验证与 target”规则执行 targeted / affected validation；只有语义影响无法可靠限定、涉及广泛 runtime / contract / shared behavior，或已有验证契约明确要求时才执行完整 validation。validation 通过后固定新 target，package 同时携带 previous/current target、actual delta、repair input 和 validation refs。execution 在两轮之间合法变化时，previous target 保留原 execution identity，current target 使用新 execution identity；不重写历史 target。
 3. 并行派发 General Scoped Repair Verification 与 Rules Scoped Repair Verification。active catalog 为空时 Rules 明确为 `not-applicable`；否则两个 scoped reviewer 默认都运行，不因 finding 来自 General 或 Rules 而省略另一边。
 4. 每个 scoped reviewer 只返回 `clean / findings / cannot-bound`。`cannot-bound` 表示该 domain 无法在 repair causal boundary 内可靠闭合；controller 只把这个 domain 升级 Full，不重跑已经 clean 的另一个 domain。两个 domain 都 `cannot-bound` 时才各自执行 Full；可以并行。
 5. General Full 升级使用完整 General target review。Rules Full 升级继续使用 `rules-review` v8 的完整 discovery 语义：不创建 incremental / repair run，不继承旧 run，不排除完整 TARGET 中的文件。`ready_for_merge` 视为 clean；现有 finding、cannot-verify 和 blocked 语义保持不变。Full 无法形成 clean / findings 终态时不伪造已完成 wave，按现有 blocker / escalation 路径停止。
-6. controller 合并两个 domain 的最终结果，写一个 `deliver-task-review-wave` A。任一 domain 有 findings，整个 wave 为 `failed`，无论调用几个 reviewer 都只让累计 `failedWaveCount + 1`；两边 clean 才是 wave `clean`。scoped 发现由本次 repair 引入的新相关 finding，也进入同一个 merged finding set 和下一轮 repair。
+6. controller 先为每个 scoped / 必要 Full 结果追加包含 `deliver-task-review-result` 的 task-owned A，再合并两个 domain 的最终结果，最后写一个 `deliver-task-review-wave` A。wave 的所有 evidence refs 必须指向它之前的 A，不能引用自己或未来 A。任一 domain 有 findings，整个 wave 为 `failed`，无论调用几个 reviewer 都只让累计 `failedWaveCount + 1`；两边 clean 才是 wave `clean`。scoped 发现由本次 repair 引入的新相关 finding，也进入同一个 merged finding set 和下一轮 repair。
 7. 达到 4 个 failed Review Waves 且仍有 findings 时，停止自动 repair，进入 controller adjudication / escalation；不能把次数耗尽解释为 `delivered`。首次 General / Rules Full discovery 不写 Review Wave，也不消耗该预算。
 
 ### General Scoped Repair Verification
 
-只检查本次 repair 的因果影响面：原 General finding 或其它 repair input 是否解决；repair 的功能/行为是否正确；直接相关的调用、边界和行为是否 regression；是否产生由此次 repair 导致的新相关 General finding。不要随机扫描整个 task。影响无法可靠限定时返回 `cannot-bound`，不要猜 clean。
+只检查本次 repair 的因果影响面：对原 General findings 给出 disposition；检查整个 repair delta 的功能/行为是否正确、直接相关的调用/边界/行为是否 regression，以及是否产生新的相关 General finding。其它 domain finding 仍作为 repair input 提供因果上下文，但 General reviewer 不替它给 disposition。不要随机扫描整个 task。影响无法可靠限定时返回 `cannot-bound`，不要猜 clean。
 
 ### Rules Scoped Repair Verification
 
-这是 deliver-task reviewer 能力，不是 `rules-review` v8 run。只检查原 Rules finding 或其它 repair input 是否解决；repair 是否引入新的相关规则违规；相关规则 applicability 是否变化；repair 是否击穿直接相关的既有规则结论。不要重新执行完整 rules discovery；范围无法可靠限定时返回 `cannot-bound`。
+这是 deliver-task reviewer 能力，不是 `rules-review` v8 run。只对原 Rules findings 给出 disposition；检查整个 repair delta 是否引入新的相关规则违规、改变相关规则 applicability，或击穿直接相关的既有规则结论。其它 domain finding 仍作为 repair input 提供因果上下文，但 Rules reviewer 不替它给 disposition。不要重新执行完整 rules discovery；范围无法可靠限定时返回 `cannot-bound`。
 
 `rules-review` v8 当前只接受 commit TARGET。若首次或升级的 Rules Full 必须运行，但 `allowed` 选择未提交或 `forbidden` 使其无法运行，返回 `needs-upstream / authorization-change`；不擅自提交、不把 Rules 标为 `not-applicable`。
 

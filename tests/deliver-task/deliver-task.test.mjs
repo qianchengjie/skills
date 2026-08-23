@@ -157,11 +157,45 @@ function bindingBlock(fixture, hash, target) {
   ].join('\n');
 }
 
+function reviewResultBlock(fixture, hash, target, { domain, mode, result }) {
+  return [
+    '```deliver-task-review-result',
+    JSON.stringify({
+      task: taskBinding(fixture, hash),
+      executionHash: target.executionHash,
+      target,
+      domain,
+      mode,
+      result,
+    }),
+    '```',
+  ].join('\n');
+}
+
+async function appendReviewResult(
+  fixture,
+  target,
+  {
+    anchor,
+    domain,
+    mode,
+    result,
+    title = `${domain} ${mode} review`,
+  },
+) {
+  const hash = await taskHash(fixture);
+  await appendFile(
+    path.join(fixture.taskDir, 'audits.md'),
+    `\n### ${anchor}：${title}\n\n${reviewResultBlock(fixture, hash, target, { domain, mode, result })}\n`,
+  );
+  return `audits.md#${anchor}`;
+}
+
 async function appendGeneralReview(fixture, target, { anchor = 'A2' } = {}) {
   const hash = await taskHash(fixture);
   await appendFile(
     path.join(fixture.taskDir, 'audits.md'),
-    `\n### ${anchor}：General Review\n\nGeneral Full clean。\n\n${bindingBlock(fixture, hash, target)}\n`,
+    `\n### ${anchor}：General Review\n\nGeneral Full clean。\n\n${bindingBlock(fixture, hash, target)}\n\n${reviewResultBlock(fixture, hash, target, { domain: 'general', mode: 'full', result: 'clean' })}\n`,
   );
   return `audits.md#${anchor}`;
 }
@@ -323,6 +357,7 @@ async function prepareReviewWaveDelivery(
   fixture,
   {
     waveOptions = {},
+    extraReviewResults = [],
     verification,
     rulesReview,
     deliveryResult = 'delivered',
@@ -341,6 +376,11 @@ async function prepareReviewWaveDelivery(
     ].join('\n'),
   );
   const target = await snapshotTarget(fixture);
+  const hash = await taskHash(fixture);
+  const generalScopedResult = waveOptions.general?.scopedResult ?? 'clean';
+  const rulesScopedResult = waveOptions.rules === 'not-applicable'
+    ? null
+    : (waveOptions.rules?.scopedResult ?? 'clean');
   await appendFile(
     path.join(fixture.taskDir, 'audits.md'),
     [
@@ -357,14 +397,32 @@ async function prepareReviewWaveDelivery(
       '',
       '原 finding 已解决，repair 的功能影响面 clean。',
       '',
+      reviewResultBlock(fixture, hash, target, {
+        domain: 'general',
+        mode: 'scoped',
+        result: generalScopedResult,
+      }),
+      '',
       '### A6：Rules scoped repair verification',
       '',
       '原 finding 已解决，repair 的规则影响面 clean。',
+      ...(rulesScopedResult === null
+        ? []
+        : [
+            '',
+            reviewResultBlock(fixture, hash, target, {
+              domain: 'rules',
+              mode: 'scoped',
+              result: rulesScopedResult,
+            }),
+          ]),
       '',
     ].join('\n'),
   );
+  for (const reviewResult of extraReviewResults) {
+    await appendReviewResult(fixture, target, reviewResult);
+  }
   const { reference } = await appendReviewWave(fixture, previousTarget, target, waveOptions);
-  const hash = await taskHash(fixture);
   await writeVerifiedClaims(fixture, hash, [reference]);
   if (deliveryResult === 'delivered') {
     await writeDelivery(fixture, {
@@ -977,6 +1035,208 @@ test('clean Review Wave 以当前 target、affected validation 和双域 scoped 
   assert.equal(result.status, 0, result.stderr);
 });
 
+test('Review Wave scoped evidence 绑定 domain、mode、result 和当前 target', async () => {
+  const cases = [
+    {
+      name: 'wrong domain',
+      mutate: (record) => ({ ...record, domain: 'rules' }),
+      pattern: /General.*scopedRef.*domain.*general/i,
+    },
+    {
+      name: 'wrong mode',
+      mutate: (record) => ({ ...record, mode: 'full' }),
+      pattern: /General.*scopedRef.*mode.*scoped/i,
+    },
+    {
+      name: 'wrong result',
+      mutate: (record) => ({ ...record, result: 'findings' }),
+      pattern: /General.*scopedRef.*result.*clean/i,
+    },
+    {
+      name: 'stale execution',
+      mutate: (record) => ({
+        ...record,
+        executionHash: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+      }),
+      pattern: /General.*scopedRef.*stale execution/i,
+    },
+    {
+      name: 'stale target',
+      mutate: (record, prepared) => ({ ...record, target: prepared.previousTarget }),
+      pattern: /General.*scopedRef.*target/i,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const fixture = await createFixture();
+    const prepared = await prepareReviewWaveDelivery(fixture);
+    const auditsPath = path.join(fixture.taskDir, 'audits.md');
+    const audits = await readFile(auditsPath, 'utf8');
+    const blocks = [...audits.matchAll(/```deliver-task-review-result\r?\n([^\r\n]+)\r?\n```/g)];
+    const match = blocks.find(({ 1: payload }) => {
+      const record = JSON.parse(payload);
+      return record.domain === 'general' && record.mode === 'scoped';
+    });
+    assert.ok(match, `${testCase.name}: missing General scoped fixture`);
+    const mutated = testCase.mutate(JSON.parse(match[1]), prepared);
+    await writeFile(auditsPath, audits.replace(match[1], JSON.stringify(mutated)));
+
+    const result = run(fixture.root, ['validate-result', fixture.taskDir]);
+    assert.equal(result.status, 1, `${testCase.name} unexpectedly passed`);
+    assert.match(result.stderr, testCase.pattern, testCase.name);
+  }
+});
+
+test('Review Wave 拒绝 self 和 future audits evidence ref', async () => {
+  for (const testCase of [
+    { name: 'self', reference: 'audits.md#A7' },
+    { name: 'future', reference: 'audits.md#A8' },
+  ]) {
+    const fixture = await createFixture();
+    await prepareReviewWaveDelivery(fixture);
+    const auditsPath = path.join(fixture.taskDir, 'audits.md');
+    if (testCase.name === 'future') {
+      await appendFile(auditsPath, '\n### A8：future evidence\n\n尚未发生。\n');
+    }
+    const audits = await readFile(auditsPath, 'utf8');
+    const block = /```deliver-task-review-wave\r?\n([^\r\n]+)\r?\n```/.exec(audits);
+    const record = { ...JSON.parse(block[1]), repairDiffRef: testCase.reference };
+    await writeFile(auditsPath, audits.replace(block[1], JSON.stringify(record)));
+
+    const result = run(fixture.root, ['validate-result', fixture.taskDir]);
+    assert.equal(result.status, 1, `${testCase.name} reference unexpectedly passed`);
+    assert.match(result.stderr, /repairDiffRef.*earlier audits\.md A entry/i, testCase.name);
+  }
+});
+
+test('历史 Review Wave 保留自身 execution identity，只有最终 wave 绑定当前 execution', async () => {
+  const fixture = await createFixture();
+  await initTask(fixture);
+  await writeExecution(fixture);
+  const initialTarget = await snapshotTarget(fixture);
+  await appendGeneralReview(fixture, initialTarget, { anchor: 'A2' });
+
+  await writeFile(path.join(fixture.workspacePath, 'src/slug.mjs'), "export const slug = () => 'wave-1';\n");
+  const firstTarget = await snapshotTarget(fixture);
+  await appendFile(
+    path.join(fixture.taskDir, 'audits.md'),
+    '\n### A3：wave 1 repair diff\n\nfixed.\n\n### A4：wave 1 validation\n\npassed.\n',
+  );
+  await appendReviewResult(fixture, firstTarget, {
+    anchor: 'A5',
+    domain: 'general',
+    mode: 'scoped',
+    result: 'findings',
+  });
+  await appendReviewResult(fixture, firstTarget, {
+    anchor: 'A6',
+    domain: 'rules',
+    mode: 'scoped',
+    result: 'clean',
+  });
+  const firstWave = await appendReviewWave(fixture, initialTarget, firstTarget, {
+    anchor: 'A7',
+    failedWaveCount: 1,
+    general: {
+      scopedRef: 'audits.md#A5',
+      scopedResult: 'findings',
+      fullRef: null,
+      fullResult: null,
+    },
+    mergedFindingRefs: ['audits.md#A5'],
+    result: 'failed',
+  });
+
+  await appendFile(
+    path.join(fixture.taskDir, 'audits.md'),
+    '\n### A8：执行边界调整\n\n同一 task 内补充 docs 范围。\n',
+  );
+  await writeExecution(fixture, {
+    allowedPaths: ['src/slug.mjs', 'test/slug.test.mjs', 'docs/**'],
+    evidenceRefs: ['audits.md#A8'],
+  });
+  await writeFile(path.join(fixture.workspacePath, 'src/slug.mjs'), "export const slug = () => 'wave-2';\n");
+  const finalTarget = await snapshotTarget(fixture);
+  assert.notEqual(firstTarget.executionHash, finalTarget.executionHash);
+  await appendFile(
+    path.join(fixture.taskDir, 'audits.md'),
+    '\n### A9：wave 2 repair diff\n\nfixed.\n\n### A10：wave 2 validation\n\npassed.\n',
+  );
+  await appendReviewResult(fixture, finalTarget, {
+    anchor: 'A11',
+    domain: 'general',
+    mode: 'scoped',
+    result: 'clean',
+  });
+  await appendReviewResult(fixture, finalTarget, {
+    anchor: 'A12',
+    domain: 'rules',
+    mode: 'scoped',
+    result: 'clean',
+  });
+  const finalWave = await appendReviewWave(fixture, firstTarget, finalTarget, {
+    anchor: 'A13',
+    wave: 2,
+    failedWaveCount: 1,
+    repairInputRefs: [firstWave.reference],
+    repairDiffRef: 'audits.md#A9',
+    validationRefs: ['audits.md#A10'],
+    general: {
+      scopedRef: 'audits.md#A11',
+      scopedResult: 'clean',
+      fullRef: null,
+      fullResult: null,
+    },
+    rules: {
+      scopedRef: 'audits.md#A12',
+      scopedResult: 'clean',
+      fullRef: null,
+      fullResult: null,
+    },
+  });
+  const hash = await taskHash(fixture);
+  await writeVerifiedClaims(fixture, hash, [finalWave.reference]);
+  await writeDelivery(fixture, {
+    target: finalTarget,
+    verification: 'audits.md#A10',
+    generalReview: finalWave.reference,
+    rulesReview: finalWave.reference,
+  });
+
+  let result = run(fixture.root, ['validate-result', fixture.taskDir]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fixture.root, ['close-check', fixture.taskDir]);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('最新 Review Wave 拒绝旧 execution identity', async () => {
+  const fixture = await createFixture();
+  const prepared = await prepareReviewWaveDelivery(fixture);
+  await appendFile(
+    path.join(fixture.taskDir, 'audits.md'),
+    '\n### A8：执行边界调整\n\n同一 task 内补充 docs 范围。\n',
+  );
+  await writeExecution(fixture, {
+    allowedPaths: ['src/slug.mjs', 'test/slug.test.mjs', 'docs/**'],
+    evidenceRefs: ['audits.md#A8'],
+  });
+  const currentTarget = await snapshotTarget(fixture);
+  assert.notEqual(prepared.target.executionHash, currentTarget.executionHash);
+  await writeDelivery(fixture, {
+    result: 'blocked',
+    target: currentTarget,
+    upstreamRequest: {
+      kind: 'blocker',
+      summary: '当前 execution 尚无 Review Wave closure。',
+      evidenceRefs: [prepared.reference],
+    },
+  });
+
+  const result = run(fixture.root, ['validate-result', fixture.taskDir]);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /final Review Wave.*current execution\.json/i);
+});
+
 test('Review Wave 把双域 findings 合并为一次 failed-wave 计数', async () => {
   const cases = [
     {
@@ -1017,7 +1277,7 @@ test('Review Wave 把双域 findings 合并为一次 failed-wave 计数', async 
   }
 });
 
-test('cannot-bound 只要求同一 domain 的 Full，并保持一次 wave failure', async () => {
+test('cannot-bound 只接受同一 domain、当前 target 的 Full evidence', async () => {
   {
     const fixture = await createFixture();
     await prepareReviewWaveDelivery(fixture, {
@@ -1035,7 +1295,8 @@ test('cannot-bound 只要求同一 domain 的 Full，并保持一次 wave failur
       deliveryResult: 'blocked',
     });
     const result = run(fixture.root, ['validate-result', fixture.taskDir]);
-    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /Rules.*fullRef.*domain.*rules/i);
   }
 
   {
@@ -1049,6 +1310,37 @@ test('cannot-bound 只要求同一 domain 的 Full，并保持一次 wave failur
           fullResult: 'clean',
         },
       },
+    });
+    const result = run(fixture.root, ['validate-result', fixture.taskDir]);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /General.*fullRef.*target/i);
+  }
+
+  {
+    const fixture = await createFixture();
+    await prepareReviewWaveDelivery(fixture, {
+      extraReviewResults: [
+        {
+          anchor: 'A7',
+          domain: 'rules',
+          mode: 'full',
+          result: 'findings',
+          title: 'Rules Full review',
+        },
+      ],
+      waveOptions: {
+        anchor: 'A8',
+        failedWaveCount: 1,
+        rules: {
+          scopedRef: 'audits.md#A6',
+          scopedResult: 'cannot-bound',
+          fullRef: 'audits.md#A7',
+          fullResult: 'findings',
+        },
+        mergedFindingRefs: ['audits.md#A7'],
+        result: 'failed',
+      },
+      deliveryResult: 'blocked',
     });
     const result = run(fixture.root, ['validate-result', fixture.taskDir]);
     assert.equal(result.status, 0, result.stderr);
@@ -1164,6 +1456,7 @@ test('连续 4 个 failed Review Waves 后拒绝第 5 个自动 wave', async () 
   await appendGeneralReview(fixture, previousTarget, { anchor: 'A2' });
   let lastReference = 'audits.md#A2';
   let lastTarget = previousTarget;
+  const hash = await taskHash(fixture);
 
   for (let wave = 1; wave <= 5; wave += 1) {
     const base = 3 + (wave - 1) * 5;
@@ -1174,7 +1467,37 @@ test('连续 4 个 failed Review Waves 后拒绝第 5 个自动 wave', async () 
     lastTarget = await snapshotTarget(fixture);
     await appendFile(
       path.join(fixture.taskDir, 'audits.md'),
-      `\n### A${base}：repair diff\n\nwave ${wave}.\n\n### A${base + 1}：validation\n\npassed.\n\n### A${base + 2}：General scoped\n\nfinding.\n\n### A${base + 3}：Rules scoped\n\nclean.\n`,
+      [
+        '',
+        `### A${base}：repair diff`,
+        '',
+        `wave ${wave}.`,
+        '',
+        `### A${base + 1}：validation`,
+        '',
+        'passed.',
+        '',
+        `### A${base + 2}：General scoped`,
+        '',
+        'finding.',
+        '',
+        reviewResultBlock(fixture, hash, lastTarget, {
+          domain: 'general',
+          mode: 'scoped',
+          result: 'findings',
+        }),
+        '',
+        `### A${base + 3}：Rules scoped`,
+        '',
+        'clean.',
+        '',
+        reviewResultBlock(fixture, hash, lastTarget, {
+          domain: 'rules',
+          mode: 'scoped',
+          result: 'clean',
+        }),
+        '',
+      ].join('\n'),
     );
     const appended = await appendReviewWave(fixture, previousTarget, lastTarget, {
       anchor: `A${base + 4}`,

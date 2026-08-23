@@ -86,8 +86,9 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
 - commit-range 的 dirty/freshness 只检查绑定 task workspace；caller workspace 的 HEAD、dirty、
   index 和同名文件不参与判断。task workspace 自身仍有额外修改时失败。
 - worktree hash 绑定排序后的路径、regular-file mode 和内容 hash；删除使用明确 deleted 记录。
-- 三种 target 都包含当前 canonical `executionHash`；execution 变化会使旧 target 和旧 General
-  binding 失效。
+- 三种 live target 都包含当前 canonical `executionHash`；execution 变化会使旧 target 和旧 General
+  binding 不能作为当前 delivery proof。已追加的 Review Wave history 保留旧 target 的自身 identity，
+  由最新 wave 重新绑定当前 execution。
 
 ## 机器校验边界
 
@@ -101,8 +102,10 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
 - execution allowlist、两层 forbidden path 和 `.dev-task/` 写边界；
 - claim 明确终态与 evidence ref 存在；
 - General 的 task/execution/target 显式绑定；
-- Review Wave 的 exact block、连续 wave 编号、直接前序/当前 target chain、双域 scoped / 单域 Full
-  升级状态、task-owned refs、merged result、累计 failed-wave 计数与 4 次停止边界；
+- Review Wave 的 exact block、连续 wave 编号、跨 execution 的直接前序/当前 target chain、历史自身
+  identity 与最新 current execution binding；
+- scoped / Full A 的 task/execution/target/domain/mode/result exact binding、所有 wave refs 的先于
+  wave 顺序、merged result、累计 failed-wave 计数与 4 次停止边界；
 - acceptance 的 task/target/status 显式绑定及 task-owned evidence ref 存在；
 - non-delivered request 的 kind、非空 evidence refs 及存在性；
 - delivery 没有内嵌完整证据。

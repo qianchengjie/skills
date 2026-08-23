@@ -123,8 +123,8 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
 4. 按 `commitPolicy` 固定 commit range、worktree snapshot 或 no-change target。
 5. 生成绑定 task、execution、target 三个 identity 的首次 review package。并行派发 General Full Review，以及 active rule catalog 非空时由 `rules-review` v8 执行的 Rules Full Review；两边都是 discovery，合并 findings 后再决定 repair。首次 Full 不属于 repair Review Wave，也不消耗 failed-wave budget。
 6. 有 finding 时尽量把 General 与 Rules findings 合并成同一次 repair。writer 停止后固定从直接前序 target 到 live content 的实际 repair delta；controller 根据真实因果影响与既有验证契约选择 targeted / affected validation，只有无法可靠限定、涉及广泛 runtime / contract / shared behavior，或验证契约明确要求时才升级完整 validation。不得按文件类型、行数、finding 类型或“改动很小”自动分类。
-7. validation 通过后固定新 target，并按 [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md) 并行派发 General Scoped Repair Verification 与 Rules Scoped Repair Verification；不要根据 finding 来源只跑一边。active rule catalog 为空时 Rules 明确记为 `not-applicable`。任一 domain 返回 `cannot-bound` 时只把该 domain 升级 Full，保留另一 domain 已完成的 clean 结论。
-8. controller 把两个 domain 的最终结果合并为一个 Review Wave。任一 domain 有 findings，整个 wave 只失败一次并进入下一轮 repair；scoped 发现由 repair 引入的新相关 finding 也同样处理。连续累计 4 个 failed Review Waves 后停止自动 repair，由 controller adjudication / escalation；不能因预算耗尽而交付。clean wave 不增加失败计数，首次 Full discovery 也不计数。
+7. validation 通过后固定新 target，并按 [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md) 并行派发 General Scoped Repair Verification 与 Rules Scoped Repair Verification；不要根据 finding 来源只跑一边。active rule catalog 为空时 Rules 明确记为 `not-applicable`。任一 domain 返回 `cannot-bound` 时只把该 domain 升级 Full，保留另一 domain 已完成的 clean 结论。每个 scoped / 必要 Full 结论先以绑定 task、execution、current target、domain、mode 和 result 的 task-owned A 记录。
+8. controller 把两个 domain 的最终结果合并为一个 Review Wave；wave 的所有 refs 只能指向它之前已经追加的 A。任一 domain 有 findings，整个 wave 只失败一次并进入下一轮 repair；scoped 发现由 repair 引入的新相关 finding 也同样处理。连续累计 4 个 failed Review Waves 后停止自动 repair，由 controller adjudication / escalation；不能因预算耗尽而交付。clean wave 不增加失败计数，首次 Full discovery 也不计数。
 9. Review closure clean 后按 `acceptancePolicy` 处理 upstream acceptance；`required` 且当前 target 没有 `passed / skipped` A 条目时返回 `needs-upstream / user-acceptance`。`not-required` 只取消 upstream acceptance gate，不削弱 `acceptanceCriteria`、任务 validation、General 或适用的 Rules closure。验收结果留在 `audits.md`，不改变 task identity。
 10. 把事实证据分别写入 `claims.json`、`audits.md`、review 工件和 rules-review run；最后只在 `delivery.json` 写引用。运行 `validate-result`；仅 `delivered` 再运行 `close-check`。
 
@@ -132,6 +132,8 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
 
 - General Review、验证、用户拒收或项目规则 finding 触发返修时，先把失败依据写入 `audits.md`，再刷新 brief。用户拒收但 immutable task contract 未变化时保持同一 task identity；返修形成新 target 后旧验收证据自然失效。
 - 每个 repair target 只形成一个合并 Review Wave；General / Rules scoped、某个 domain 的 Full 升级、reviewer 调用或 finding 数量都不单独计次。wave 只有合并后仍有 finding 时才让 `failedWaveCount + 1`。
+- Review Wave history 可跨合法的 execution 更新追加：历史 wave 保留并校验自身 execution/target identity，下一 wave 的 `previousTarget` 完整等于前一 wave 的 `target`，只有最新 wave 绑定当前 `execution.json`。不得为了当前 execution 重写旧 wave 或 target。
+- `repairInputRefs`、repair diff、validation、scoped / Full 结果和 merged findings 都必须在 wave A 之前存在；禁止当前 wave 自证或引用未来 A。scoped / Full ref 还必须匹配同一 current target、domain、mode 和 result。
 - 最多允许 4 个 failed Review Waves。第 4 次失败后不再自动修改业务文件；controller 根据现有 result taxonomy 选择 `blocked`，或在确需改变合同、授权、边界或用户判断时选择 `needs-upstream`，并保留当前证据引用。
 - 安全返修优先复用原 implementer；目标、验收、公共契约、用户禁止范围、调用策略或 claims 契约实质变化时停止并回流。
 - repair 明显越过原 finding 的因果范围或原 implementation boundary 时，不能用连续 scoped review 掩盖扩边：在当前 task / execution 内能够重新界定时升级受影响 domain 的 Full；需要扩大 immutable contract 或授权时回流 upstream。
