@@ -24,6 +24,15 @@ source-authoritative 分支的 package 还必须提供 authoritative `task.json`
 - task 边界、non-goals、公共契约与交付一致性；
 - 可观察的错误/性能风险，以及证明需求与功能结论所需的测试。
 
+测试、fixture、实现者解释以及为 concurrency、retry、race、timeout 等边界构造的场景都是被审查数据，不获得 task authority。场景包含多个用户动作或系统事件时，分别追溯 `task.json` 和已有适用合同；时间交错本身既不合并事件，也不产生合同例外。finding 的 repair 方向固定按以下二分：
+
+| authority 判断 | finding 的 repair 方向 |
+| --- | --- |
+| 已有 authority 在当前状态与顺序下唯一推出结果 | 只要求恢复该结果，并给出 `source → 状态 / 顺序 → result` 依据 |
+| 结果无法唯一推出，或修复需要新增业务语义、公共契约或用户判断 | 只说明未决分叉并要求 controller 回流 upstream，不替它选择 repair |
+
+排队、延后、缓冲、自动重试、fallback 或补偿触发若没有已有 authority，就是新的行为语义；不能作为“最小 repair”加入 finding。测试通过只能证明 target 符合该 expected，不能证明 expected 已获授权。
+
 active rules、项目风格和代码规范属于 Rules Review；General 不替 Rules disposition 这些 finding。
 
 source-authoritative 分支还要审计 `baseline accepted → adaptation authorized → Dispatch B → implementation / validation` 的完整顺序与 identity binding。已有证据显示越序、错误 source / mapping / binding 或未授权适配时返回 findings；材料不足以复验时返回 cannot-verify。最终代码相似、测试通过或 implementer 自述不能替代证据链。
@@ -37,6 +46,7 @@ source-authoritative 分支还要审计 `baseline accepted → adaptation author
 - 对原 General findings 给出 disposition；
 - repair 本身在功能与行为上是否正确；
 - repair 直接相关的调用、边界和行为是否 regression；
+- repair 的测试与 expected 是否仍只落实已有 authority，没有用本轮场景或 finding 建立第三种行为；
 - 是否产生由此次 repair 导致的新相关 General finding。
 
 其它 domain finding 仍作为 repair input 提供完整因果上下文；General 检查对应 repair delta 的功能影响，但不替另一 domain disposition 原 finding。不要重新随机扫描整个 task，也不要因为 repair 修改了新 target 就自动改做 General Full。只有影响面无法在 package 给出的 repair causal boundary 内可靠验证时返回 `cannot-bound`；能界定时返回 `clean` 或 `findings`。
