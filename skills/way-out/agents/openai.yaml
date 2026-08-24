@@ -1,0 +1,6 @@
+interface:
+  display_name: "重新找方向"
+  short_description: "方向可能错了或不知道怎么走时，重新寻找可行路线"
+  default_prompt: "使用 $way-out 暂停当前路线，重新寻找方向并给出一个最小下一步。"
+policy:
+  allow_implicit_invocation: false

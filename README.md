@@ -14,6 +14,7 @@
 | [`rule-steward`](skills/rule-steward/SKILL.md) | 初始化和维护 `.agents/rules/` 项目规则协议。 |
 | [`rules-review`](skills/rules-review/SKILL.md) | 使用项目规则审查已提交的 Git commit。 |
 | [`tell-me-first`](skills/tell-me-first/SKILL.md) | 在产生实际变更前简要说明目标并等待确认。 |
+| [`way-out`](skills/way-out/SKILL.md) | 当前方向可能错了、已经卡住、现有选项都不好或不知道下一步时，重新寻找可行方向。 |
 
 ## 验证
 
