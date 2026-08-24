@@ -37,19 +37,16 @@ disable-model-invocation: true
 
 ## 输出
 
-保持轻量，使用以下字段：
+保持轻量，根据上下文自然组织，不强制固定字段或固定结构。
 
-```text
-Verdict: keep | adjust | abandon | investigate
-Goal:
-Current direction:
-Why it may be wrong:
-Alternative direction:
-Why:
-Smallest next move:
-```
-
-必要时可在 `Alternative direction` 后补充少量其他候选，但仍只选择一个 verdict 和一个最小下一步。`keep` 时也要写出曾比较但被证据否定的替代方向；不要为了使用 skill 而制造变化。
+- 不直接暴露 `Verdict`、`Goal`、`Current Direction` 等内部字段。
+- 重点讲清楚：
+  - 当前方向是否值得继续；
+  - 有什么结构上真正不同的方向；
+  - 下一步最值得先做什么。
+- 需要标题时使用自然、易懂的中文标题。
+- 用户继续询问“还有其他方向吗”时，提供尚未讨论过、结构上不同的候选，不重复同一路线的轻量变体。
+- 不要为了使用 skill 而制造变化。
 
 ## 示例
 
