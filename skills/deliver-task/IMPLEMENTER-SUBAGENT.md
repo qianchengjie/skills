@@ -22,6 +22,8 @@ contract，brief 只是派生执行上下文，优先级固定为 `task.json > t
 
 确认 task identity、execution identity、目标、验收、非目标、允许/禁止路径、selected rules、claims 和本轮修复依据一致。brief 与 `task.json` 冲突，或本轮执行说明会遗漏合同义务时，在修改业务文件前 blocked 回 controller。仅 brief 投影错误时由 controller 在同一 task identity 下修正；若可见上游 authority 表明 `task.json` 本身已弱化，则停止并要求 controller 走 contract revision。局部事实可 focused 只读查证；合同或授权缺口不能自行补。
 
+实现、测试或 review 为验证边界构造的场景不获得 task authority。场景需要决定新的可观察结果时，先拆分其中的用户动作与系统事件，分别按 `task.json` 和已有适用合同推导；结果能唯一推出时沿用该结果，不因 concurrency、retry、race、timeout 或时间交错另造例外；结果不能唯一推出时，在修改实现或写入 expected 前 blocked 回 controller，不自行选择答案。
+
 ## 实现
 
 在现有边界内做最小完整实现，补直接相关测试，运行 brief 指定验证。只能修复自己本轮直接造成的验证失败；需要越界时先停止。

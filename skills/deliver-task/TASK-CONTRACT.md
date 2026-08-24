@@ -409,7 +409,7 @@ Review Wave 不改变 `delivery.json` schema。最终 clean wave A 直接绑定�
   （条件分支下包括 authorization ref），不把目标、验收或约束转述成可独立覆盖合同的副本；
 - `task-report.json`：implementer 的 changed files、验证 handoff、blocked 原因；
 - `target.json`：`snapshot-target` 输出；
-- `review-package.md`：固定 task、execution、target 三个 identity 的 diff/snapshot、claims、验证和审查说明；
+- `review-package.md`：固定 task、execution、target 三个 identity 的 diff/snapshot、claims、验证和审查说明，并把 live `<taskDir>/task.json` 作为同 task identity 的 reviewer fixed input；只引用 authoritative 文件，不复制合同正文；
 - reviewer prompt / rule repair package。
 
 每次派发前刷新它们；旧 subagent 记忆不是事实源。`task.json > task-brief.md`：brief 与合同冲突，
