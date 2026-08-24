@@ -5,7 +5,8 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const TASK_SCHEMA = 'deliver-task.task.v1';
+const LEGACY_TASK_SCHEMA = 'deliver-task.task.v1';
+const TASK_SCHEMA = 'deliver-task.task.v2';
 const WORKSPACE_SCHEMA = 'deliver-task.workspace.v1';
 const EXECUTION_SCHEMA = 'deliver-task.execution.v1';
 const CLAIMS_SCHEMA = 'deliver-task.claims.v1';
@@ -258,26 +259,31 @@ function validateCaller(caller) {
 }
 
 function validateTask(task, repoRoot) {
+  if (!isPlainObject(task)) throw gateError('task.json must be an object');
+  if (task.schemaVersion !== TASK_SCHEMA && task.schemaVersion !== LEGACY_TASK_SCHEMA) {
+    throw gateError(`task.schemaVersion must be ${TASK_SCHEMA}`);
+  }
+  const requiredFields = [
+    'schemaVersion',
+    'taskId',
+    'revision',
+    'caller',
+    'objective',
+    'acceptanceCriteria',
+    'constraints',
+    'nonGoals',
+    'forbiddenPaths',
+    'baseCommit',
+    'commitPolicy',
+    'acceptancePolicy',
+  ];
+  if (task.schemaVersion === TASK_SCHEMA) requiredFields.splice(9, 0, 'architecturePath');
   assertExactObject(
     task,
-    [
-      'schemaVersion',
-      'taskId',
-      'revision',
-      'caller',
-      'objective',
-      'acceptanceCriteria',
-      'constraints',
-      'nonGoals',
-      'forbiddenPaths',
-      'baseCommit',
-      'commitPolicy',
-      'acceptancePolicy',
-    ],
+    requiredFields,
     [],
     'task.json',
   );
-  if (task.schemaVersion !== TASK_SCHEMA) throw gateError(`task.schemaVersion must be ${TASK_SCHEMA}`);
   if (!TASK_ID_RE.test(task.taskId || '')) throw gateError('task.taskId must be a lowercase hyphenated slug');
   if (!Number.isSafeInteger(task.revision) || task.revision < 1) {
     throw gateError('task.revision must be a positive integer');
@@ -289,6 +295,18 @@ function validateTask(task, repoRoot) {
   assertStringArray(task.nonGoals, 'task.nonGoals');
   assertStringArray(task.forbiddenPaths, 'task.forbiddenPaths');
   task.forbiddenPaths.forEach((item, index) => normalizeRepoPattern(item, `task.forbiddenPaths[${index}]`));
+  if (task.schemaVersion === TASK_SCHEMA) {
+    assertString(task.architecturePath, 'task.architecturePath');
+    if (!path.isAbsolute(task.architecturePath)) {
+      throw gateError('task.architecturePath must be an absolute path');
+    }
+    if (path.normalize(task.architecturePath) !== task.architecturePath) {
+      throw gateError('task.architecturePath must be a normalized absolute path');
+    }
+    if (path.basename(task.architecturePath) !== 'ARCHITECTURE.md') {
+      throw gateError('task.architecturePath must point to ARCHITECTURE.md');
+    }
+  }
   if (!GIT_OID_RE.test(task.baseCommit || '')) {
     throw gateError('task.baseCommit must be a full Git commit OID');
   }
@@ -305,9 +323,31 @@ function validateTask(task, repoRoot) {
   return task;
 }
 
+async function validateArchitectureAuthority(task) {
+  if (task.schemaVersion === LEGACY_TASK_SCHEMA) return;
+  let stat;
+  let source;
+  try {
+    stat = await fs.stat(task.architecturePath);
+    source = await fs.readFile(task.architecturePath, 'utf8');
+  } catch (error) {
+    throw gateError(`Architecture missing or unreadable: ${error.message}`);
+  }
+  if (!stat.isFile()) throw gateError('Architecture path must reference a file');
+  const confirmationLines = source.split(/\r?\n/u);
+  if (confirmationLines.some((line) => /^\s*-\s+\[ \](?:\s|$)/u.test(line))) {
+    throw gateError('Architecture contains unchecked [ ] confirmation units');
+  }
+  if (!confirmationLines.some((line) => /^\s*-\s+\[x\](?:\s|$)/u.test(line))) {
+    throw gateError('Architecture must contain at least one confirmed [x] unit');
+  }
+}
+
 async function readTask(context) {
   const task = await readJson(path.join(context.taskDir, 'task.json'), 'task.json');
-  return validateTask(task, context.repoRoot);
+  const validated = validateTask(task, context.repoRoot);
+  await validateArchitectureAuthority(validated);
+  return validated;
 }
 
 function bindingForTask(task) {
@@ -753,6 +793,14 @@ async function startWithManagedWorkspace(repoRoot, task) {
 }
 
 async function startTask(repoRoot, task, providedPath) {
+  if (task.schemaVersion === LEGACY_TASK_SCHEMA) {
+    const existingWorkspace = await findTaskRevisionWorkspace(repoRoot, task);
+    if (!existingWorkspace) {
+      throw gateError(`start requires ${TASK_SCHEMA} with architecturePath`);
+    }
+    return readCompleteTaskState(existingWorkspace, task);
+  }
+  await validateArchitectureAuthority(task);
   if (providedPath) return startWithProvidedWorkspace(repoRoot, task, providedPath);
   return startWithManagedWorkspace(repoRoot, task);
 }

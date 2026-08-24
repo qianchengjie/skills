@@ -6,6 +6,7 @@
 
 | Skill | 用途 |
 | --- | --- |
+| [`architecture-steward`](skills/architecture-steward/SKILL.md) | 创建和维护经原子人工确认的 `ARCHITECTURE.md` 架构真源。 |
 | [`bounded-agency-review`](skills/bounded-agency-review/SKILL.md) | 审查 skill、规则、workflow 或 prompt 的 agent contract，并判断是否需要剪枝。 |
 | [`checkpoint`](skills/checkpoint/SKILL.md) | 显式保存当前讨论状态，供跨会话、工具或智能体继续讨论。 |
 | [`deliver-task`](skills/deliver-task/SKILL.md) | 在隔离 workspace 中完成一个边界明确的开发任务并返回可审计交付结果。 |

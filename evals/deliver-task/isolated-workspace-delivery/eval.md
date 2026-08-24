@@ -22,8 +22,8 @@ lifecycle 与最终 handoff 所需资源；不要读取 git diff、tests 或 eva
 实际执行场景，不评价用例设计，也不要提出协议改进。
 
 上游 `to-tickets` 现在要把一个边界明确的单任务交给 deliver-task。目标仓库是
-`/tmp/acme`，上游手里已有 exact task contract JSON（含完整 baseCommit、revision、
-caller、目标、验收与 policy），但尚未创建任何 task 目录或文件。caller 工作区已有无关
+`/tmp/acme`，上游手里已有 `deliver-task.task.v2` exact task contract JSON（含完整 baseCommit、revision、
+caller、目标、验收、policy 与人已明确确认的 `/tmp/acme/specs/ARCHITECTURE.md`），Architecture 已读、至少有一个 `[x]` 且没有 `[ ]`，但尚未创建任何 task 目录或文件。caller 工作区已有无关
 dirty，负责人还在继续编辑同名业务文件；发布窗口只剩 10 分钟，负责人要求你现在立刻
 启动，不能要求他暂停，也不能碰、stash 或提交 caller 的内容。
 

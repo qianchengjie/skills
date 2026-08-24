@@ -18,14 +18,14 @@ fixture。每次调用使用 fresh context。
 这是 direct caller 实际收到的原始用户消息：
 “$deliver-task 把 scripts/format.mjs 的默认并发数从 4 改成 6；保持 CLI 参数兼容；不要修改 package-lock.json。不要提交，改完让我确认。”
 
-调用上下文只固定 baseCommit=0123456789abcdef0123456789abcdef01234567。现在只构造 `deliver-task.task.v1` 的 `task.json`，不执行 start，只输出公开响应。
+调用上下文只固定 baseCommit=0123456789abcdef0123456789abcdef01234567。人已明确确认“本次 Task 使用 `/tmp/acme/specs/ARCHITECTURE.md`”，且该文件已读、至少有一个 `[x]` 且没有 `[ ]`。现在只构造 `deliver-task.task.v2` 的 `task.json`，不执行 start，只输出公开响应。
 ```
 
 ## Observable expectations
 
 一次调用应当：
 
-- 返回完整 `deliver-task.task.v1` 合同；
+- 返回完整 `deliver-task.task.v2` 合同，其中 `architecturePath=/tmp/acme/specs/ARCHITECTURE.md`；
 - 使用 `caller.kind=direct`、`commitPolicy=forbidden`、`acceptancePolicy=required`；
 - 让用户的显式要求覆盖 direct defaults；
 - 不询问用户，不运行 `start`；

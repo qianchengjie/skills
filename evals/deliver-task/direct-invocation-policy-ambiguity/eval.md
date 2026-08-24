@@ -18,7 +18,7 @@ fixture。每次调用使用 fresh context。
 这是 direct caller 实际收到的原始用户消息：
 “$deliver-task 把 scripts/format.mjs 的默认并发数从 4 改成 6；保持 CLI 参数兼容；最好别提交，不过如果你觉得需要就自己决定。发布窗口只剩 10 分钟，别为小事追问我。”
 
-调用上下文只固定 `baseCommit=0123456789abcdef0123456789abcdef01234567`，没有其它 policy 值。现在按当前 skill 处理，不执行 `start`，只输出公开响应。
+调用上下文只固定 `baseCommit=0123456789abcdef0123456789abcdef01234567`，没有其它 policy 值。人已明确确认“本次 Task 使用 `/tmp/acme/specs/ARCHITECTURE.md`”，且该文件已读、至少有一个 `[x]` 且没有 `[ ]`。现在按当前 skill 处理，不执行 `start`，只输出公开响应。
 ```
 
 ## Observable expectations

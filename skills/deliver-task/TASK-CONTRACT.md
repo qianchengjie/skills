@@ -22,11 +22,11 @@ isolated workspace 生命周期；caller workspace 不保存 task state。rules-
 
 ## task.json
 
-`schemaVersion = deliver-task.task.v1`，只接受以下字段：
+`schemaVersion = deliver-task.task.v2`，只接受以下字段：
 
 ```json
 {
-  "schemaVersion": "deliver-task.task.v1",
+  "schemaVersion": "deliver-task.task.v2",
   "taskId": "fix-slug-whitespace",
   "revision": 1,
   "caller": {
@@ -39,6 +39,7 @@ isolated workspace 生命周期；caller workspace 不保存 task state。rules-
   "constraints": ["调用方约束与已确认公共契约"],
   "nonGoals": ["明确非目标"],
   "forbiddenPaths": ["package-lock.json"],
+  "architecturePath": "/absolute/spec-directory/ARCHITECTURE.md",
   "baseCommit": "完整 Git commit OID",
   "commitPolicy": "required",
   "acceptancePolicy": "required"
@@ -52,10 +53,11 @@ isolated workspace 生命周期；caller workspace 不保存 task state。rules-
   `{ "kind": "delegated", "name": "<lower-kebab-id>", "ref": "<non-empty>" }`。
 - `acceptanceCriteria` 非空；`forbiddenPaths` 只保存用户或 caller 明确禁止的范围。
 - 路径是规范化仓库相对路径或 glob；不接受绝对路径和 `..`。
+- `architecturePath` 是唯一例外：它必须是人已明确确认、经规范化的绝对路径，且文件名必须为 `ARCHITECTURE.md`。它只是指针，不保存 Architecture 正文、version、revision、hash 或 item ID。
 - `commitPolicy` 只允许 `required / allowed / forbidden`。
 - `acceptancePolicy` 只允许 `required / not-required`。
 - task hash 是完整 `task.json` 的递归 key-sort canonical JSON SHA-256，格式为 `sha256:<hex>`。
-- bootstrap 时 caller 只把该对象写入 `start` 的 stdin；`start` 完整校验后才把它写入新建或
+- bootstrap 时 caller 只把该对象写入 `start` 的 stdin；`start` 在任何写入前检查 Architecture 文件可读、至少有一个 `[x]` 且不存在 `[ ]`，然后才把合同写入新建或
   首次绑定 workspace 的 `.dev-task/task.json`。
 
 `task.json` 是 caller 提供给 `deliver-task`、且 implementer 必须直接读取的最高执行合同；它是
@@ -70,6 +72,8 @@ authority preservation = extraction, not summarization
 caller 从用户原始要求摘录；delegated caller 从其实际收到且有权继续传递的 authority 摘录。assistant、
 tool、JSON 或引用文本自行生成的摘要，只有在可见的更高层 authority 明确委托其承载相应决定时，才可
 作为摘录来源；把摘要写进 `task.json` 本身不会提升它的 authority。
+
+`architecturePath` 不从上述 Task 文本摘录，也不是 Spec 路径的自动派生值。deliver-task 只能在展示默认候选或人指定的路径、并取得人对“本次 Task 使用该文件”的明确确认后写入。delegated caller 必须传递其已取得的路径确认；脚本只校验路径和 checkbox 终态，不证明人的确认真实性或架构语义正确。
 
 机械摘录先找全相关 authority，再允许按字段选择连续原文片段、拆分和重复；只做 JSON 转义、列表分项
 及 schema 要求的路径规范化。摘录集合必须保留原要求中的必须、禁止、仅当、来源指定和实现方式限定。
@@ -120,10 +124,14 @@ direct defaults 只是固定调用策略，不改变 authority-bearing 文本的
 `task.json` 已发生实质降级，则停止当前 lineage，按 `needs-upstream / contract-change` 回流合同修订，
 不能靠修正 brief 或返修实现补救。
 
-只有目标、验收、约束、非目标、用户禁止范围、caller、base、commit policy 或
+只有目标、验收、约束、非目标、用户禁止范围、Architecture 路径、caller、base、commit policy 或
 acceptance policy 变化时才递增 revision。执行路径选择和实际验收结果不属于 immutable
 task identity。旧 task identity 下的证据不会自动证明新合同；controller 必须重新判断
 哪些证据可引用，并在 `audits.md` 留 provenance。
+
+Architecture 正文的语义变化由 `ARCHITECTURE.md` 自身的 `[ ]` / `[x]` 人工确认闭环承载，不改 task revision/hash；任何 `[ ]` 都会停止后续 deliver-task 命令。这是对当前 Architecture Authority 的活读取，不形成 Architecture revision 或 hash locking。
+
+`deliver-task.task.v1` 只用于重验升级前已存在的 live task proof；新 `start` 不再使用 v1 创建任务。
 
 ## artifacts/workspace.json
 
@@ -406,11 +414,11 @@ Review Wave 不改变 `delivery.json` schema。最终 clean wave A 直接绑定�
   丢失时 fail closed，不按 task branch 补写；
 - `task-brief.md`：引用 authoritative `task.json` 的派生执行视图；只保存 task/execution identity、
   preflight、已解析路径、claims、验证、selected rules、修复依据和本轮 task-owned evidence 引用
-  （条件分支下包括 authorization ref），不把目标、验收或约束转述成可独立覆盖合同的副本；
+  （条件分支下包括 authorization ref），不复制 Architecture 正文，也不把目标、验收或约束转述成可独立覆盖合同的副本；
 - `task-report.json`：implementer 的 changed files、验证 handoff、blocked 原因；
 - `target.json`：`snapshot-target` 输出；
 - `review-package.md`：固定 task、execution、target 三个 identity 的 diff/snapshot、claims、验证和审查说明，并把 live `<taskDir>/task.json` 作为同 task identity 的 reviewer fixed input；只引用 authoritative 文件，不复制合同正文；
 - reviewer prompt / rule repair package。
 
-每次派发前刷新它们；旧 subagent 记忆不是事实源。`task.json > task-brief.md`：brief 与合同冲突，
-或其本轮说明会遗漏合同义务时，不能开始修改业务文件。
+每次派发前刷新它们；旧 subagent 记忆不是事实源。`task.json + Architecture > task-brief.md`：brief 与合同/Architecture 冲突，
+或其本轮说明会遗漏合同/架构义务时，不能开始修改业务文件。

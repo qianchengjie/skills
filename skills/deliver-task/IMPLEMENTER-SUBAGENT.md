@@ -1,8 +1,8 @@
 # 单任务交付 · Implementer
 
-每次派发都直接读取 controller 指定的当前 `task.json`、`execution.json` 和
-`artifacts/task-brief.md`；follow-up 也必须重新读取三者。`task.json` 是 authoritative execution
-contract，brief 只是派生执行上下文，优先级固定为 `task.json > task-brief.md`。controller 同时提供
+每次派发都直接读取 controller 指定的当前 `task.json`、其 `architecturePath` 指向的 `ARCHITECTURE.md`、`execution.json` 和
+`artifacts/task-brief.md`；follow-up 也必须重新读取四者。`task.json` 是 authoritative execution
+contract，`ARCHITECTURE.md` 是架构域第一真源，brief 只是派生执行上下文，优先级固定为 `task.json + Architecture > task-brief.md`。controller 同时提供
 绝对 `taskDir` 与 `workspacePath`，其中
 `taskDir == <workspacePath>/.dev-task`；必须以 `workspacePath` 为 cwd 读取和修改业务代码。
 你是该 task workspace 本轮唯一业务文件 writer。
@@ -12,6 +12,7 @@ contract，brief 只是派生执行上下文，优先级固定为 `task.json > t
 - 只修改 `execution.allowedPaths` 内的路径，不命中 `task.forbiddenPaths ∪ execution.forbiddenPaths`。
 - 只读而不修改 `.dev-task/` 下的 `task.json`、`execution.json`、`claims.json`、`audits.md`、
   `delivery.json`、其它证明工件或任何 caller 状态。
+- 只读而不修改 `task.architecturePath` 指向的 `ARCHITECTURE.md`；即使它落在 `execution.allowedPaths` 也不获得写权。
 - 不创建 commit，不 push / merge / publish。
 - 不读取或修改 caller workspace，不同步其中的同名文件，也不尝试 rebase、merge 或 cherry-pick。
 - 不直接询问用户；需要改变目标、验收、公共契约、授权或用户判断时 blocked 回 controller。
@@ -20,7 +21,9 @@ contract，brief 只是派生执行上下文，优先级固定为 `task.json > t
 
 ## 开始前
 
-确认 task identity、execution identity、目标、验收、非目标、允许/禁止路径、selected rules、claims 和本轮修复依据一致。brief 与 `task.json` 冲突，或本轮执行说明会遗漏合同义务时，在修改业务文件前 blocked 回 controller。仅 brief 投影错误时由 controller 在同一 task identity 下修正；若可见上游 authority 表明 `task.json` 本身已弱化，则停止并要求 controller 走 contract revision。局部事实可 focused 只读查证；合同或授权缺口不能自行补。
+确认 task identity、execution identity、目标、验收、非目标、允许/禁止路径、selected rules、claims 和本轮修复依据一致。直接读完 Architecture，确认至少有一个 `[x]` 且没有任何 `[ ]`，并在写代码前建立本 Task 相关的 owner、状态真源、模块边界、public boundary 与依赖方向 mental model。brief 与 `task.json` / Architecture 冲突，或本轮执行说明会遗漏合同/架构义务时，在修改业务文件前 blocked 回 controller。仅 brief 投影错误时由 controller 在同一 task identity 下修正；若可见上游 authority 表明 `task.json` 本身已弱化，则停止并要求 controller 走 contract revision。局部事实可 focused 只读查证；合同或授权缺口不能自行补。
+
+Architecture 不可读、出现 `[ ]`，或完成当前 Task 必须新增/修改架构决定时，立即 blocked 回 controller，指出相关已确认项或具体缺口，要求路由 `$architecture-steward`。不能为完成 Ticket 偷偷改 owner、状态真源、边界或依赖；只有人确认且 Architecture 重新全部 `[x]` 后，fresh 重读四个输入再继续。
 
 实现、测试或 review 为验证边界构造的场景不获得 task authority。场景需要决定新的可观察结果时，先拆分其中的用户动作与系统事件，分别按 `task.json` 和已有适用合同推导；结果能唯一推出时沿用该结果，不因 concurrency、retry、race、timeout 或时间交错另造例外；结果不能唯一推出时，在修改实现或写入 expected 前 blocked 回 controller，不自行选择答案。
 

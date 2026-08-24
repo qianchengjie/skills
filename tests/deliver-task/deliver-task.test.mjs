@@ -35,24 +35,29 @@ async function createFixture({
   caller = { kind: 'direct' },
   acceptancePolicy = 'not-required',
   ignoreWorktrees = true,
+  architectureContent = '- [x] Controller snapshot 是核心运行状态唯一可写真源。\n',
 } = {}) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'deliver-task-test-')));
   await mkdir(path.join(root, 'src'), { recursive: true });
   await mkdir(path.join(root, 'test'), { recursive: true });
+  await mkdir(path.join(root, 'specs/reception'), { recursive: true });
   await writeFile(path.join(root, 'src/slug.mjs'), "export const slug = (value) => value.trim().toLowerCase().replaceAll(' ', '-');\n");
   await writeFile(path.join(root, 'test/slug.test.mjs'), '// fixture\n');
+  const architecturePath = path.join(root, 'specs/reception/ARCHITECTURE.md');
+  await writeFile(architecturePath, architectureContent);
   if (ignoreWorktrees) await writeFile(path.join(root, '.gitignore'), '.worktrees/\n');
   git(root, ['init', '-q']);
   git(root, [
     'add',
     ...(ignoreWorktrees ? ['.gitignore'] : []),
+    'specs/reception/ARCHITECTURE.md',
     'src/slug.mjs',
     'test/slug.test.mjs',
   ]);
   git(root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '初始基线']);
   const baseCommit = git(root, ['rev-parse', 'HEAD']);
   const task = {
-    schemaVersion: 'deliver-task.task.v1',
+    schemaVersion: 'deliver-task.task.v2',
     taskId: 'slug-whitespace',
     revision: 1,
     caller,
@@ -61,11 +66,12 @@ async function createFixture({
     constraints: ['不新增依赖。'],
     nonGoals: ['不改变 slug 的大小写规则。'],
     forbiddenPaths: ['package.json'],
+    architecturePath,
     baseCommit,
     commitPolicy,
     acceptancePolicy,
   };
-  return { root, taskDir: null, workspacePath: null, task, baseCommit };
+  return { root, taskDir: null, workspacePath: null, task, baseCommit, architecturePath };
 }
 
 async function createDetachedWorktree(fixture, prefix = 'deliver-task-provided-') {
@@ -569,6 +575,98 @@ test('start 在 mutation 前拒绝非法 repo、stdin、exact schema 和非完�
   assert.equal(result.status, 2);
   assert.match(result.stderr, /repository directory missing/i);
   await assert.rejects(access(path.join(fixture.root, '.dev-task')));
+});
+
+test('start 只接受记录已确认 Architecture 绝对路径的 task.v2', async () => {
+  const cases = [
+    {
+      task: (task) => Object.fromEntries(
+        Object.entries(task).filter(([key]) => key !== 'architecturePath'),
+      ),
+      pattern: /task\.json missing fields: architecturePath/i,
+    },
+    {
+      task: (task) => ({ ...task, architecturePath: 'specs/reception/ARCHITECTURE.md' }),
+      pattern: /task\.architecturePath.*absolute/i,
+    },
+    {
+      task: (task) => ({ ...task, architecturePath: path.join(path.dirname(task.architecturePath), 'design.md') }),
+      pattern: /task\.architecturePath.*ARCHITECTURE\.md/i,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const fixture = await createFixture();
+    const result = runStart(fixture, { task: testCase.task(fixture.task) });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, testCase.pattern);
+    await assert.rejects(access(path.join(fixture.root, '.dev-task')));
+  }
+
+  const fixture = await createFixture();
+  const legacyTask = { ...fixture.task, schemaVersion: 'deliver-task.task.v1' };
+  delete legacyTask.architecturePath;
+  const legacyResult = runStart(fixture, { task: legacyTask });
+  assert.equal(legacyResult.status, 1, legacyResult.stderr);
+  assert.match(legacyResult.stderr, /start requires deliver-task\.task\.v2.*architecturePath/i);
+  await assert.rejects(access(path.join(fixture.root, '.dev-task')));
+});
+
+test('Architecture Preflight 在 start mutation 前拒绝缺失、无确认单元或存在 [ ] 的文件', async () => {
+  const cases = [
+    {
+      architectureContent: '- [ ] Reception ownership 调整。\n',
+      pattern: /Architecture.*unchecked.*\[ \]/i,
+    },
+    {
+      architectureContent: '# Architecture\n\n尚未记录确认单元。\n',
+      pattern: /Architecture.*confirmed.*\[x\]/i,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const fixture = await createFixture(testCase);
+    const beforeWorktrees = git(fixture.root, ['worktree', 'list', '--porcelain']);
+    const beforeBranches = git(fixture.root, ['for-each-ref', '--format=%(refname)', 'refs/heads']);
+    const result = runStart(fixture);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, testCase.pattern);
+    assert.equal(git(fixture.root, ['worktree', 'list', '--porcelain']), beforeWorktrees);
+    assert.equal(git(fixture.root, ['for-each-ref', '--format=%(refname)', 'refs/heads']), beforeBranches);
+    await assert.rejects(access(path.join(fixture.root, '.dev-task')));
+  }
+
+  const fixture = await createFixture();
+  await unlink(fixture.architecturePath);
+  const result = runStart(fixture);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /Architecture.*missing or unreadable/i);
+  await assert.rejects(access(path.join(fixture.root, '.dev-task')));
+});
+
+test('Architecture Preflight 只把 Markdown checklist 行识别为确认单元', async () => {
+  const fixture = await createFixture({
+    architectureContent: '说明：`[ ]` 表示待确认，`[x]` 表示已确认。\n\n- [x] Page 是唯一 React subscriber。\n',
+  });
+
+  const result = runStart(fixture);
+
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('Architecture 在执行中重新出现 [ ] 时停止后续 deliver-task 命令', async () => {
+  const fixture = await createFixture();
+  await initTask(fixture);
+  await writeExecution(fixture);
+  await writeFile(
+    fixture.architecturePath,
+    '- [x] Controller snapshot 是核心运行状态唯一可写真源。\n- [ ] Reception ownership 调整。\n',
+  );
+
+  const result = run(fixture.workspacePath, ['validate-execution', fixture.taskDir]);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /Architecture.*unchecked.*\[ \]/i);
 });
 
 test('provided workspace 首次绑定要求同仓、干净且位于 baseCommit', async () => {
