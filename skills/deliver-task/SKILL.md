@@ -86,18 +86,26 @@ workspace 已含旧 identity 时拒绝覆盖。任何 caller 状态变化都由 
    只校验字段、路径与显式 `[ ]` / `[x]`，不证明确认真实性或 Architecture 语义正确。
 3. 只在已绑定的 task workspace 中读取必要代码上下文、Git 状态和适用项目 rules；非 null
    Architecture 是唯一显式外部只读输入。caller workspace 的 HEAD、dirty 和同名文件都不是本任务上下文。
-4. 区分实现步骤与独立工作单元：
+4. `architecturePath` 非 null 时，controller 在业务 writer 启动前比较当前 `task.json` 的
+   `objective / acceptanceCriteria / constraints / nonGoals / forbiddenPaths` 与适用 Architecture 的
+   `[x]` 决定能否同时满足；只读取判断当前 Task 所需的代码事实。明确不能同时满足时，在
+   `audits.md` 引用冲突的精确 Task 条款与精确 `[x]` 决定（或已确认图中的关系），停止 preflight，
+   不生成 brief、不派 implementer，也不自行决定哪个 authority 覆盖另一个。由人决定按
+   `needs-upstream / contract-change` 修改 Task / upstream，或路由 `$architecture-steward` 重新打开
+   Architecture；冲突闭合后 fresh 重做本次 preflight。该检查不扫描其它 Spec / Ticket，不做文档
+   同步或影响分析。`architecturePath == null` 时不补做 Architecture 搜索或比较。
+5. 区分实现步骤与独立工作单元：
    - 多个步骤共同完成同一验收结果，可在任务内部安排；
    - 任一部分可独立验收、独立发布或失败后不阻塞另一部分，返回 `needs-reslice`。
-5. 检查是否需要改变 immutable task contract；需要时返回 `needs-upstream`。用户未提供文件清单本身不是回流条件。
-6. 在同一 preflight A 中记录允许/禁止路径、非目标、停止条件、规则读取和判断依据。
-7. 根据上述真实上下文创建包含必填 `architecturePath` 的当前 `execution.json`，运行：
+6. 检查是否需要改变 immutable task contract；需要时返回 `needs-upstream`。用户未提供文件清单本身不是回流条件。
+7. 在同一 preflight A 中记录允许/禁止路径、非目标、停止条件、规则读取和判断依据。
+8. 根据上述真实上下文创建包含必填 `architecturePath` 的当前 `execution.json`，运行：
 
 ```bash
 node <deliver-task-skill-dir>/scripts/deliver-task.mjs validate-execution <taskDir>
 ```
 
-8. 在 `claims.json` 写当前任务要证明的 claims；不得提前声明验证、General Review、rules-review 或 close-check 已通过。
+9. 在 `claims.json` 写当前任务要证明的 claims；不得提前声明验证、General Review、rules-review 或 close-check 已通过。
 
 同一授权目标内需要调整执行路径或 Architecture binding 时，先取得适用的人类决定并追加审计依据，
 再原地更新 `execution.json`；`null → path`、`path A → path B` 和 `path → null` 只改变 execution hash，

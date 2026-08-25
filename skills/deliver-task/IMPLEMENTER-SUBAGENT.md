@@ -25,6 +25,9 @@ task-brief.md`。controller 同时提供
 
 ## 开始前
 
+controller 只应在 Task ↔ Architecture compatibility preflight 已通过后派发；以下重读与 blocked 是
+writer 侧 fail-safe，不能替代或后移该 controller 检查。
+
 确认 task identity、execution identity、目标、验收、非目标、允许/禁止路径、selected rules、claims、本轮修复依据及 `architecturePath` 的显式 path / null 终态一致。path 分支直接读完 Architecture，确认至少有一个 `[x]` 且没有任何 `[ ]`，并在写代码前建立本 Task 相关的 owner、状态真源、模块边界、public boundary 与依赖方向 mental model；null 分支不发现或补造 Architecture。brief 与 `task.json` / `execution.json` / 适用 Architecture 冲突，或本轮执行说明遗漏适用义务时，在修改业务文件前 blocked 回 controller。仅 brief 投影错误时由 controller 在同一 task identity 下修正；若可见上游 authority 表明 `task.json` 本身已弱化，则停止并要求 controller 走 contract revision。局部事实可 focused 只读查证；合同或授权缺口不能自行补。
 
 path 分支的 Architecture 不可读、出现 `[ ]`，或任一分支在完成当前 Task 时必须新增/修改架构决定，

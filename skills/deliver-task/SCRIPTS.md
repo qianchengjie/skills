@@ -117,7 +117,7 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
 - non-delivered request 的 kind、非空 evidence refs 及存在性；
 - delivery 没有内嵌完整证据。
 
-机器明确不检查：人是否真实确认过 `execution.architecturePath` 的 path / null 决定、Architecture 内容是否正确/完整/属于架构域、checkbox 的人工确认是否真实，provided workspace 是否真实独占、目标是否正确、验收是否充分、targeted / affected
+机器明确不检查：人是否真实确认过 `execution.architecturePath` 的 path / null 决定、Architecture 内容是否正确/完整/属于架构域、checkbox 的人工确认是否真实、当前 Task 与适用 Architecture 是否能同时满足，provided workspace 是否真实独占、目标是否正确、验收是否充分、targeted / affected
 validation 是否足以覆盖实际 repair delta、影响面是否可可靠限定、scoped reviewer 是否应返回
 `clean / findings / cannot-bound`、Full 升级是否语义上必要、review finding 是否正确、rules 是否适用、
 回流理由是否正确、证据强度或用户确认真实性。这些由运行环境保证，或由 controller/reviewer 裁决并

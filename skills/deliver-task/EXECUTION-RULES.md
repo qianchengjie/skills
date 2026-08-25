@@ -40,13 +40,25 @@ deliver-task 命令或业务修改都停止。同一路径 Architecture 内容�
 先取得并记录人对本次 execution 的 Architecture path / null 决定；没有明确决定时不建立 execution
 boundary。非 null 时重读该 Architecture，确认可读、至少一个 `[x]` 且不存在 `[ ]`；未闭合时只路由
 `$architecture-steward`。随后在 task workspace 中读取项目入口、直接消费者、相关测试、适用 AGENTS/rules 和该 workspace
-的 Git 状态。在 `audits.md` 明确：
+的 Git 状态。
+
+`architecturePath` 非 null 时，controller 必须在闭合 preflight、生成 brief 或派业务 writer 前，
+比较当前 `task.json` 的 `objective / acceptanceCriteria / constraints / nonGoals / forbiddenPaths` 与适用
+Architecture 的 `[x]` 决定是否至少存在一种可同时满足的实现；只补充判断当前 Task 所需的代码事实。
+这是窄的 compatibility check，不扫描其它 Spec / Ticket，不做文档同步或影响分析。明确不能同时满足
+时，在 `audits.md` 引用冲突的精确 Task 条款与精确 `[x]` 决定（或已确认图中的关系），立即停止；
+不得先生成 brief、派 implementer 试做，或自行裁定某个 authority 优先。由人决定按
+`needs-upstream / contract-change` 修改 Task / upstream，或路由 `$architecture-steward` 重新打开
+Architecture；冲突闭合后 fresh 重做 preflight。null 分支不搜索 Architecture，也不补做该比较。
+
+在 `audits.md` 明确：
 
 - 需要理解与已读上下文；
 - deliver-task 拟定的允许修改、执行禁止范围、task 用户禁止范围、非目标、停止条件；
 - active rule catalog、execution-time selected / not-applicable 分类及理由；
 - 人明确确认的 `architecturePath` path / null 决定；非 null 时记录已直接读取及当前无 `[ ]` 事实，
   不复制 Architecture 正文；
+- path 分支的 Task ↔ Architecture compatibility 结论及判断依据；
 - `commitPolicy`、`acceptancePolicy`、baseCommit 和 caller；
 - 当前内容是一个交付单元，或应回流的证据。
 
@@ -68,6 +80,9 @@ controller 在 `artifacts/task-brief.md` 只收束当前 task/execution identity
 upstream authority 表明 `task.json` 已被弱化，则停止当前执行，按 `needs-upstream / contract-change`
 回流。Architecture 未闭合或当前 Task 必须改变 Architecture 时，不修改业务文件，只路由
 `$architecture-steward`；人确认后在同一 task/worktree 更新并重新校验 execution。
+
+Implementer 的上述读取与 blocked 能力只是 writer 侧 fail-safe，不能替代 controller preflight 的
+compatibility check，也不能作为“先派发、再判断”的理由。
 
 需要新增业务取舍或返修约束时，先写回现有 task / execution / claims / audits 中职责相符的真源并重新生成 brief。`followup_task.message` 只携带 task directory 定位、Task / execution / brief、适用 Architecture 的路径和本轮 task-owned evidence 引用，不携带目标、约束、实现取舍或第二份返修说明。
 
