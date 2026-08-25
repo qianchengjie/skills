@@ -26,8 +26,9 @@ evidence。不得在执行中自动 refresh base、同步文件、rebase、merge
 读取“更新版本”。upstream 明确要求吸收新基线时，按 immutable task contract change 回流，
 不能偷偷更新当前任务。
 
-`start` 只建立 task workspace 与 task proof bootstrap；它成功不表示任务已可执行。Architecture 决定
-未闭合时，不得形成有效 execution、派 implementer、生成 target 或进入实现闭环。
+`start` 只建立 task workspace 与 task proof bootstrap；它成功不表示 task workspace 已可执行。
+Architecture 决定或 task workspace 可执行结论任一未闭合时，不得形成可派发执行上下文、派
+implementer、生成 target 或进入实现闭环。
 
 `execution.architecturePath` 非 null 时是上述 caller workspace 隔离的唯一显式只读例外。后续各阶段
 读取该路径的当前内容，而不从 task worktree 的同名副本重建。语义变更必须由
@@ -59,6 +60,7 @@ Architecture；冲突闭合后 fresh 重做 preflight。null 分支不搜索 Arc
 - 人明确确认的 `architecturePath` path / null 决定；非 null 时记录已直接读取及当前无 `[ ]` 事实，
   不复制 Architecture 正文；
 - path 分支的 Task ↔ Architecture compatibility 结论及判断依据；
+- 当前 task workspace 能执行本任务所需实现与验证命令的明确结论、task-owned evidence 和未闭合项；
 - `commitPolicy`、`acceptancePolicy`、baseCommit 和 caller；
 - 当前内容是一个交付单元，或应回流的证据。
 
@@ -66,11 +68,18 @@ Architecture；冲突闭合后 fresh 重做 preflight。null 分支不搜索 Arc
 
 preflight 依据写入 `audits.md` 后，由 controller 创建当前 `execution.json`；caller 和 implementer 都不填写。用户没有提供文件清单时，controller 仍应根据真实代码、直接消费者、相邻测试和项目规则建立最小完整 allowlist。`execution.evidenceRefs` 引用本次判断依据，并运行 `validate-execution` 后才生成 brief。
 
+task workspace 可执行是 implementer 开始前独立于 `start`、Architecture closure 和
+`validate-execution` 的显式前置条件。只有 controller 已在 preflight A 中形成明确结论并记录
+task-owned evidence，才可把 brief 变为可派发输入；缺少结论、证据或仍有未闭合项时，停在
+controller，不派 implementer，也不允许测试或生产代码写入。`start` 成功、workspace clean、
+`validate-execution` 通过、源码或 lockfile 存在、时间压力都不能替代该结论。本规则只定义前置门禁，
+暂不规定 setup/readiness 的发现、执行、判断或恢复机制，也不引入新 schema、状态文件或脚本命令。
+
 controller 同时直接阅读 `task.json` 的完整语义，判断它是否以强制复制、移植或等价方式把具名实现指定为 authoritative source。该判断属于合同解释，由 controller 结合目标、验收、约束和代码上下文负责；不得用 `must / copy / reuse` 等关键词扫描器代替。没有命中时继续普通单次派发，不能要求普通任务携带 mapping、snapshot 或 authorization。
 
 ## 实现派发
 
-controller 在 `artifacts/task-brief.md` 只收束当前 task/execution identity、preflight、已解析路径、claims、验证、selected rules、本轮修复依据与 task-owned evidence 引用，并引用 authoritative `task.json` 与 `execution.json`；不复制 Architecture 正文，不把目标、验收或约束重新摘要成可独立执行的合同副本。随后创建默认 blocked 的 task report，再派发 implementer。
+controller 在 `artifacts/task-brief.md` 只收束当前 task/execution identity、preflight、已解析路径、claims、验证、selected rules、本轮修复依据、task workspace 可执行结论与 task-owned evidence 引用，并引用 authoritative `task.json` 与 `execution.json`；不复制 Architecture 正文，不把目标、验收或约束重新摘要成可独立执行的合同副本。只有该结论已明确闭合并可由 brief 定位证据时，才创建默认 blocked 的 task report 并派发 implementer。
 
 每次 fresh 或 follow-up 派发都提供绝对 `taskDir` 与 `workspacePath`，要求 implementer 重新读取当前
 `task.json`、`execution.json` 和 `artifacts/task-brief.md`；只有 `execution.architecturePath != null`

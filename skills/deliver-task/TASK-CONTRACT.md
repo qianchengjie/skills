@@ -244,7 +244,7 @@ task identity。旧 task identity 下的证据不会自动证明新合同；cont
 
 按 `### A<正整数>：<标题>` 追加审计。每个条目记录当前 task identity、execution/target、公开结论、证据位置和未闭合项。至少分别记录：
 
-- 上下文预检与项目 rules；
+- 上下文预检、项目 rules 与 task workspace 可执行结论；
 - 验证命令及公开结果；
 - 首次 General / Rules Full 的输入 identity、findings 和 verdict；
 - 每轮 actual repair delta、targeted / affected validation、双域 scoped 结果、必要的单域 Full 升级和合并 Review Wave；
@@ -419,9 +419,10 @@ Review Wave 不改变 `delivery.json` schema。最终 clean wave A 直接绑定�
 这些文件是当前运行定位或可重建的注意力收束视图，不进入 `delivery.json`：
 
 - `workspace.json`：当前 task workspace 的本地 locator；它是 live `.dev-task/` 证明闭包的一部分，
-  丢失时 fail closed，不按 task branch 补写；
+  丢失时 fail closed，不按 task branch 补写；locator 不证明 task workspace 已可执行；
 - `task-brief.md`：引用 authoritative `task.json` 与 `execution.json` 的派生执行视图；只保存 task/execution identity、
-  preflight、已解析路径、claims、验证、selected rules、修复依据和本轮 task-owned evidence 引用
+  preflight、已解析路径、claims、验证、selected rules、task workspace 可执行结论、修复依据和本轮
+  task-owned evidence 引用
   （条件分支下包括 authorization ref），不复制 Architecture 正文，也不把目标、验收或约束转述成可独立覆盖合同的副本；
 - `task-report.json`：implementer 的 changed files、验证 handoff、blocked 原因；
 - `target.json`：`snapshot-target` 输出；
