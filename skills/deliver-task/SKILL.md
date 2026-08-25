@@ -10,7 +10,7 @@ disable-model-invocation: true
 
 在 task-scoped isolated workspace 中完成一个任务，返回一个交付结果；不接管 caller 的生命周期，也不负责把结果集成回 caller workspace。
 
-- 输入是一个目标、验收、约束和用户禁止范围已明确的开发任务；调用策略由 upstream 显式值或适用的 direct defaults 确定。`task.json` 是 deliver-task 内的 authoritative execution contract，不是 upstream authority 的授权证明；其中承载 authority 的文本必须按 [TASK-CONTRACT.md](TASK-CONTRACT.md) 从可见 upstream authority 机械摘录。`architecturePath` 只指向人已确认的 Architecture Authority，不复制其内容。implementer 必须直接读取 Task 和 Architecture，派生 brief 不能覆盖或弱化它们；具体执行路径由本 skill 读取真实上下文后确定。
+- 输入是一个目标、验收、约束和用户禁止范围已明确的开发任务；调用策略由 upstream 显式值或适用的 direct defaults 确定。`task.json` 是 deliver-task 内的 authoritative Task contract，不是 upstream authority 的授权证明；其中承载 authority 的文本必须按 [TASK-CONTRACT.md](TASK-CONTRACT.md) 从可见 upstream authority 机械摘录。`execution.json.architecturePath` 是本次实现与后续 Architecture Review 共用的 Architecture Authority binding；implementer 按其 path / null 终态消费适用输入，派生 brief 不能覆盖或弱化 Task、Execution 或适用 Architecture。
 - 输出只是一份 `delivered / needs-upstream / needs-reslice / blocked` 单任务结果。
 - task workspace 内的 `.dev-task/` 保存合同、证据和本地执行定位；业务代码与证明状态共享同一个 isolated workspace 生命周期。不写 caller 的 plan、任务编排状态或最终 closure。
 - 可以自行安排任务内部的实现步骤；不创建或管理正式多任务计划。
@@ -20,18 +20,6 @@ disable-model-invocation: true
 ## 输入与目录
 
 使用 [TASK-CONTRACT.md](TASK-CONTRACT.md) 的 exact task contract 作为 stdin 调用契约。
-
-### Architecture Preflight
-
-构造 task contract 和调用 `start` 前，必须先完成一次人工 Architecture 路径确认：
-
-1. 已明确当前需求 Spec 时，只把 `<Spec 所在目录>/ARCHITECTURE.md` 作为默认候选；不根据代码目录、changed files 或仓库扫描猜测。
-2. 候选存在时展示规范化绝对路径：`本次 Task 使用：<path>/ARCHITECTURE.md`。候选不存在或没有可见 Spec 目录时，请人指定路径。
-3. 只有人明确确认展示的路径后才继续。“默认位置找到文件”、以前用过或时间紧迫都不是确认。direct 调用向用户确认；delegated caller 必须携带它已从人取得的明确路径确认，缺失时只回该 caller。
-4. 直接读取已确认文件。任何 `[ ]` 都表示 Architecture Delta 未闭合；没有任何 `[x]` 也不是有效 Authority。两种情况都不调用 `start`、不派 implementer，只展示当前 `[ ]` 并路由 `$architecture-steward`。
-5. 全部闭合后，只把已确认的绝对路径写入 `task.json.architecturePath`；不复制 Architecture 正文，不记录 version、revision、hash 或 item ID。
-
-路径确认是人的语义判断；脚本只能检查 exact path 形状、文件可读与显式 `[ ]` / `[x]` 终态，不证明人真实确认过路径或架构语义正确。
 
 - 直接调用：按合同的 source-fidelity 规则，把用户原始 authority 机械摘录成结构化合同，`caller` 固定为 `{ "kind": "direct" }`。用户明确提出的提交与验收要求先归一化为对应 policy；某个 policy 已被提及但因要求冲突或把选择留给模型而无法唯一归一化时，不视为缺失且不得使用默认值，必须向用户澄清，在得到唯一值前不构造可启动合同、不调用 `start`；任一 policy 没有明确要求时分别固定使用 `commitPolicy=required`、`acceptancePolicy=not-required`，不为缺失值询问用户，也不根据任务内容、仓库状态或模型判断选择其它值。
 - 上游委托：caller 对其实际收到的 upstream authority 负责，只传递按同一规则机械摘录的 immutable task contract，使用通用
@@ -74,6 +62,10 @@ worktree。`.worktrees/` 必须已被 Git ignore；脚本不修改 ignore 配置
 其中 `taskDir == <workspacePath>/.dev-task`，`workspacePath` 是后续 preflight、实现、验证、提交、
 review 和收口的唯一业务工作目录。不得继续从 caller workspace 读取业务代码。
 
+`start` 成功只表示 task workspace 与 task proof bootstrap 已建立，不表示任务已经可执行。Architecture
+决定未闭合时，不得形成有效 `execution.json`、派 implementer、生成 target 或进入实现、验证、review、
+delivery 闭环。
+
 exact identity 且 `.dev-task/` 完整时 `start` 幂等返回，不重写证据。同 revision 合同漂移，或
 已有 task branch/worktree 但 `.dev-task/` 缺失、不完整时 fail closed；不得根据 commits、branch、
 聊天摘要或重建 locator 推断历史证明。higher revision 默认建立新的 branch/worktree；provided
@@ -83,21 +75,34 @@ workspace 已含旧 identity 时拒绝覆盖。任何 caller 状态变化都由 
 
 按以下顺序做一次公开、可审计的判断：
 
-1. 重读 `task.architecturePath` 指向的当前 Architecture；路径不可读、没有 `[x]` 或又出现 `[ ]` 时停止，路由 `$architecture-steward`。随后只在已绑定的 task workspace 中读取必要代码上下文、Git 状态和适用项目 rules；除已确认 Architecture 这个显式只读输入外，caller workspace 的 HEAD、dirty 和同名文件都不是本任务上下文。
-2. 区分实现步骤与独立工作单元：
+1. 先取得人对本次 execution 的 Architecture 决定。已明确当前需求 Spec 时，只把
+   `<Spec 所在目录>/ARCHITECTURE.md` 作为候选，不根据代码目录、changed files 或仓库扫描猜测：
+   - 选择 path：展示规范化绝对路径并取得“本次执行使用该文件”的明确确认，再直接读取文件；任何
+     `[ ]` 或没有有效 `[x]` 都停止并路由 `$architecture-steward`；
+   - 选择 null：人必须明确确认本次执行不需要 Architecture Authority；默认文件不存在、以前未使用或
+     时间紧迫都不能自动推出 null。
+   direct 调用向用户确认；delegated caller 必须携带已取得的人类决定，缺失时只回该 caller。
+2. 在 `audits.md` 记录 path / null 决定、来源与当前 checkbox 终态。路径确认是人的语义判断；脚本
+   只校验字段、路径与显式 `[ ]` / `[x]`，不证明确认真实性或 Architecture 语义正确。
+3. 只在已绑定的 task workspace 中读取必要代码上下文、Git 状态和适用项目 rules；非 null
+   Architecture 是唯一显式外部只读输入。caller workspace 的 HEAD、dirty 和同名文件都不是本任务上下文。
+4. 区分实现步骤与独立工作单元：
    - 多个步骤共同完成同一验收结果，可在任务内部安排；
    - 任一部分可独立验收、独立发布或失败后不阻塞另一部分，返回 `needs-reslice`。
-3. 检查是否需要改变 immutable task contract；需要时返回 `needs-upstream`。用户未提供文件清单本身不是回流条件。
-4. 在 `audits.md` 记录上下文预检、允许/禁止路径、非目标、停止条件、规则读取和判断依据。
-5. 根据上述真实上下文创建当前 `execution.json`，运行：
+5. 检查是否需要改变 immutable task contract；需要时返回 `needs-upstream`。用户未提供文件清单本身不是回流条件。
+6. 在同一 preflight A 中记录允许/禁止路径、非目标、停止条件、规则读取和判断依据。
+7. 根据上述真实上下文创建包含必填 `architecturePath` 的当前 `execution.json`，运行：
 
 ```bash
 node <deliver-task-skill-dir>/scripts/deliver-task.mjs validate-execution <taskDir>
 ```
 
-6. 在 `claims.json` 写当前任务要证明的 claims；不得提前声明验证、General Review、rules-review 或 close-check 已通过。
+8. 在 `claims.json` 写当前任务要证明的 claims；不得提前声明验证、General Review、rules-review 或 close-check 已通过。
 
-同一授权目标内需要调整执行路径时，先追加审计依据，再原地更新 `execution.json`；不递增 task revision/hash。若调整命中 `task.forbiddenPaths` 或要求改变 immutable task contract，才回流 upstream。
+同一授权目标内需要调整执行路径或 Architecture binding 时，先取得适用的人类决定并追加审计依据，
+再原地更新 `execution.json`；`null → path`、`path A → path B` 和 `path → null` 只改变 execution hash，
+不递增 task revision/hash，也不新建 task/worktree。若调整命中 `task.forbiddenPaths` 或要求改变
+immutable task contract，才回流 upstream。
 
 不要把 `needs-reslice` 变成新的 `plan.md`，也不要在 `.dev-task/` 内新建 slice、ticket、里程碑或任务状态机。
 
@@ -129,7 +134,7 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
 
 完整执行规则见 [EXECUTION-RULES.md](EXECUTION-RULES.md)。固定顺序是：
 
-1. 生成引用 `task.json` 的派生 `artifacts/task-brief.md` 和默认 blocked 的 `artifacts/task-report.json`；每次 implementer 派发都要求重读 `task.json`、`task.architecturePath` 指向的 Architecture、`execution.json` 与 brief。
+1. 生成引用 `task.json` 与 `execution.json` 的派生 `artifacts/task-brief.md` 和默认 blocked 的 `artifacts/task-report.json`；每次 implementer 派发都要求重读 Task、Execution 与 brief，且仅在 `execution.architecturePath != null` 时读取其指向的 Architecture。
 2. controller 根据 `task.json` 语义判断是否命中具名源码的强制复制/移植要求。普通任务按 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 单次派发 fresh implementer；命中时先做 baseline-only Dispatch A 并停止，controller 对 live baseline 独立复验并在 `audits.md` 记录 accepted baseline A，再追加绑定它的 adaptation authorization A，最后才派发明确引用该 authorization 的 Dispatch B。task workspace 同时只允许一个业务文件 writer。
 3. 接收后按当前 `execution.json` 及 task/execution 两层 forbidden paths 核对实际 diff、task report 和 claims，运行任务验证；source-authoritative 分支的实现接收与验证证据继续引用 Dispatch B 的 authorization。
 4. 按 `commitPolicy` 固定 commit range、worktree snapshot 或 no-change target。
@@ -140,7 +145,7 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
 9. Review closure clean 后按 `acceptancePolicy` 处理 upstream acceptance；`required` 且当前 target 没有 `passed / skipped` A 条目时返回 `needs-upstream / user-acceptance`。`not-required` 只取消 upstream acceptance gate，不削弱 `acceptanceCriteria`、任务 validation、General 或适用的 Rules closure。验收结果留在 `audits.md`，不改变 task identity。
 10. 把事实证据分别写入 `claims.json`、`audits.md`、review 工件和 rules-review run；最后只在 `delivery.json` 写引用。运行 `validate-result`；仅 `delivered` 再运行 `close-check`。
 
-任何实现、验证或 Task Review 环节如果发现完成当前 Task 必须新增或改变 Architecture，立即停止业务 writer；不以临时实现、repair finding 或扩大 allowlist 绕过。只把具体缺口或候选 Delta 路由 `$architecture-steward`，等待人确认且文件重新全部为 `[x]` 后，fresh 重读 Task + Architecture + Rules + Codebase 再继续。Architecture 正文变化不进入 task hash；人改为另一个 Architecture 路径时才按 immutable task contract change 处理。Task Review 仍只审查当前 Task correctness，不在 deliver-task 内新增宽视角 Architecture Review。
+任何实现、验证或 Task Review 环节如果发现完成当前 Task 必须新增或改变 Architecture，立即停止业务 writer；不以临时实现、repair finding 或扩大 allowlist 绕过。只把具体缺口或候选 Delta 路由 `$architecture-steward`，等待人确认后更新适用 binding、重新校验 execution，并 fresh 重读 Task + Execution + applicable Architecture + Rules + Codebase 再继续。binding 变化只使 execution/target/review stale；同路径 Architecture 正文变化不进入 task 或 execution hash。Task Review 仍只审查当前 Task correctness，不在 deliver-task 内新增宽视角 Architecture Review。
 
 ## Review Wave 与有限返修
 

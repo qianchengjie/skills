@@ -2,14 +2,14 @@
 
 ## Workspace 建立
 
-caller 或 direct controller 先完成 [SKILL.md](SKILL.md) 的 Architecture Preflight，再形成包含已确认 `architecturePath` 的结构化 immutable task contract，不在 caller workspace
+caller 或 direct controller 先形成结构化 immutable task contract，不在 caller workspace
 落盘状态。在读取任何业务代码、项目规则或执行 preflight 之前，依次选择 caller 已提供的
 isolated workspace、满足 base/clean/task-owned 条件的当前 harness linked worktree、harness
 原生 workspace；命中后把路径作为 `--workspace` 显式绑定。三者都不适用时才使用默认模式。
 
 无论 workspace 来源如何，都把合同通过 stdin 交给唯一
 `start <repo> - [--workspace <workspacePath>]` bootstrap，不调用其它入口。`start` 先校验 exact
-schema、完整 `baseCommit`、Architecture 绝对路径与显式 checkbox 闭合、repo 和 provided workspace，再原子初始化
+schema、完整 `baseCommit`、repo 和 provided workspace，再原子初始化
 `<task-worktree>/.dev-task/`。只有命令返回的 `workspacePath` 是本任务的业务执行根目录，返回的
 `taskDir` 是后续证明状态入口。不得绕过可用的 harness 原生机制；没有可绑定的宿主 workspace
 时，默认模式才从 base 在 `<repo>/.worktrees/` 下创建 worktree。创建前要求 `.worktrees/` 已被
@@ -26,17 +26,27 @@ evidence。不得在执行中自动 refresh base、同步文件、rebase、merge
 读取“更新版本”。upstream 明确要求吸收新基线时，按 immutable task contract change 回流，
 不能偷偷更新当前任务。
 
-`task.architecturePath` 是上述 caller workspace 隔离的唯一显式只读例外：路径已在 `start` 前由人确认，后续各阶段都读取该路径的当前内容，而不从 task worktree 的同名副本重建。语义变更必须由 `$architecture-steward` 把对应单元重新变为 `[ ]`；在人确认恢复全部 `[x]` 之前，任何后续 deliver-task 命令或业务修改都停止。Architecture 内容不进入 task/execution hash，不得为它新建 revision、hash 或快照机制。
+`start` 只建立 task workspace 与 task proof bootstrap；它成功不表示任务已可执行。Architecture 决定
+未闭合时，不得形成有效 execution、派 implementer、生成 target 或进入实现闭环。
+
+`execution.architecturePath` 非 null 时是上述 caller workspace 隔离的唯一显式只读例外。后续各阶段
+读取该路径的当前内容，而不从 task worktree 的同名副本重建。语义变更必须由
+`$architecture-steward` 把对应单元重新变为 `[ ]`；在人确认恢复全部 `[x]` 之前，任何后续
+deliver-task 命令或业务修改都停止。同一路径 Architecture 内容不进入 task/execution hash，不得为它
+新建 revision、hash 或快照机制。
 
 ## 上下文预检
 
-先重读 `task.architecturePath` 指向的 Architecture，确认可读、至少一个 `[x]` 且不存在 `[ ]`；未闭合时只路由 `$architecture-steward`，不建立 execution boundary。随后在 task workspace 中读取项目入口、直接消费者、相关测试、适用 AGENTS/rules 和该 workspace
+先取得并记录人对本次 execution 的 Architecture path / null 决定；没有明确决定时不建立 execution
+boundary。非 null 时重读该 Architecture，确认可读、至少一个 `[x]` 且不存在 `[ ]`；未闭合时只路由
+`$architecture-steward`。随后在 task workspace 中读取项目入口、直接消费者、相关测试、适用 AGENTS/rules 和该 workspace
 的 Git 状态。在 `audits.md` 明确：
 
 - 需要理解与已读上下文；
 - deliver-task 拟定的允许修改、执行禁止范围、task 用户禁止范围、非目标、停止条件；
 - active rule catalog、execution-time selected / not-applicable 分类及理由；
-- 已直接读取的 `architecturePath` 与当前无 `[ ]` 事实，不复制 Architecture 正文；
+- 人明确确认的 `architecturePath` path / null 决定；非 null 时记录已直接读取及当前无 `[ ]` 事实，
+  不复制 Architecture 正文；
 - `commitPolicy`、`acceptancePolicy`、baseCommit 和 caller；
 - 当前内容是一个交付单元，或应回流的证据。
 
@@ -48,11 +58,18 @@ controller 同时直接阅读 `task.json` 的完整语义，判断它是否以�
 
 ## 实现派发
 
-controller 在 `artifacts/task-brief.md` 只收束当前 task/execution identity、preflight、已解析路径、claims、验证、selected rules、本轮修复依据与 task-owned evidence 引用，并引用 authoritative `task.json`；不复制 Architecture 正文，不把目标、验收或约束重新摘要成可独立执行的合同副本。随后创建默认 blocked 的 task report，再派发 implementer。
+controller 在 `artifacts/task-brief.md` 只收束当前 task/execution identity、preflight、已解析路径、claims、验证、selected rules、本轮修复依据与 task-owned evidence 引用，并引用 authoritative `task.json` 与 `execution.json`；不复制 Architecture 正文，不把目标、验收或约束重新摘要成可独立执行的合同副本。随后创建默认 blocked 的 task report，再派发 implementer。
 
-每次 fresh 或 follow-up 派发都提供绝对 `taskDir` 与 `workspacePath`，要求 implementer 重新读取当前 `task.json`、`task.architecturePath` 指向的 Architecture、`execution.json` 和 `artifacts/task-brief.md`。优先级固定为 `task.json + Architecture > task-brief.md`；brief 冲突或本轮说明会遗漏合同/架构义务时，implementer 必须在修改业务文件前 blocked 回 controller。仅 brief 投影错误时，controller 在同一 task identity 下修正并重新派发；若可见上游 authority 表明 `task.json` 已被弱化，则停止当前执行，按 `needs-upstream / contract-change` 回流，不能把它伪装成 brief 修复。Architecture 未闭合或当前 Task 必须改变 Architecture 时，不修改业务文件，只路由 `$architecture-steward`。
+每次 fresh 或 follow-up 派发都提供绝对 `taskDir` 与 `workspacePath`，要求 implementer 重新读取当前
+`task.json`、`execution.json` 和 `artifacts/task-brief.md`；只有 `execution.architecturePath != null`
+时才读取其指向的 Architecture。优先级固定为 `task.json + execution.json + applicable Architecture
+> task-brief.md`；brief 冲突或本轮说明遗漏适用义务时，implementer 必须在修改业务文件前 blocked
+回 controller。仅 brief 投影错误时，controller 在同一 task identity 下修正并重新派发；若可见
+upstream authority 表明 `task.json` 已被弱化，则停止当前执行，按 `needs-upstream / contract-change`
+回流。Architecture 未闭合或当前 Task 必须改变 Architecture 时，不修改业务文件，只路由
+`$architecture-steward`；人确认后在同一 task/worktree 更新并重新校验 execution。
 
-需要新增业务取舍或返修约束时，先写回现有 task / execution / claims / audits 中职责相符的真源并重新生成 brief。`followup_task.message` 只携带 task directory 定位、Task / Architecture / execution / brief 四个必读输入的路径和本轮 task-owned evidence 引用，不携带目标、约束、实现取舍或第二份返修说明。
+需要新增业务取舍或返修约束时，先写回现有 task / execution / claims / audits 中职责相符的真源并重新生成 brief。`followup_task.message` 只携带 task directory 定位、Task / execution / brief、适用 Architecture 的路径和本轮 task-owned evidence 引用，不携带目标、约束、实现取舍或第二份返修说明。
 
 ### Source-authoritative 条件分支
 
@@ -62,7 +79,7 @@ controller 在 `artifacts/task-brief.md` 只收束当前 task/execution identity
 2. Dispatch A 只建立 source-equivalent baseline，完成即停止；不得 adaptation，也不得把 task report 标为 `ready-for-review`。controller 等唯一业务 writer 停止后，才独立复验 live source、destination、mapping 与 baseline snapshot。
 3. controller 在 `audits.md` 追加 baseline A，记录当前 task/execution identity、固定 source identity、mapping、baseline snapshot identity、复验事实与 `accepted / cannot-verify`。implementer 的报告或“曾经比较一致”自述不能替代 live 复验。
 4. 只有 baseline A 为 `accepted` 且 live snapshot 仍匹配时，controller 才另行追加 adaptation authorization A，绑定当前 task/execution、baseline A 及其 snapshot，并明确允许 Dispatch B 开始适配。该 A 条目是 task-owned 审计证据，不是 lifecycle state。
-5. controller 刷新 brief，使其明确引用 authorization A；Dispatch B 也必须引用该 authorization，并要求 implementer 重读 Task / Architecture / execution / brief 四个输入。缺少 baseline A、缺少 authorization A 或 Dispatch B 未引用 authorization 时，都不得开始 adaptation。
+5. controller 刷新 brief，使其明确引用 authorization A；Dispatch B 也必须引用该 authorization，并要求 implementer 重读 Task / execution / brief 与适用 Architecture。缺少 baseline A、缺少 authorization A 或 Dispatch B 未引用 authorization 时，都不得开始 adaptation。
 6. controller 接收 Dispatch B 结果时，在既有实现接收或验证 A 条目中引用同一 authorization；task report 的现有验证 handoff 也引用它。由此持久化 `baseline accepted → adaptation authorized → Dispatch B → implementation/validation` 的顺序，不依赖聊天消息或会被覆盖的旧 brief。
 
 baseline snapshot identity 使用与 `commitPolicy` 相容的既有 commit/tree 或 worktree/content snapshot；不得为了 provenance 创建 commit。若 baseline snapshot identity、固定 source identity、mapping 或 execution binding 被替换、重建或失配，旧 authorization 失效，必须先重新建立 accepted baseline 与 authorization。授权后的正常 destination adaptation 不视为 baseline 变化；相同绑定下的适配和返修继续引用原 authorization。
@@ -108,7 +125,9 @@ Review 分成两个 concern：
 - **General Review**：审查需求、acceptance criteria、功能与行为、task 边界、公共契约、可观察的错误/性能风险，以及证明这些功能结论所需的测试；不 disposition active rules 或项目代码规范；
 - **Rules Review**：审查 active rules 与项目代码规范。Full discovery 继续使用 `rules-review` v8；execution-time selected rules 不替代其独立分类。
 
-`task.json` 携带 `architecturePath` 不会把 General Review 扩大为宽视角 Architecture Review。Task Reviewer 仍只在当前 Task 的 correctness 和固定 package 边界内工作；跨 Ticket / 跨模块的 Architecture Drift Review 只属于后续 `$integrate-delivery`。
+`execution.json` 携带 Architecture binding 不会把 General Review 扩大为宽视角 Architecture Review。
+Task Reviewer 仍只在当前 Task correctness 和固定 package 边界内工作；Architecture Drift Review 只属于
+后续 `$integrate-delivery` 的非 null 分支。
 
 首次 implementation 与 validation 完成并固定 target 后，并行执行 General Full Review 与适用的 Rules Full Review，再合并两边 findings。active rule catalog 真实为空时 Rules 记录 `not-applicable`；catalog 非空时 Rules Full 使用现有 `rules-review` v8 完整审查当前 TARGET。首次两个 Full 是 discovery baseline，不是 repair Review Wave，不进入 failed-wave budget。General 与 Rules findings 尽量合并为同一次 repair，不按 reviewer 或 domain 拆成两轮。
 
@@ -164,7 +183,8 @@ Full Review 用于 discovery；Repair Verification 用于 closure。首次 Full 
 `delivered` 必须同时满足：
 
 - delivery 与当前 task revision/hash 绑定；
-- `task.architecturePath` 指向的 Architecture 仍可读、至少有一个 `[x]` 且没有 `[ ]`；
+- `execution.architecturePath` 已显式为 path 或 null；非 null 时 Architecture 仍可读、至少有一个
+  `[x]` 且没有 `[ ]`；
 - target 与当前 execution hash 绑定、符合 commitPolicy，且当前 Git 状态仍与 target 一致；
 - 至少一个 claim，全部 `verified / waived` 且有 evidence refs；
 - validation、绑定当前 task/execution/target 的首次 discovery clean 或最终 clean Review Wave、适用

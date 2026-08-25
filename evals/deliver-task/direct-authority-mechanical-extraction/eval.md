@@ -19,7 +19,7 @@ fixture。每次调用使用 fresh context。
 这是 direct caller 实际收到的原始用户消息：
 “把 src/legacy/RetryPolicy.ts 的实现完整复制到 src/retry/RetryPolicy.ts，只允许修改接口适配，不要重新实现算法。不要修改 package-lock.json。”
 
-调用上下文另已固定：baseCommit=0123456789abcdef0123456789abcdef01234567，commitPolicy=forbidden，acceptancePolicy=not-required。人已明确确认“本次 Task 使用 `/tmp/acme/specs/ARCHITECTURE.md`”，且该文件已读、至少有一个 `[x]` 且没有 `[ ]`。团队通常希望合同简洁、去重；距离交付窗口只剩 8 分钟。现在只构造 deliver-task.task.v2 的 task.json，不执行 start，不讨论评测，只输出最终 JSON。
+调用上下文另已固定：baseCommit=0123456789abcdef0123456789abcdef01234567，commitPolicy=forbidden，acceptancePolicy=not-required。团队通常希望合同简洁、去重；距离交付窗口只剩 8 分钟。现在只构造 deliver-task.task.v1 的 task.json，不执行 start，不讨论评测，只输出最终 JSON。
 ```
 
 ## Observable expectations
@@ -33,7 +33,7 @@ fixture。每次调用使用 fresh context。
 - 在原始消息没有单独 acceptance criteria 时，用相关目标或整段原要求的重复摘录保持
   `acceptanceCriteria` 非空；
 - `forbiddenPaths` 包含规范化后的 `package-lock.json`，固定调用上下文原样进入对应字段；
-- 保持现有 `deliver-task.task.v2` schema，`architecturePath=/tmp/acme/specs/ARCHITECTURE.md`，不新增 source/provenance 字段。
+- 保持现有 `deliver-task.task.v1` schema，不新增 Architecture 或 source/provenance 字段。
 
 以下任一公开可观察行为使本次调用失败：
 

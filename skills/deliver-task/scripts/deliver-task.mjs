@@ -5,8 +5,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const LEGACY_TASK_SCHEMA = 'deliver-task.task.v1';
-const TASK_SCHEMA = 'deliver-task.task.v2';
+const TASK_SCHEMA = 'deliver-task.task.v1';
 const WORKSPACE_SCHEMA = 'deliver-task.workspace.v1';
 const EXECUTION_SCHEMA = 'deliver-task.execution.v1';
 const CLAIMS_SCHEMA = 'deliver-task.claims.v1';
@@ -260,7 +259,7 @@ function validateCaller(caller) {
 
 function validateTask(task, repoRoot) {
   if (!isPlainObject(task)) throw gateError('task.json must be an object');
-  if (task.schemaVersion !== TASK_SCHEMA && task.schemaVersion !== LEGACY_TASK_SCHEMA) {
+  if (task.schemaVersion !== TASK_SCHEMA) {
     throw gateError(`task.schemaVersion must be ${TASK_SCHEMA}`);
   }
   const requiredFields = [
@@ -277,7 +276,6 @@ function validateTask(task, repoRoot) {
     'commitPolicy',
     'acceptancePolicy',
   ];
-  if (task.schemaVersion === TASK_SCHEMA) requiredFields.splice(9, 0, 'architecturePath');
   assertExactObject(
     task,
     requiredFields,
@@ -295,18 +293,6 @@ function validateTask(task, repoRoot) {
   assertStringArray(task.nonGoals, 'task.nonGoals');
   assertStringArray(task.forbiddenPaths, 'task.forbiddenPaths');
   task.forbiddenPaths.forEach((item, index) => normalizeRepoPattern(item, `task.forbiddenPaths[${index}]`));
-  if (task.schemaVersion === TASK_SCHEMA) {
-    assertString(task.architecturePath, 'task.architecturePath');
-    if (!path.isAbsolute(task.architecturePath)) {
-      throw gateError('task.architecturePath must be an absolute path');
-    }
-    if (path.normalize(task.architecturePath) !== task.architecturePath) {
-      throw gateError('task.architecturePath must be a normalized absolute path');
-    }
-    if (path.basename(task.architecturePath) !== 'ARCHITECTURE.md') {
-      throw gateError('task.architecturePath must point to ARCHITECTURE.md');
-    }
-  }
   if (!GIT_OID_RE.test(task.baseCommit || '')) {
     throw gateError('task.baseCommit must be a full Git commit OID');
   }
@@ -323,13 +309,13 @@ function validateTask(task, repoRoot) {
   return task;
 }
 
-async function validateArchitectureAuthority(task) {
-  if (task.schemaVersion === LEGACY_TASK_SCHEMA) return;
+async function validateArchitectureAuthority(architecturePath) {
+  if (architecturePath === null) return;
   let stat;
   let source;
   try {
-    stat = await fs.stat(task.architecturePath);
-    source = await fs.readFile(task.architecturePath, 'utf8');
+    stat = await fs.stat(architecturePath);
+    source = await fs.readFile(architecturePath, 'utf8');
   } catch (error) {
     throw gateError(`Architecture missing or unreadable: ${error.message}`);
   }
@@ -345,9 +331,7 @@ async function validateArchitectureAuthority(task) {
 
 async function readTask(context) {
   const task = await readJson(path.join(context.taskDir, 'task.json'), 'task.json');
-  const validated = validateTask(task, context.repoRoot);
-  await validateArchitectureAuthority(validated);
-  return validated;
+  return validateTask(task, context.repoRoot);
 }
 
 function bindingForTask(task) {
@@ -793,14 +777,6 @@ async function startWithManagedWorkspace(repoRoot, task) {
 }
 
 async function startTask(repoRoot, task, providedPath) {
-  if (task.schemaVersion === LEGACY_TASK_SCHEMA) {
-    const existingWorkspace = await findTaskRevisionWorkspace(repoRoot, task);
-    if (!existingWorkspace) {
-      throw gateError(`start requires ${TASK_SCHEMA} with architecturePath`);
-    }
-    return readCompleteTaskState(existingWorkspace, task);
-  }
-  await validateArchitectureAuthority(task);
   if (providedPath) return startWithProvidedWorkspace(repoRoot, task, providedPath);
   return startWithManagedWorkspace(repoRoot, task);
 }
@@ -808,7 +784,7 @@ async function startTask(repoRoot, task, providedPath) {
 async function validateExecution(execution, task, context) {
   assertExactObject(
     execution,
-    ['schemaVersion', 'task', 'allowedPaths', 'forbiddenPaths', 'evidenceRefs'],
+    ['schemaVersion', 'task', 'allowedPaths', 'forbiddenPaths', 'architecturePath', 'evidenceRefs'],
     [],
     'execution.json',
   );
@@ -818,6 +794,19 @@ async function validateExecution(execution, task, context) {
   validateBinding(execution.task, task, 'execution.task');
   assertStringArray(execution.allowedPaths, 'execution.allowedPaths', { nonEmpty: true });
   assertStringArray(execution.forbiddenPaths, 'execution.forbiddenPaths');
+  if (execution.architecturePath !== null) {
+    assertString(execution.architecturePath, 'execution.architecturePath');
+    if (!path.isAbsolute(execution.architecturePath)) {
+      throw gateError('execution.architecturePath must be an absolute path or null');
+    }
+    if (path.normalize(execution.architecturePath) !== execution.architecturePath) {
+      throw gateError('execution.architecturePath must be a normalized absolute path');
+    }
+    if (path.basename(execution.architecturePath) !== 'ARCHITECTURE.md') {
+      throw gateError('execution.architecturePath must point to ARCHITECTURE.md');
+    }
+  }
+  await validateArchitectureAuthority(execution.architecturePath);
   assertStringArray(execution.evidenceRefs, 'execution.evidenceRefs', { nonEmpty: true });
   execution.allowedPaths.forEach((item, index) => normalizeRepoPattern(item, `execution.allowedPaths[${index}]`));
   execution.forbiddenPaths.forEach((item, index) => normalizeRepoPattern(item, `execution.forbiddenPaths[${index}]`));

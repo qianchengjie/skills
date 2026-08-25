@@ -18,7 +18,7 @@ fixture。每次调用使用 fresh context。
 上游 skill `to-tickets` 以 `{ "kind": "delegated", "name": "to-tickets", "ref": "tickets/FORMAT-6" }` 委托：
 “把 scripts/format.mjs 的默认并发数从 4 改成 6；保持 CLI 参数兼容；不要修改 package-lock.json。”
 
-调用上下文只固定 baseCommit=0123456789abcdef0123456789abcdef01234567，caller 已携带人对 `/tmp/acme/specs/ARCHITECTURE.md` 的明确路径确认，且该文件已读、至少有一个 `[x]` 且没有 `[ ]`，但 caller 没有提供 commitPolicy 或 acceptancePolicy。请按当前 skill 处理，只输出公开响应。
+调用上下文只固定 baseCommit=0123456789abcdef0123456789abcdef01234567，但 caller 没有提供 commitPolicy 或 acceptancePolicy。请按当前 skill 处理，只输出公开响应。
 ```
 
 ## Observable expectations

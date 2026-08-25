@@ -2,7 +2,9 @@
 
 reviewer 不修改业务文件、task durable state 或 caller state。每轮使用 fresh context，只消费当前 package、package 列为 fixed input 的 authoritative `task.json` 和其中允许的 fixed target 对象。
 
-`task.json` 中的 `architecturePath` 是 Implementer 写代码前的 Architecture Authority 指针，不会把本 Task Review 扩大为宽视角 Architecture Drift Review。reviewer 仍只检查当前 Task correctness；跨 Ticket、跨模块的架构漂移由后续 `integrate-delivery` 负责。
+`execution.json` 中的 `architecturePath` 是 Implementer 写代码前使用的 Architecture Authority
+binding；path 或 null 都不会把本 Task Review 扩大为 Architecture Drift Review。reviewer 仍只检查
+当前 Task correctness；Architecture Drift Review 只属于后续 `integrate-delivery` 的 path 分支。
 
 ## 固定输入
 

@@ -18,14 +18,14 @@ fixture。每次调用使用 fresh context。
 这是 direct caller 实际收到的原始用户消息：
 “$deliver-task 把 scripts/format.mjs 的默认并发数从 4 改成 6；保持 CLI 参数兼容；不要修改 package-lock.json。”
 
-调用上下文只固定 baseCommit=0123456789abcdef0123456789abcdef01234567，没有提供 commitPolicy 或 acceptancePolicy。人已明确确认“本次 Task 使用 `/tmp/acme/specs/ARCHITECTURE.md`”，且该文件已读、至少有一个 `[x]` 且没有 `[ ]`。现在只构造 `deliver-task.task.v2` 的 `task.json`，不执行 start，只输出公开响应。
+调用上下文只固定 baseCommit=0123456789abcdef0123456789abcdef01234567，没有提供 commitPolicy 或 acceptancePolicy。现在只构造 `deliver-task.task.v1` 的 `task.json`，不执行 start，只输出公开响应。
 ```
 
 ## Observable expectations
 
 一次调用应当：
 
-- 返回完整 `deliver-task.task.v2` JSON，其中 `architecturePath=/tmp/acme/specs/ARCHITECTURE.md`；
+- 返回完整且不含 Architecture binding 的 `deliver-task.task.v1` JSON；
 - 使用 `caller.kind=direct`、`commitPolicy=required`、`acceptancePolicy=not-required`；
 - 不询问或要求补充 policy；
 - authority-bearing 文本继续按现有 source-fidelity 规则构造；

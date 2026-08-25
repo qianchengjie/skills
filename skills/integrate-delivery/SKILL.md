@@ -14,7 +14,8 @@ description: Use when `deliver-task` 已返回 `delivered`，用户或上游需�
 - 只有 live `<task-worktree>/.dev-task/` 能提供可重验的 delivery 证明；commits、branch、聊天摘要或
   handoff 文案都不能替代它。
 - 原 delivery 只证明 `baseCommit..headCommit`。它不自动证明该范围与目标分支组合后的结果。
-- candidate verification 通过后仍要做一次 fresh Architecture Drift Review；它以已确认 `ARCHITECTURE.md` 为唯一 finding authority，审查当前完整 candidate，不把 task diff 或原 Task Review 的范围当作架构观察边界。
+- candidate verification 通过后按 source delivery 的 `execution.architecturePath` 分流：非 null 才做
+  fresh Architecture Drift Review；null 明确跳过，不恢复旧的宽 General Review。
 - `commit-range` 选择 `keep` 时，结果包含 live task worktree 与 `.dev-task/`；只保留
   branch/commits 会丢失唯一可重验的 delivery proof，不能报告为完成的 `keep`。
 - 用户主 workspace 的 dirty 是合法状态；不得 stash、clean、reset、覆盖或归因这些修改。
@@ -54,11 +55,15 @@ description: Use when `deliver-task` 已返回 `delivered`，用户或上游需�
 
 2. 两条命令都必须直接消费 live `.dev-task/`；目录或任一必需证明丢失时停止，不根据现存
    commits、branch、旧输出或聊天摘要补写 locator、恢复证据或推断 `delivered`。
-3. 要求 `delivery.json.result == "delivered"`，读取 `task.json`、`delivery.json` 和
-   `artifacts/workspace.json`。不要只相信聊天摘要、branch 名或目录名。新 Architecture Review 还要求 `task.json` 为包含 `architecturePath` 的 `deliver-task.task.v2`；升级前的 v1 delivery 可继续重验原证明，但不能补写路径或倒推 Implementer 曾消费 Architecture，因此停止集成并返回需要重新经过 Architecture Preflight 的 fresh delivery。
-4. 直接读取 `task.architecturePath` 指向的 live `ARCHITECTURE.md`。文件不可读、没有 `[x]` 或仍有任何 `[ ]` 时停止，只展示当前 Delta 并路由 `$architecture-steward`；不从 candidate、Spec 或代码补全 Authority。
+3. 要求 `delivery.json.result == "delivered"`，读取 `task.json`、`execution.json`、`delivery.json` 和
+   `artifacts/workspace.json`。不要只相信聊天摘要、branch 名或目录名。`execution.architecturePath`
+   必须显式为 path 或 null，且 execution hash 必须与 delivery target binding 一致；缺字段或 stale
+   binding 不能补写或推断。
+4. `execution.architecturePath != null` 时直接读取其指向的 live `ARCHITECTURE.md`。文件不可读、
+   没有 `[x]` 或仍有任何 `[ ]` 时停止，只展示当前 Delta 并路由 `$architecture-steward`；不从
+   candidate、Spec 或代码补全 Authority。null 时不搜索或读取 Architecture。
 5. 解析当前 target，确认所引用的 Git commit objects 仍存在，且 `headCommit` 仍以 `baseCommit` 为祖先。
-6. 记录 source 的 task identity、Architecture 路径、target、workspace 和 branch。`commit-range` 的动作是 `keep`
+6. 记录 source 的 task/execution identity、Architecture binding、target、workspace 和 branch。`commit-range` 的动作是 `keep`
    时不要求目标分支，直接返回 retained task branch/worktree；即使另有 cleanup 授权，也不删除
    承载 live proof 的 task worktree。
 7. merge 或 cherry-pick 时，记录目标分支当前完整 OID `D`，检查目标仓库、目标分支、worktree dirty 和适用的项目指令。只记录 caller workspace 的 dirty，不把它归入 task，也不据此使 delivery stale。
@@ -80,7 +85,7 @@ description: Use when `deliver-task` 已返回 `delivered`，用户或上游需�
 
 | 策略 | 适用条件 | 结果 |
 | --- | --- | --- |
-| `merge` | 需要保留 source range 的拓扑与 commit identity | 在候选分支合入 `headCommit`，验证和 Architecture Drift Review 后再推进目标分支 |
+| `merge` | 需要保留 source range 的拓扑与 commit identity | 在候选分支合入 `headCommit`，验证和适用的 Architecture Drift Review 后再推进目标分支 |
 | `cherry-pick` | 明确只移植该 range 的线性提交 | 按拓扑顺序重放 `baseCommit..headCommit`，形成新的 commit identity |
 | `keep` | 暂不集成、目标 workspace 正在使用或缺少本地写权限 | 保留 task branch/worktree 和固定 range，不改变目标分支 |
 
@@ -94,28 +99,37 @@ merge 和 cherry-pick 都先在从目标 OID `D` 创建的临时 isolated integr
 2. merge 时引用固定 `headCommit`，不要依赖可能移动或被删除的 source branch 名。
 3. cherry-pick 时只选择 `baseCommit..headCommit` 中的 commits，并保持拓扑顺序；遇到 merge commit 或不明确的范围立即停止。
 4. 集成后读取原 verification evidence 中的可复现命令，并结合目标分支项目规则运行必要验证。
-5. 验证成功后，派一个 fresh Architecture Reviewer，固定提供：
-   - `task.architecturePath` 指向的已确认 `ARCHITECTURE.md`；
-   - isolated integration workspace 中的完整 candidate；
-   - 为判断已确认架构关系所必要的相关代码。
+5. 验证成功后读取 `execution.architecturePath`：
+   - null：把 Architecture Drift Review 记录为 `skipped`，不派 Architecture Reviewer，也不改做宽
+     General Review，直接进入第 8 步；
+   - path：派一个 fresh Architecture Reviewer，固定提供：
+     - 该 path 指向的已确认 `ARCHITECTURE.md`；
+     - isolated integration workspace 中的完整 candidate；
+     - 为判断已确认架构关系所必要的相关代码。
 
-   以本次 delivery 为观察起点，但不把 task diff、task package 或原 Task Review 当作架构观察边界。reviewer 可以跨 Ticket、跨模块、沿调用链并检查未直接出现在 diff 中的相关代码，因为 ownership、状态真源、模块边界与依赖方向本来可能跨越这些区域。
-6. 观察范围可以宽，finding authority 始终只来自已确认 Architecture：
+   reviewer 只沿判断已确认 Architecture 是否被 candidate 违反所必需的代码关系检查；task diff、
+   task package 或原 Task Review 不能替代相关代码事实，也不能授权打开其它 concern。
+6. finding authority 始终只来自已确认 Architecture：
    - 每个 blocking finding 必须引用一条精确 `[x]` 文字决定，或指定已 `[x]` 确认的 Mermaid 图及其中被违反的关系，然后说明 candidate 事实如何违反它；
    - 无法映射到已确认决定时，不得创建 Architecture finding，也不得把 reviewer 偏好、reference implementation、未来 Ticket 或“再抽一层更好”升级成 Authority；
    - 如果代码事实真正暴露了一个必须由人决定的 Architecture 缺口，reviewer 只返回具体缺口或候选 Delta，不把它标为 finding。本 skill 暂停移动目标分支，路由 `$architecture-steward`；人拒绝该 Delta 则按现有 Authority 继续，人确认新/修改决定后对当前 candidate 重跑 fresh Architecture Review。
-7. Architecture Review 不负责、不继续追查，也不以下列内容阻断当前集成：
+7. Architecture Review 不负责、不中途转交、不继续追查以下内容：
    - 后续 Ticket 是否完成；
    - 最终 Spec 或需求是否全部实现；
    - reference implementation 是否全部复制；
    - 普通功能 bug、普通代码质量、Rules finding、测试覆盖、Ticket acceptance completeness 或需求 completeness。
 
-   即使这些问题与 delivery 有关，也不属于本轮 Architecture finding。随行看到时最多在结果中分开说明应回到的 owner，不展开审查、不阻断 Architecture Review。特别禁止从“后续 Ticket 负责 X”推导“当前阶段必须禁止 X”，除非“必须禁止 X”本身已是 `[x]` Architecture。
+   这些内容不形成 finding，也不写入 Architecture Review 的随行说明或 owner 提示。特别禁止从
+   “后续 Ticket 负责 X”推导“当前阶段必须禁止 X”，除非“必须禁止 X”本身已是 `[x]`
+   Architecture。
 8. 有 blocking Architecture finding 时停止集成并上报用户；没有 finding 且没有待人决定的 Architecture Delta 才继续：
    - 本地集成：只有目标 workspace 干净、目标分支仍为 `D` 时，才将目标分支快进到已验证候选 commit；
    - 目标 workspace dirty：不得移动其已检出分支，保留本地候选分支并返回当前事实；不要 stash、覆盖用户修改或自动切换到远端流程。
 
-原 delivery evidence 继续只证明 source range。最终说明必须单独记录候选 commit、目标分支集成前后 OID、本次验证、Architecture 路径与 Architecture Drift Review 结果；旧 Task Review 不能替代这次审查。本 review 不写 Architecture；任何新增、修改、删除或确认都只能由 `$architecture-steward` 处理。
+原 delivery evidence 继续只证明 source range。最终说明必须单独记录候选 commit、目标分支集成前后
+OID、本次验证、Architecture binding，以及 `reviewed / skipped / finding / delta` 结果；旧 Task
+Review 不能替代 path 分支审查，也不能在 null 分支恢复成宽 General Review。本 review 不写
+Architecture；任何新增、修改、删除或确认都只能由 `$architecture-steward` 处理。
 
 ## 冲突与验证失败
 
@@ -162,10 +176,13 @@ worktree 和其中的 `.dev-task/`。只有 `commit-range` 已成功 merge/cherr
 - 目标分支与集成前后完整 OID；
 - 候选 commit 或 keep 原因；
 - 实际运行的验证及结果；
-- Architecture 路径、Architecture Drift Review 的结果、所引用的 `[x]` 决定及 findings；
+- Architecture binding；path 时返回 Architecture Drift Review 结果、所引用的 `[x]` 决定及
+  findings，null 时明确返回 `skipped`；
 - task/integration worktree 和 branch 分别是 retained 还是 removed；
 - 未完成项、冲突或需要 upstream 决定的唯一下一步。
 
-目标分支推进、验证通过、Architecture Drift Review 没有 finding 且没有待人决定的 Architecture Delta 后，才把本地集成报告为完成；如果还授权了 cleanup，必须同时按要求完成 cleanup。`keep` 的完成含义只是稳定交付结果已保留，不表示已经集成。
+目标分支推进、验证通过，且 path 分支 Architecture Drift Review 没有 finding / 待确认 Delta，或
+null 分支已明确 skipped 后，才把本地集成报告为完成；如果还授权了 cleanup，必须同时按要求完成
+cleanup。`keep` 的完成含义只是稳定交付结果已保留，不表示已经集成。
 `commit-range + keep` 返回时 task branch、task worktree 与 live `.dev-task/` 必须都是
 `retained`。
