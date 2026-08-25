@@ -12,7 +12,7 @@ description: 开发事项中不确定下一步做什么、该由哪个 skill 或
 固定输出：
 
 ```markdown
-- 责任归属：<执行层 | 规划层 | 集成层 | Spec 层 | 探索层 | 规则层>
+- 责任归属：<执行层 | 规划层 | 集成层 | Architecture 层 | Spec 层 | 探索层 | 规则层>
 - 判断依据：<当前状态需要哪一层继续，或哪一层的真源 / 执行结果有问题>
 - 推荐下一步：<具体 skill 和必要的后续顺序>
 - 动作：stop
@@ -26,6 +26,7 @@ description: 开发事项中不确定下一步做什么、该由哪个 skill 或
 | --- | --- | --- |
 | 需求或契约仍有待决定的分叉 | 探索层 | 当前会话可澄清时用 `grill-with-docs`；需要跨会话逐步决策时用 `wayfinder`；决定明确后用 `to-spec`，再进入 `deliver-task` |
 | 需求已经明确，但尚未形成可执行 Spec，或当前 Spec 写错 | Spec 层 | 用 `to-spec` 形成或修正 Spec；完成后进入 `deliver-task` |
+| 当前下一步本身是读取或管理 Architecture Authority，包括创建、新增、修改、删除、确认或重新打开 | Architecture 层 | 用 `architecture-steward` 读取或管理 Architecture Authority |
 | Spec 已明确且正确，下一步是实现或验证 | 执行层 | 用 `deliver-task` 完成单任务交付 |
 | 代码、任务或验证有问题 | 执行层 | 用 `deliver-task` 完成修复与交付 |
 | `deliver-task` 已返回 `needs-reslice / reslice`，当前合同实际含多个可独立交付单元 | 规划层 | 用 `to-tickets` 根据原 Spec、任务合同和回流证据拆成多个 bounded tickets；确认后每个 ticket 分别进入 `deliver-task` |
@@ -35,12 +36,15 @@ description: 开发事项中不确定下一步做什么、该由哪个 skill 或
 
 按当前需要推进或修正的真源判断，不按所处阶段或提问措辞判断。只有仍需在多个可接受的需求或契约结果中做决定，才算重新出现分叉；用户或正式真源已经选定结果，而当前情况只是尚未核验历史记录、Spec 或下游 tickets 应如何对齐时，不要因此重开探索。若判断归属依赖某个现有 artifact 的内容或适用范围，先只读该 artifact；核验后仍有多个结果待决定，才归探索层。
 
+只有当前动作本身是读取或管理 Architecture Authority，才归 Architecture 层。Architecture 的存在，或 `deliver-task`、`integrate-delivery` 为履行自身职责而消费 Architecture，都不改变 ready Task 与 delivered result 的既有归属。
+
 路由表只直接支持其中写明的责任归属、推荐 skill 和后续顺序。回答若要进一步断言某个 skill 会如何写入或回写 artifact、历史 artifact 是否需要修改，或哪些下游 artifact 必须同步，先读取该 skill 的当前协议和相关 artifact；未核验时不作这些断言，只保留已有证据支持的 owner 路由。读取协议和 artifact 是取证，不是调用推荐 skill；输出后仍然 stop。
 
 ## 停止边界
 
 输出路由后立即停止，即使用户要求“顺手修掉”“先兼容”“直接继续”或“自动调用下一步”。不得：
 
+- 创建、修改、确认或重新解释 Architecture Authority；
 - 修改 Spec、代码、规则或 review 结论；
 - 自动调用推荐的 skill 或自动重入下游；
 - 用局部兼容迁就错误上游；
