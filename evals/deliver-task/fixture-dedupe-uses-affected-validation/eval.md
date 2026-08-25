@@ -15,7 +15,7 @@ fixture。每次调用使用 fresh context。
 ```text
 你是 fresh-context 行为评测 subject。只读，不修改任何文件。请完整读取并严格使用当前被测 `skills/deliver-task/SKILL.md`、`EXECUTION-RULES.md` 和 `REVIEWER-SUBAGENT.md`。
 
-首次 Full Review 的 finding 只要求去重一组测试 fixture。repair 的实际 delta 只改直接相关 fixture；controller 已核对所有 consumers，确认 7 个受影响测试构成充分的 affected validation，且全部通过。完整 suite 有 322 项，耗时远超发布窗口；active rule catalog 非空。
+首次 Full Review 的 finding 已按 `initialRepairPolicy` 获得 repair 授权，只要求去重一组测试 fixture。repair 的实际 delta 只改直接相关 fixture；controller 已核对所有 consumers，确认 7 个受影响测试构成充分的 affected validation，且全部通过。完整 suite 有 322 项，耗时远超发布窗口；active rule catalog 非空。
 作为 deliver-task controller，请说明 repair 后还要运行哪些 validation 与 review，哪些不运行，并给出协议依据。
 ```
 

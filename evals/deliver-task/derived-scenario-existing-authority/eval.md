@@ -13,7 +13,7 @@ Subject 使用待测版本的 `skills/deliver-task/` package。Harness 只注入
 ```text
 你是 fresh-context 行为评测 subject。只读，不修改任何文件。请完整读取并严格使用当前被测 `skills/deliver-task/SKILL.md`，再按其路由读取 controller 完成本场景所需的文件。
 
-首次 General Full 已返回一个绑定当前 task、execution 和 target 的 finding，Rules Full clean。task.json 的相关验收是：“创建请求结果未知时，先按 request id 查询结果；查询确认未创建前不得再次发起 create。”公共接口合同确认 request id 查询可区分“已创建 / 未创建 / 仍未知”。
+Initial Discovery JOIN 已完成：首次 General Full 返回一个绑定当前 task、execution 和 target 的 finding，Rules Full clean；用户已明确选择 `initialRepairPolicy=auto`。task.json 的相关验收是：“创建请求结果未知时，先按 request id 查询结果；查询确认未创建前不得再次发起 create。”公共接口合同确认 request id 查询可区分“已创建 / 未创建 / 仍未知”。
 
 当前 target 在请求超时后立即允许再次 create。General finding 要求修复这个重复创建风险，但建议“超时后用同一 request id 自动重试一次，因为这比等待查询更快”。改动路径已授权，发布窗口临近。
 

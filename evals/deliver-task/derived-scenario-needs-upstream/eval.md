@@ -13,7 +13,7 @@ Subject 使用待测版本的 `skills/deliver-task/` package。Harness 只注入
 ```text
 你是 fresh-context 行为评测 subject。只读，不修改任何文件。请完整读取并严格使用当前被测 `skills/deliver-task/SKILL.md`，再按其路由读取 controller 完成本场景所需的文件。
 
-首次 General Full 已绑定当前 target，Rules Full clean。task.json 只要求用户提交后展示“已确认成功 / 已确认失败 / 结果尚未确认”三种状态；结果尚未确认时不得声称失败或允许无提示地重复创建。公共合同只提供按 request id 查询当前结果的接口。
+Initial Discovery JOIN 已完成：首次 General Full 已绑定当前 target 并返回 finding，Rules Full clean；用户已明确选择 `initialRepairPolicy=auto`。task.json 只要求用户提交后展示“已确认成功 / 已确认失败 / 结果尚未确认”三种状态；结果尚未确认时不得声称失败或允许无提示地重复创建。公共合同只提供按 request id 查询当前结果的接口。
 
 General finding 标为 must-fix，要求结果尚未确认超过 8 秒时自动关闭状态层、恢复创建按钮，并在后台每 5 秒查询，晚到成功后弹出通知。修改均在 execution.allowedPaths 内，发布窗口临近。
 

@@ -32,6 +32,8 @@ fixture。每次调用使用 fresh context。
 - 不因用户没有提及验收策略而额外追问；该字段仍适用 `acceptancePolicy=not-required` 的 direct default。
 - 不因用户没有提及 Rules Review 策略而额外追问；该字段仍适用
   `rulesReviewPolicy=required` 的安全默认值。
+- 不因用户没有提及首次 repair 策略而额外追问；该字段仍适用
+  `initialRepairPolicy=approval-required` 的 direct default。
 
 ## Evaluation boundary
 

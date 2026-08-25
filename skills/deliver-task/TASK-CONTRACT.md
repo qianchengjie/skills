@@ -42,7 +42,8 @@ isolated workspace 生命周期；caller workspace 不保存 task state。rules-
   "baseCommit": "完整 Git commit OID",
   "commitPolicy": "required",
   "acceptancePolicy": "required",
-  "rulesReviewPolicy": "required"
+  "rulesReviewPolicy": "required",
+  "initialRepairPolicy": "approval-required"
 }
 ```
 
@@ -60,6 +61,7 @@ isolated workspace 生命周期；caller workspace 不保存 task state。rules-
 - `commitPolicy` 只允许 `required / allowed / forbidden`。
 - `acceptancePolicy` 只允许 `required / not-required`。
 - `rulesReviewPolicy` 只允许 `required / not-required`。
+- `initialRepairPolicy` 只允许 `approval-required / auto`。
 - task hash 是完整 `task.json` 的递归 key-sort canonical JSON SHA-256，格式为 `sha256:<hex>`。
 - bootstrap 时 caller 只把该对象写入 `start` 的 stdin；`start` 完整校验后才把合同写入新建或
   首次绑定 workspace 的 `.dev-task/task.json`。
@@ -110,26 +112,27 @@ tool、JSON 或引用文本自行生成的摘要，只有在可见的更高层 a
 ```
 
 可执行验证解释、影响范围、实现步骤和其它 AI 推导写入职责相符的 `execution.json` / `audits.md`，
-不反写成 immutable task authority。`taskId`、JSON 结构和固定调用上下文可以机械生成。三个 policy
+不反写成 immutable task authority。`taskId`、JSON 结构和固定调用上下文可以机械生成。四个 policy
 按 caller 边界构造：
 
-| caller | `commitPolicy / acceptancePolicy` | `rulesReviewPolicy` |
-| --- | --- | --- |
-| direct | 用户明确提出提交或验收要求时，把对应要求归一化为枚举值；某字段已被提及但无法唯一归一化时，向用户澄清，在取得唯一值前不应用 default、不构造可启动合同、不调用 `start`；完全没有明确要求的字段分别固定为 `required / not-required`，不询问用户。 | 只有用户明确选择本任务不需要独立 Rules Review 时使用 `not-required`；其余情况固定为 `required`。要求 AI 按风险、改动大小、时间或效率自行决定，不构成人类关闭选择，仍为 `required`。 |
-| delegated | caller 必须显式提供这两个字段；缺少任一个都不应用 direct defaults、不调用 `start`，只回到该 caller 请求补全。 | caller 必须显式提供该字段；`not-required` 只能机械传递 caller 可见的人类明确选择，不能由 caller 或 deliver-task 推断。缺失时回该 caller 请求补全。 |
+| caller | `commitPolicy / acceptancePolicy` | `rulesReviewPolicy` | `initialRepairPolicy` |
+| --- | --- | --- | --- |
+| direct | 用户明确提出提交或验收要求时，把对应要求归一化为枚举值；某字段已被提及但无法唯一归一化时，向用户澄清，在取得唯一值前不应用 default、不构造可启动合同、不调用 `start`；完全没有明确要求的字段分别固定为 `required / not-required`，不询问用户。 | 只有用户明确选择本任务不需要独立 Rules Review 时使用 `not-required`；其余情况固定为 `required`。要求 AI 按风险、改动大小、时间或效率自行决定，不构成人类关闭选择，仍为 `required`。 | 只有用户明确选择首次 discovery 有 findings 后自动 repair 时使用 `auto`；其余情况固定为 `approval-required`。要求 AI 按任务或 finding 特征自行决定，不构成人类自动 repair 授权，仍为 `approval-required`。 |
+| delegated | caller 必须显式提供这两个字段；缺少任一个都不应用 direct defaults、不调用 `start`，只回到该 caller 请求补全。 | caller 必须显式提供该字段；`not-required` 只能机械传递 caller 可见的人类明确选择，不能由 caller 或 deliver-task 推断。缺失时回该 caller 请求补全。 | caller 必须显式提供该字段；`auto` 只能机械传递 caller 可见的人类明确选择，不能由 caller 或 deliver-task 推断。缺失时回该 caller 请求补全，不越过 caller 直接询问用户。 |
 
 direct defaults 只是固定调用策略，不改变 authority-bearing 文本的机械摘录规则；显式要求优先于默认值。
 不得根据任务内容、仓库状态或模型判断为 direct 选择其它 policy。特别是，只有人能选择
-`rulesReviewPolicy=not-required`；validator 只能校验字段和后续状态一致性，不能证明该人类选择真实存在。
+`rulesReviewPolicy=not-required` 或 `initialRepairPolicy=auto`；validator 只能校验字段枚举和后续已有
+结构的一致性，不能证明该人类选择真实存在。
 
 这是 caller 的接口责任，不是 `deliver-task` 能凭空证明的事实。未随合同提供的上游要求不可审查时，
 `deliver-task` 只保证 `task.json` 之后的派生输入不再弱化；若执行中从可见上游证据发现
 `task.json` 已发生实质降级，则停止当前 lineage，按 `needs-upstream / contract-change` 回流合同修订，
 不能靠修正 brief 或返修实现补救。
 
-只有目标、验收、约束、非目标、用户禁止范围、caller、base、commit policy、
-acceptance policy 或 rules review policy 变化时才递增 revision。执行路径选择和实际验收结果不属于 immutable
-task identity。旧 task identity 下的证据不会自动证明新合同；controller 必须重新判断
+只有目标、验收、约束、非目标、用户禁止范围、caller、base、commit policy、acceptance policy、
+rules review policy 或 initial repair policy 变化时才递增 revision。一次具体 repair 决定、执行路径
+选择和实际验收结果不属于 immutable task identity。旧 task identity 下的证据不会自动证明新合同；controller 必须重新判断
 哪些证据可引用，并在 `audits.md` 留 provenance。
 
 ## artifacts/workspace.json
@@ -251,14 +254,20 @@ task identity。旧 task identity 下的证据不会自动证明新合同；cont
 
 按 `### A<正整数>：<标题>` 追加审计。每个条目记录当前 task identity、execution/target、公开结论、证据位置和未闭合项。至少分别记录：
 
-- 上下文预检、项目 rules、三个 policy 与 task workspace 可执行结论；`rulesReviewPolicy=not-required`
-  时记录作出该选择的人类 authority；
+- 上下文预检、项目 rules、四个 policy 与 task workspace 可执行结论；`rulesReviewPolicy=not-required`
+  或 `initialRepairPolicy=auto` 时记录作出该选择的人类 authority；
 - 验证命令及公开结果；
 - 首次 General Full，以及 policy 要求时 Rules Full 的输入 identity、findings 和 verdict；
 - 每轮 actual repair delta、targeted / affected validation、policy 要求的 scoped 结果、必要的单域 Full 升级和合并 Review Wave；
 - 适用的 upstream acceptance；
 - policy 要求时的 rules-review Full run 与 deliver-task-owned Rules Scoped Repair Verification；
 - 回流、阻塞和 residual risk。
+
+`initialRepairPolicy=approval-required` 且 Initial Discovery JOIN 有 findings 时，不新增 triage schema、
+finding ledger 或 artifact。两个 discovery concern 的既有终态 evidence 保留完整 findings；upstream
+明确要求修哪些 finding 后，把该决定追加到现有 `audits.md`，并与这些 finding refs 一起作为既有
+repair input evidence。决定要求改变 task contract、公共契约、授权或其它 immutable authority 时，
+继续使用现有 `needs-upstream / contract-change` 路径。
 
 `rulesReviewPolicy=not-required` 不表示项目 rules 不适用；preflight、brief 和 implementer 仍记录并消费
 selected rules。若旧 task revision 已存在 Rules finding，后续人类通过新 revision 关闭独立 Rules Review，

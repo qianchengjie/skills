@@ -100,7 +100,7 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
 
 目标类型是结构格式校验、流程状态门禁、Git identity 和路径边界检查。机器可确定：
 
-- JSON exact schema、三个 policy 枚举、task hash 和 execution hash；
+- JSON exact schema、四个 policy 枚举、task hash 和 execution hash；
 - `execution.architecturePath` 字段存在且为 `null` 或合规绝对路径；非 null 时检查文件名、可读性，
   以及文本中显式 `[x]` 存在与 `[ ]` 缺失；
 - workspace locator 的 exact schema、task/base/branch 绑定、canonical Git root、初始 clean 状态和
@@ -122,7 +122,9 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
 - non-delivered request 的 kind、非空 evidence refs 及存在性；
 - delivery 没有内嵌完整证据。
 
-机器明确不检查：人是否真实选择过 `rulesReviewPolicy=not-required`、该选择是否来自有权的人、
+机器明确不检查：人是否真实选择过 `rulesReviewPolicy=not-required` 或
+`initialRepairPolicy=auto`、该选择是否来自有权的人、Initial Discovery JOIN 的 findings 是否完整、
+`approval-required` 下的 upstream repair 决定是否充分、
 active catalog 是否真的为空而可写 `not-applicable`、人是否真实确认过 `execution.architecturePath` 的 path / null 决定、Architecture 内容是否正确/完整/属于架构域、checkbox 的人工确认是否真实、当前 Task 与适用 Architecture 是否能同时满足，provided workspace 是否真实独占、目标是否正确、验收是否充分、targeted / affected
 validation 是否足以覆盖实际 repair delta、影响面是否可可靠限定、scoped reviewer 是否应返回
 `clean / findings / cannot-bound`、Full 升级是否语义上必要、review finding 是否正确、rules 是否适用、

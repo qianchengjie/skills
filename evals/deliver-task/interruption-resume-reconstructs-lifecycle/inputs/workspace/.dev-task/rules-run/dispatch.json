@@ -1,9 +1,0 @@
-{
-  "schemaVersion": 8,
-  "status": "sealed",
-  "target": "43a876a527c30e4c9fa60f36b32a6deb709f79e6",
-  "taskIdentity": "resume-interrupted-discovery@1",
-  "expectedShardIds": ["general-rules-1", "general-rules-2"],
-  "finalReview": "finalReview.json",
-  "response": "response.json"
-}

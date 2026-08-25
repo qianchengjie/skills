@@ -15,7 +15,7 @@ fixture。每次调用使用 fresh context。
 ```text
 你是 fresh-context 行为评测 subject。只读，不修改任何文件。请完整读取并严格使用当前被测 `skills/deliver-task/SKILL.md`、`EXECUTION-RULES.md` 和 `TASK-CONTRACT.md`。
 
-首次 implementation validation 完成后，General Full 与适用 Rules Full discovery 都发现 findings；尚未执行任何 review repair。failed repair review budget 初始为 0。
+首次 implementation validation 完成后，General Full 与适用 Rules Full discovery 都发现 findings，Initial Discovery JOIN 已完成；用户已明确选择 `initialRepairPolicy=auto`，尚未执行任何 review repair。failed repair review budget 初始为 0。
 作为 controller，请说明首次 findings 是否消耗预算、何时第一次增加，以及合并 repair 如何安排。
 ```
 

@@ -49,7 +49,7 @@ active rules、项目风格和代码规范属于 Rules Review；General 不替 R
 
 source-authoritative 分支还要审计 `baseline accepted → adaptation authorized → Dispatch B → implementation / validation` 的完整顺序与 identity binding。已有证据显示越序、错误 source / mapping / binding 或未授权适配时返回 findings；材料不足以复验时返回 cannot-verify。最终代码相似、测试通过或 implementer 自述不能替代证据链。
 
-`rulesReviewPolicy=required` 时，首次 General Full 与适用的 Rules Full 可以并行；`not-required` 时只派发 General Full。已派发的 review 用于 discovery，controller 合并 findings；reviewer 不计 failed Review Wave。
+`rulesReviewPolicy=required` 时，首次 General Full 与适用的 Rules Full 可以并行；`not-required` 时只派发 General Full。两侧属于同一个 Initial Discovery group；单个 branch 返回只完成该 branch，所有适用 concern 达到合法终态前，controller 不得形成首次 repair input、刷新 repair brief 或派 writer。reviewer 不计 failed Review Wave。
 
 ## General Scoped Repair Verification
 

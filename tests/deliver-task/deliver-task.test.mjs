@@ -35,6 +35,7 @@ async function createFixture({
   caller = { kind: 'direct' },
   acceptancePolicy = 'not-required',
   rulesReviewPolicy = 'required',
+  initialRepairPolicy = 'approval-required',
   ignoreWorktrees = true,
   architectureContent = '- [x] Controller snapshot 是核心运行状态唯一可写真源。\n',
 } = {}) {
@@ -71,6 +72,7 @@ async function createFixture({
     commitPolicy,
     acceptancePolicy,
     rulesReviewPolicy,
+    initialRepairPolicy,
   };
   return { root, taskDir: null, workspacePath: null, task, baseCommit, architecturePath };
 }
@@ -1034,6 +1036,26 @@ test('start 接受 exact task schema 与通用 caller，并拒绝旧字段或非
     const fixture = await createFixture();
     const result = runStart(fixture, { task: buildTask(fixture.task), workspace: fixture.root });
     assert.equal(result.status, 1, result.stderr);
+    await assert.rejects(access(path.join(fixture.root, '.dev-task')));
+  }
+});
+
+test('start 要求 initialRepairPolicy 且只接受 approval-required / auto', async () => {
+  for (const initialRepairPolicy of ['approval-required', 'auto']) {
+    const fixture = await createFixture();
+    const task = { ...fixture.task, initialRepairPolicy };
+    const result = runStart(fixture, { task, workspace: fixture.root });
+    assert.equal(result.status, 0, `${initialRepairPolicy}: ${result.stderr}`);
+  }
+
+  for (const buildTask of [
+    (task) => Object.fromEntries(Object.entries(task).filter(([key]) => key !== 'initialRepairPolicy')),
+    (task) => ({ ...task, initialRepairPolicy: 'risk-based' }),
+  ]) {
+    const fixture = await createFixture();
+    const result = runStart(fixture, { task: buildTask(fixture.task), workspace: fixture.root });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /initialRepairPolicy/);
     await assert.rejects(access(path.join(fixture.root, '.dev-task')));
   }
 });

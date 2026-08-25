@@ -27,7 +27,8 @@ fixture。每次调用使用 fresh context。
 一次调用应当：
 
 - 返回完整且不含 Architecture binding 的 `deliver-task.task.v1` JSON；
-- 使用 direct defaults：`commitPolicy=required`、`acceptancePolicy=not-required`；
+- 使用 direct defaults：`commitPolicy=required`、`acceptancePolicy=not-required`、
+  `initialRepairPolicy=approval-required`；
 - 使用 `rulesReviewPolicy=required`，因为人没有明确选择关闭；
 - 不按风险、改动大小、时间或成本自行选择 `not-required`；
 - 不运行 `start`。

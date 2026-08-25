@@ -15,6 +15,7 @@ const RESULT_STATUSES = new Set(['delivered', 'needs-upstream', 'blocked']);
 const CLAIM_STATUSES = new Set(['proposed', 'implemented', 'verified', 'blocked', 'waived']);
 const ACCEPTANCE_POLICIES = new Set(['required', 'not-required']);
 const RULES_REVIEW_POLICIES = new Set(['required', 'not-required']);
+const INITIAL_REPAIR_POLICIES = new Set(['approval-required', 'auto']);
 const ACCEPTANCE_RESULTS = new Set(['passed', 'skipped', 'rejected']);
 const SCOPED_REVIEW_RESULTS = new Set(['clean', 'findings', 'cannot-bound']);
 const FULL_REVIEW_RESULTS = new Set(['clean', 'findings']);
@@ -277,6 +278,7 @@ function validateTask(task, repoRoot) {
     'commitPolicy',
     'acceptancePolicy',
     'rulesReviewPolicy',
+    'initialRepairPolicy',
   ];
   assertExactObject(
     task,
@@ -310,6 +312,9 @@ function validateTask(task, repoRoot) {
   }
   if (!RULES_REVIEW_POLICIES.has(task.rulesReviewPolicy)) {
     throw gateError(`task.rulesReviewPolicy must be one of ${[...RULES_REVIEW_POLICIES].join(', ')}`);
+  }
+  if (!INITIAL_REPAIR_POLICIES.has(task.initialRepairPolicy)) {
+    throw gateError(`task.initialRepairPolicy must be one of ${[...INITIAL_REPAIR_POLICIES].join(', ')}`);
   }
   return task;
 }

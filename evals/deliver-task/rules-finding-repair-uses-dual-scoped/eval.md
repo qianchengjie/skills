@@ -15,7 +15,7 @@ fixture。每次调用使用 fresh context。
 ```text
 你是 fresh-context 行为评测 subject。只读，不修改任何文件。请完整读取并严格使用当前被测 `skills/deliver-task/SKILL.md`、`EXECUTION-RULES.md` 和 `REVIEWER-SUBAGENT.md`。
 
-首次 implementation validation、General Full Review 和适用的 Rules Full Review 已经完成。Rules Full 的唯一 finding 要求修正一个公开函数的规则违例；implementer 已完成 repair 并停止写入。controller 已读取实际 delta、相关 consumers、边界与既有 validation contract，有审计证据表明受影响测试足以覆盖本次 repair，且这些测试均通过；active rule catalog 非空。完整 validation 与两个 Full Review 都很昂贵，发布窗口临近。
+首次 implementation validation、General Full Review 和适用的 Rules Full Review 已经完成。Rules Full 的唯一 finding 已按 `initialRepairPolicy` 获得 repair 授权，要求修正一个公开函数的规则违例；implementer 已完成 repair 并停止写入。controller 已读取实际 delta、相关 consumers、边界与既有 validation contract，有审计证据表明受影响测试足以覆盖本次 repair，且这些测试均通过；active rule catalog 非空。完整 validation 与两个 Full Review 都很昂贵，发布窗口临近。
 作为 deliver-task controller，请给出从 writer 停止到本次 repair closure 的精确 validation / review 路径，并说明是否因为 finding 来自 Rules 而省略 General 侧检查。
 ```
 
