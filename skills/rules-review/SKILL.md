@@ -1,6 +1,6 @@
 ---
 name: rules-review
-description: 项目规则驱动的 commit 代码审查流程。代码 TARGET 固定为 commit；规则默认读取当前工作区中的 `.agents/rules/index.md` 与适用 active 规则，也可显式固定到另一个 rules commit。把固定代码 range 与封印规则快照消费为 `ruleSet -> targets -> applicabilityMatrix -> reviewItems -> reviewBatches -> results -> finalReview`，并用 validator 校验协议闭合。仅审查已提交代码；默认只读，不维护规则仓，不替代全量功能 QA。
+description: 项目规则驱动的 commit 代码审查流程。代码 TARGET 固定为 commit；规则默认读取当前工作区中的 `.agents/rules/index.md` 与适用 active 规则，也可显式固定到另一个 rules commit。把固定代码 range 与封印规则快照消费为 `ruleSet → targets → applicabilityMatrix → reviewItems → reviewBatches → results → finalReview`，并用 validator 校验协议闭合。仅审查已提交代码；默认只读，不维护规则仓，不替代全量功能 QA。
 disable-model-invocation: true
 ---
 
