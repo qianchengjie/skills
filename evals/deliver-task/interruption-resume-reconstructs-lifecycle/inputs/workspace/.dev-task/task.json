@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "deliver-task.task.v1",
+  "taskId": "resume-interrupted-discovery",
+  "revision": 1,
+  "caller": {"kind": "direct"},
+  "objective": "修正已有 task authority 定义的边界条件。",
+  "acceptanceCriteria": ["边界条件按既有合同处理。"],
+  "constraints": ["不新增依赖。"],
+  "nonGoals": ["不改变公共契约。"],
+  "forbiddenPaths": ["package.json"],
+  "baseCommit": "a32475eae540b4c2ce0095b8d4d2f4c5646ad032",
+  "commitPolicy": "allowed",
+  "acceptancePolicy": "not-required",
+  "rulesReviewPolicy": "required"
+}

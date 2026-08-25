@@ -36,6 +36,26 @@ implementer、生成 target 或进入实现闭环。
 deliver-task 命令或业务修改都停止。同一路径 Architecture 内容不进入 task/execution hash，不得为它
 新建 revision、hash 或快照机制。
 
+## 中断后的恢复
+
+用户中途插问、controller 自身讨论、工具或调用失败、上下文压缩或切换造成执行中断后，controller
+在恢复任何派发、writer、validation 或 review 前，先定位 `start` 返回的 live taskDir，并只用其中
+已有的 task-owned evidence 重建当前 lifecycle position：
+
+1. 读取 live `task.json`、`execution.json`、`artifacts/target.json` 与 `audits.md` 的 identity / history，
+   确认 current target，并根据首次 Full binding、repair input 与 Review Wave history 区分 initial target
+   和 repair target；
+2. 对 current target 核对 General Full 是否终态，再读取 `rulesReviewPolicy`：`required` 时继续核对 active
+   rule catalog，catalog 非空则确认 Rules Full run 是否已形成合法终态，真实为空则确认
+   `not-applicable`；`not-required` 时确认没有派发独立 Rules Review；
+3. 若仍在首次 discovery，核对所有适用结果是否已合并并形成可执行 repair input；若已进入 repair，
+   核对 previous/current target、repair input refs、实际 repair delta、validation 与 policy 要求的 scoped /
+   必要 Full 结果；
+4. 从最早尚未闭合的 transition 继续。已有 Full run 仍在进行时继续等待或按现有同输入重派规则处理；
+   证据不足时停在对应阶段，不能从最近聊天里的 finding、承诺或动作直接续跑。
+
+这次重建只读取和核对既有 evidence，不新增 checkpoint、ledger、状态字段、artifact 类型或脚本命令。
+
 ## 上下文预检
 
 先取得并记录人对本次 execution 的 Architecture path / null 决定；没有明确决定时不建立 execution

@@ -177,6 +177,8 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
 9. Review closure clean 后按 `acceptancePolicy` 处理 upstream acceptance；`required` 且当前 target 没有 `passed / skipped` A 条目时返回 `needs-upstream / user-acceptance`。acceptance 的 `not-required` 只取消 upstream acceptance gate；Rules Review 的 `not-required` 只取消独立 Rules concern。二者都不削弱 `acceptanceCriteria`、任务 validation、General 或实现时适用的项目 rules。验收结果留在 `audits.md`，不改变 task identity。
 10. 把事实证据分别写入 `claims.json`、`audits.md`、review 工件和 rules-review run；最后只在 `delivery.json` 写引用。运行 `validate-result`；仅 `delivered` 再运行 `close-check`。
 
+用户中途插问、controller 自身讨论、工具或调用失败、上下文压缩或切换造成执行中断后，恢复任何派发、writer、validation 或 review 前，先按 [EXECUTION-RULES.md](EXECUTION-RULES.md) 的“中断后的恢复”从 live taskDir 重建当前 lifecycle position。最近聊天里的 finding、承诺或下一动作只用于定位，不是恢复依据；`rulesReviewPolicy=required` 且 active catalog 非空时，当前 target 的首次 Rules Full 尚未终态，或适用的 discovery 结果尚未合并时，仍停留在首次 discovery，不能仅凭已返回的 General finding 进入 repair。
+
 任何实现、验证或 Task Review 环节如果发现完成当前 Task 必须新增或改变 Architecture，立即停止业务 writer；不以临时实现、repair finding 或扩大 allowlist 绕过。只把具体缺口或候选 Delta 路由 `$architecture-steward`，等待人确认后更新适用 binding、重新校验 execution，并 fresh 重读 Task + Execution + applicable Architecture + Rules + Codebase 再继续。binding 变化只使 execution/target/review stale；同路径 Architecture 正文变化不进入 task 或 execution hash。Task Review 仍只审查当前 Task correctness，不在 deliver-task 内新增宽视角 Architecture Review。
 
 ## Review Wave 与有限返修

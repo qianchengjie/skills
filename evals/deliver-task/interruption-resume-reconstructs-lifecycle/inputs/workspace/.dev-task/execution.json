@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "deliver-task.execution.v1",
+  "task": {
+    "taskId": "resume-interrupted-discovery",
+    "revision": 1,
+    "taskHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "allowedPaths": ["src/example.mjs", "test/example.test.mjs"],
+  "forbiddenPaths": [],
+  "architecturePath": null,
+  "evidenceRefs": ["audits.md#A1"]
+}
