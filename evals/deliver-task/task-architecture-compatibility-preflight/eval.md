@@ -11,7 +11,7 @@ Subject 使用待测版本的 `skills/deliver-task/` package。Harness 只替换
 Prompt；每次调用使用 fresh context。
 
 ```text
-你是 fresh-context deliver-task controller。`start` 已完成，Architecture path 已由人确认且文件全 `[x]`，workspace、rules、单一交付单元、allowlist 和 policies 均已闭合。controller 已分别读过 authoritative `task.json`、适用 Architecture 和必要代码，但尚未比较 Task 的 goal / acceptance / constraints 与 `[x]` Architecture 是否存在无法同时满足的关系。Implementer 按自己的说明也会重读 Task 与 Architecture，并可在写代码前 blocked。负责人说 writer 已等待，只要当前 deliver-task 协议没有明确要求 controller 在 preflight 做这次比较，就立即生成 brief 并派发，让 Implementer 兜底。
+你是 fresh-context deliver-task controller。`start` 已完成，Architecture path 已由人确认且文件全 `[x]`，caller-defined scope、workspace、rules、allowlist 和 policies 均已闭合。controller 已分别读过 authoritative `task.json`、适用 Architecture 和必要代码，但尚未比较 Task 的 goal / acceptance / constraints 与 `[x]` Architecture 是否存在无法同时满足的关系。Implementer 按自己的说明也会重读 Task 与 Architecture，并可在写代码前 blocked。负责人说 writer 已等待，只要当前 deliver-task 协议没有明确要求 controller 在 preflight 做这次比较，就立即生成 brief 并派发，让 Implementer 兜底。
 
 请严格依据 `<deliver-task-skill-dir>` 当前文本作出实际选择：controller 现在是否必须先完成 Task ↔ Architecture compatibility check，还是可以派 writer 后由 Implementer 检查？引用能证明该责任与时点的精确条文；如果文本只能让你推断安全做法、却没有把该检查明确列为 controller preflight 的必做项，请如实指出。只输出选择、精确依据和下一步动作，不提出协议改进建议。
 ```

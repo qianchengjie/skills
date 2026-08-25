@@ -1,20 +1,20 @@
 ---
 name: deliver-task
-description: 当用户或上游 skill 已提供边界明确的软件开发任务，需要在 task-scoped isolated workspace 中完成实现、验证、提交、独立审查、返修和交付结果收口时使用。
+description: 当用户或上游 skill 已明确一次软件开发的交付范围、验收、约束与授权边界时使用。
 disable-model-invocation: true
 ---
 
-# 单任务交付
+# 开发交付
 
 ## 第一原则
 
-在 task-scoped isolated workspace 中完成一个任务，返回一个交付结果；不接管 caller 的生命周期，也不负责把结果集成回 caller workspace。
+在 task-scoped isolated workspace 中完成 caller 定义的交付范围，返回一个交付结果；不接管 caller 的生命周期，也不负责把结果集成回 caller workspace。
 
-- 输入是一个目标、验收、约束和用户禁止范围已明确的开发任务；调用策略由 upstream 显式值或适用的 direct defaults 确定。`task.json` 是 deliver-task 内的 authoritative Task contract，不是 upstream authority 的授权证明；其中承载 authority 的文本必须按 [TASK-CONTRACT.md](TASK-CONTRACT.md) 从可见 upstream authority 机械摘录。`execution.json.architecturePath` 是本次实现与后续 Architecture Review 共用的 Architecture Authority binding；implementer 按其 path / null 终态消费适用输入，派生 brief 不能覆盖或弱化 Task、Execution 或适用 Architecture。
-- 输出只是一份 `delivered / needs-upstream / needs-reslice / blocked` 单任务结果。
+- caller 通过目标、验收、约束和用户禁止范围定义完整交付边界；调用策略由 upstream 显式值或适用的 direct defaults 确定。`task.json` 是 deliver-task 内的 authoritative Task contract，不是 upstream authority 的授权证明；其中承载 authority 的文本必须按 [TASK-CONTRACT.md](TASK-CONTRACT.md) 从可见 upstream authority 机械摘录。`execution.json.architecturePath` 是本次实现与后续 Architecture Review 共用的 Architecture Authority binding；implementer 按其 path / null 终态消费适用输入，派生 brief 不能覆盖或弱化 Task、Execution 或适用 Architecture。
+- Ticket、Spec、plan、conversation 或其它 upstream artifact 只是可选来源；来源数量、结构以及范围内是否包含多个可独立验证的改动，都不重新定义 caller 已提供的交付边界。
+- 输出只是一份 `delivered / needs-upstream / blocked` 交付结果。
 - task workspace 内的 `.dev-task/` 保存合同、证据和本地执行定位；业务代码与证明状态共享同一个 isolated workspace 生命周期。不写 caller 的 plan、任务编排状态或最终 closure。
-- 可以自行安排任务内部的实现步骤；不创建或管理正式多任务计划。
-- 发现多个可独立验收、独立交付的工作单元时，立即返回 `needs-reslice`，不把它们伪装成内部步骤继续执行。
+- 可以自行安排当前交付范围内的实现与验证步骤；不创建或管理正式多任务计划，也不重新裁决任务粒度。
 - 目标、验收、公共契约、用户禁止范围、调用策略或用户判断需要变化时，立即返回 `needs-upstream`。直接调用时用户就是 upstream；由其它 skill 委托时只向 caller 回流，不越过 caller 直接询问用户。
 
 ## 输入与目录
@@ -92,11 +92,11 @@ workspace 已含旧 identity 时拒绝覆盖。任何 caller 状态变化都由 
    `audits.md` 引用冲突的精确 Task 条款与精确 `[x]` 决定（或已确认图中的关系），停止 preflight，
    不生成 brief、不派 implementer，也不自行决定哪个 authority 覆盖另一个。由人决定按
    `needs-upstream / contract-change` 修改 Task / upstream，或路由 `$architecture-steward` 重新打开
-   Architecture；冲突闭合后 fresh 重做本次 preflight。该检查不扫描其它 Spec / Ticket，不做文档
+   Architecture；冲突闭合后 fresh 重做本次 preflight。该检查不扫描其它 upstream artifact，不做文档
    同步或影响分析。`architecturePath == null` 时不补做 Architecture 搜索或比较。
-5. 区分实现步骤与独立工作单元：
-   - 多个步骤共同完成同一验收结果，可在任务内部安排；
-   - 任一部分可独立验收、独立发布或失败后不阻塞另一部分，返回 `needs-reslice`。
+5. 把 `task.json` 整体视为 caller-defined delivery boundary。即使其中包含多个可独立验证、独立发布或
+   失败互不阻塞的改动，也只安排当前范围内的实现与验证，不要求拆分、不创建 tickets，也不返回粒度
+   相关结果。只有合同本身、授权或用户判断需要变化时才按下一步回流。
 6. 检查是否需要改变 immutable task contract；需要时返回 `needs-upstream`。用户未提供文件清单本身不是回流条件。
 7. 在同一 preflight A 中记录允许/禁止路径、非目标、停止条件、规则读取和判断依据。
 8. 在同一 preflight A 中形成并记录“当前 task workspace 能执行本任务所需实现与验证命令”的明确
@@ -116,7 +116,7 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs validate-execution <taskD
 不递增 task revision/hash，也不新建 task/worktree。若调整命中 `task.forbiddenPaths` 或要求改变
 immutable task contract，才回流 upstream。
 
-不要把 `needs-reslice` 变成新的 `plan.md`，也不要在 `.dev-task/` 内新建 slice、ticket、里程碑或任务状态机。
+不要在 `.dev-task/` 内新建 `plan.md`、slice、ticket、里程碑或任务状态机，也不要要求 caller 把当前交付范围改写成这些 artifact。
 
 ## commitPolicy
 
@@ -181,7 +181,6 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
 | --- | --- | --- |
 | `delivered` | 当前 task、execution、target 的目标、验证、General Review、适用 acceptance 和 rules-review 已闭合 | `null` |
 | `needs-upstream` | 需要 upstream 改变 immutable task contract、授权或提供用户判断 | 对应 change / `user-acceptance` |
-| `needs-reslice` | 当前合同实际含多个独立工作单元 | `reslice` |
 | `blocked` | 合同不变时仍因环境、工具或不可恢复条件无法完成 | `blocker` |
 
 `delivered` 只表示这个任务在固定 `baseCommit` 与 task workspace 中已交付，不表示 caller 的计划完成、已集成、可 merge、可发布或整体 closure。

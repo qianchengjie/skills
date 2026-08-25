@@ -21,7 +21,7 @@ Subject 使用待测版本的 `skills/deliver-task/` package。Harness 只替换
 lifecycle 与最终 handoff 所需资源；不要读取 git diff、tests 或 evals。然后只回答下面的
 实际执行场景，不评价用例设计，也不要提出协议改进。
 
-上游 `to-tickets` 现在要把一个边界明确的单任务交给 deliver-task。目标仓库是
+上游 `scope-planner` 现在要把一个 caller 已定义边界的开发范围交给 deliver-task。目标仓库是
 `/tmp/acme`，上游手里已有 `deliver-task.task.v1` exact task contract JSON（含完整 baseCommit、revision、
 caller、目标、验收与 policy），但尚未创建任何 task 目录或文件；后续 execution preflight 会按协议
 取得并写入 Architecture decision。caller 工作区已有无关

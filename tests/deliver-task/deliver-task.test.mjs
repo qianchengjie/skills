@@ -454,7 +454,7 @@ async function prepareReviewWaveDelivery(
 
 test('start 是唯一 bootstrap，并在 task workspace 内原子初始化固定状态', async () => {
   const fixture = await createFixture({
-    caller: { kind: 'delegated', name: 'to-tickets', ref: 'tickets/slug-whitespace' },
+    caller: { kind: 'delegated', name: 'scope-planner', ref: 'delivery-scopes/slug-whitespace' },
   });
 
   const output = startTask(fixture);
@@ -485,7 +485,7 @@ test('start 是唯一 bootstrap，并在 task workspace 内原子初始化固定
   assert.equal(claims.schemaVersion, 'deliver-task.claims.v1');
   assert.deepEqual(claims.task, output.task);
   assert.deepEqual(claims.claims, []);
-  assert.match(await readFile(path.join(output.taskDir, 'audits.md'), 'utf8'), /# 单任务审计/);
+  assert.match(await readFile(path.join(output.taskDir, 'audits.md'), 'utf8'), /# 交付审计/);
   assert.equal(await readFile(path.join(output.taskDir, '.gitignore'), 'utf8'), '*\n');
   const workspace = JSON.parse(
     await readFile(path.join(output.taskDir, 'artifacts/workspace.json'), 'utf8'),
@@ -996,7 +996,7 @@ test('旧 bootstrap 命令和其它命令的隐式 bootstrap 均被拒绝', asyn
 test('start 接受 exact task schema 与通用 caller，并拒绝旧字段或非法 caller', async () => {
   for (const caller of [
     { kind: 'direct' },
-    { kind: 'delegated', name: 'to-tickets', ref: 'tickets/slug-whitespace' },
+    { kind: 'delegated', name: 'scope-planner', ref: 'delivery-scopes/slug-whitespace' },
     { kind: 'delegated', name: 'release-pipeline', ref: 'tasks/release-1' },
   ]) {
     const fixture = await createFixture({ caller });
@@ -1007,8 +1007,8 @@ test('start 接受 exact task schema 与通用 caller，并拒绝旧字段或非
   const invalidTasks = [
     (task) => ({ ...task, allowedPaths: ['src/**'], upstreamAcceptance: { status: 'not-required' } }),
     (task) => ({ ...task, caller: { kind: 'direct', ref: 'unexpected' } }),
-    (task) => ({ ...task, caller: { kind: 'delegated', ref: 'tickets/slug-whitespace' } }),
-    (task) => ({ ...task, caller: { kind: 'delegated', name: 'ToTickets', ref: 'x' } }),
+    (task) => ({ ...task, caller: { kind: 'delegated', ref: 'delivery-scopes/slug-whitespace' } }),
+    (task) => ({ ...task, caller: { kind: 'delegated', name: 'ScopePlanner', ref: 'x' } }),
     (task) => ({ ...task, caller: { kind: 'planner', ref: 'x' } }),
     (task) => Object.fromEntries(Object.entries(task).filter(([key]) => key !== 'commitPolicy')),
     (task) => Object.fromEntries(Object.entries(task).filter(([key]) => key !== 'acceptancePolicy')),
@@ -1864,10 +1864,9 @@ test('delivery.json 保持薄结构并拒绝内嵌完整证据', async () => {
   assert.equal(target.kind, 'no-change');
 });
 
-test('validate-result 接受三种 non-delivered 结果并约束 request kind', async () => {
+test('validate-result 接受两种 non-delivered 结果并约束 request kind', async () => {
   const cases = [
     ['needs-upstream', 'acceptance-change'],
-    ['needs-reslice', 'reslice'],
     ['blocked', 'blocker'],
   ];
   for (const [resultStatus, requestKind] of cases) {
@@ -1885,25 +1884,27 @@ test('validate-result 接受三种 non-delivered 结果并约束 request kind', 
     assert.equal(result.status, 0, `${resultStatus}: ${result.stderr}`);
   }
 
-  const fixture = await createFixture();
-  await initTask(fixture);
-  await writeDelivery(fixture, {
-    result: 'needs-reslice',
+  const invalidFixture = await createFixture();
+  await initTask(invalidFixture);
+  await writeDelivery(invalidFixture, {
+    result: 'invalid-result',
     upstreamRequest: {
-      kind: 'acceptance-change',
-      summary: '错误分类。',
+      kind: 'invalid-request',
+      summary: '非法结果。',
       evidenceRefs: ['audits.md#A1'],
     },
   });
-  const result = run(fixture.root, ['validate-result', path.relative(fixture.root, fixture.taskDir)]);
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /needs-reslice.*reslice/);
+  const invalidResult = run(
+    invalidFixture.root,
+    ['validate-result', path.relative(invalidFixture.root, invalidFixture.taskDir)],
+  );
+  assert.equal(invalidResult.status, 1);
+  assert.match(invalidResult.stderr, /delivery\.result must be one of delivered, needs-upstream, blocked/);
 });
 
-test('三种 non-delivered 结果都拒绝空或不存在的 upstreamRequest evidence refs', async () => {
+test('两种 non-delivered 结果都拒绝空或不存在的 upstreamRequest evidence refs', async () => {
   const cases = [
     ['needs-upstream', 'user-acceptance'],
-    ['needs-reslice', 'reslice'],
     ['blocked', 'blocker'],
   ];
   for (const [resultStatus, requestKind] of cases) {

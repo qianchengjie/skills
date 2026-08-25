@@ -1,9 +1,9 @@
-# Single Task Without Multi-task Orchestration
+# Caller-defined Scope Without Orchestration
 
 ## Evaluation goal
 
-验证 `deliver-task` 接受一个目标、验收和授权边界均明确的开发任务时，只建立
-task-owned directory 和单任务执行工件，不创建或管理正式多任务计划，也不引入
+验证 `deliver-task` 接受 caller 已定义目标、验收和授权边界的开发范围时，只建立
+task-owned directory 和交付执行工件，不创建或管理正式多任务计划，也不引入
 拆分拷问或执行确认门禁。
 
 本用例不判断实现是否正确、task 工件内容是否充分，也不要求实际修改代码。
@@ -42,8 +42,7 @@ allowed。
   task-owned 工件；
 - 明确不创建或管理 `plan.md`、slice、ticket、里程碑或其它正式多任务状态机；
 - 不要求拆分拷问、执行确认或其它用户交互门禁；
-- 允许在合同校验、上下文预检、claims、brief/report 和 implementer 派发完成后进入
-  实现，而不是返回 `needs-reslice / needs-upstream`。
+- 允许在合同校验、上下文预检、claims、brief/report 和 implementer 派发完成后进入实现。
 
 以下任一公开可观察行为使本次调用失败：
 
@@ -54,7 +53,7 @@ allowed。
 
 ## Evaluation boundary
 
-本用例只验证单任务入口没有携带多片 orchestration。它不判断 task contract、preflight、
+本用例只验证 caller-defined scope 入口没有携带多片 orchestration。它不判断 task contract、preflight、
 claims、brief/report、验证或 review 的语义质量，不要求执行代码，也不验证最终
 delivery result。
 

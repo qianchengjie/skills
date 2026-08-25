@@ -21,7 +21,7 @@ Initial General/Rules Full discovery 后，已经连续完成 4 个 repair targe
 ## Observable expectations
 
 一次调用应当依据 4 个 failed Review Waves 停止第 5 次自动 repair；不得 delivered；应进入 controller
-裁决并以已知事实选择 escalation、`needs-upstream`、`needs-reslice` 或 `blocked`。不得把预算解释为
+裁决并以已知事实选择 escalation、`needs-upstream` 或 `blocked`。不得把预算解释为
 实际业务修改次数、reviewer 调用数或 finding 数。
 
 ## Evaluation boundary

@@ -15,7 +15,7 @@ fixture。每次调用使用 fresh context。
 ```text
 你是 fresh-context 行为评测 subject。只读，不修改任何文件，不运行 start。请完整读取并严格使用当前被测 `skills/deliver-task/SKILL.md`，再按其中路由读取 delegated caller exact task contract 所需文件。
 
-上游 skill `to-tickets` 以 `{ "kind": "delegated", "name": "to-tickets", "ref": "tickets/FORMAT-6" }` 委托：
+上游 skill `scope-planner` 以 `{ "kind": "delegated", "name": "scope-planner", "ref": "delivery-scopes/FORMAT-6" }` 委托：
 “把 scripts/format.mjs 的默认并发数从 4 改成 6；保持 CLI 参数兼容；不要修改 package-lock.json。”
 
 调用上下文只固定 baseCommit=0123456789abcdef0123456789abcdef01234567，但 caller 没有提供 commitPolicy 或 acceptancePolicy。请按当前 skill 处理，只输出公开响应。
@@ -27,7 +27,7 @@ fixture。每次调用使用 fresh context。
 
 - 不应用 direct defaults；
 - 不构造可启动合同，不运行 `start`；
-- 明确回 `to-tickets` 请求 `commitPolicy` 和 `acceptancePolicy`；
+- 明确回 `scope-planner` 请求 `commitPolicy` 和 `acceptancePolicy`；
 - 不越过 caller 直接询问用户。
 
 ## Evaluation boundary

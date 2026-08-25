@@ -1,4 +1,4 @@
-# 单任务执行与保证规则
+# 交付执行与保证规则
 
 ## Workspace 建立
 
@@ -46,7 +46,7 @@ boundary。非 null 时重读该 Architecture，确认可读、至少一个 `[x]
 `architecturePath` 非 null 时，controller 必须在闭合 preflight、生成 brief 或派业务 writer 前，
 比较当前 `task.json` 的 `objective / acceptanceCriteria / constraints / nonGoals / forbiddenPaths` 与适用
 Architecture 的 `[x]` 决定是否至少存在一种可同时满足的实现；只补充判断当前 Task 所需的代码事实。
-这是窄的 compatibility check，不扫描其它 Spec / Ticket，不做文档同步或影响分析。明确不能同时满足
+这是窄的 compatibility check，不扫描其它 upstream artifact，不做文档同步或影响分析。明确不能同时满足
 时，在 `audits.md` 引用冲突的精确 Task 条款与精确 `[x]` 决定（或已确认图中的关系），立即停止；
 不得先生成 brief、派 implementer 试做，或自行裁定某个 authority 优先。由人决定按
 `needs-upstream / contract-change` 修改 Task / upstream，或路由 `$architecture-steward` 重新打开
@@ -62,7 +62,11 @@ Architecture；冲突闭合后 fresh 重做 preflight。null 分支不搜索 Arc
 - path 分支的 Task ↔ Architecture compatibility 结论及判断依据；
 - 当前 task workspace 能执行本任务所需实现与验证命令的明确结论、task-owned evidence 和未闭合项；
 - `commitPolicy`、`acceptancePolicy`、baseCommit 和 caller；
-- 当前内容是一个交付单元，或应回流的证据。
+- 当前 `task.json` 整体是 caller 定义的交付边界，以及该边界在当前执行条件下能否完成的证据。
+
+交付边界不由 `deliver-task` 重新裁决。范围内包含多个可独立验证、独立发布或失败互不阻塞的改动时，
+仍按同一 `task.json` 安排实现、验证、review 与 delivery；Ticket、Spec、plan、conversation 或其它
+upstream artifact 的数量和结构都不是拆分信号。
 
 路径和文件名只产生候选规则分类。读完必读代码并针对触发条件 focused search 后，才能闭合 execution-time 分类；无法用代码证据排除的候选归入 selected。selected rules 的可执行义务必须先进入现有验证、claims / evidence 要求和 task brief，冲突解决后才可结束 preflight；不能把 implementer 后续读取规则当作替代。不要为此新建平行义务状态机，也不要在 task 工件中复制规则正文。execution-time selected rules 不替代 Rules Full discovery 的独立分类。
 
@@ -196,7 +200,6 @@ Full Review 用于 discovery；Repair Verification 用于 closure。首次 Full 
 
 每轮返修先把 validation、General、upstream feedback 或 Rules finding 的依据写入 audits，再刷新 brief/report。source-authoritative 分支在 baseline snapshot identity、固定 source identity、mapping 和 execution binding 均未被替换、重建或失配时，返修继续引用原 authorization；任一绑定失配则先重建 baseline 与 authorization，不能以返修名义绕过。以下情况停止：
 
-- 多个独立工作单元：`needs-reslice`；
 - immutable task contract、授权或用户判断变化：`needs-upstream`；
 - 现有合同内持续环境/工具失败，或 4 个 failed Review Waves 后仍未 closure：controller adjudication 后使用 `blocked`；确需改变合同、授权或用户判断时使用 `needs-upstream`。
 

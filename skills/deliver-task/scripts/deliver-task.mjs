@@ -11,7 +11,7 @@ const EXECUTION_SCHEMA = 'deliver-task.execution.v1';
 const CLAIMS_SCHEMA = 'deliver-task.claims.v1';
 const DELIVERY_SCHEMA = 'deliver-task.delivery.v1';
 const COMMIT_POLICIES = new Set(['required', 'allowed', 'forbidden']);
-const RESULT_STATUSES = new Set(['delivered', 'needs-upstream', 'needs-reslice', 'blocked']);
+const RESULT_STATUSES = new Set(['delivered', 'needs-upstream', 'blocked']);
 const CLAIM_STATUSES = new Set(['proposed', 'implemented', 'verified', 'blocked', 'waived']);
 const ACCEPTANCE_POLICIES = new Set(['required', 'not-required']);
 const ACCEPTANCE_RESULTS = new Set(['passed', 'skipped', 'rejected']);
@@ -637,7 +637,7 @@ async function writeInitialTaskState(workspaceRoot, task, record) {
     });
     await fs.writeFile(
       path.join(stagingDir, 'audits.md'),
-      `# 单任务审计\n\n- taskId：${task.taskId}\n- revision：${task.revision}\n- taskHash：${taskHash(task)}\n`,
+      `# 交付审计\n\n- taskId：${task.taskId}\n- revision：${task.revision}\n- taskHash：${taskHash(task)}\n`,
     );
     await fs.writeFile(path.join(stagingDir, '.gitignore'), '*\n');
     await fs.mkdir(path.join(stagingDir, 'artifacts'));
@@ -1007,9 +1007,6 @@ function validateUpstreamRequest(request, result) {
   assertExactObject(request, ['kind', 'summary', 'evidenceRefs'], [], 'delivery.upstreamRequest');
   assertString(request.summary, 'delivery.upstreamRequest.summary');
   assertStringArray(request.evidenceRefs, 'delivery.upstreamRequest.evidenceRefs', { nonEmpty: true });
-  if (result === 'needs-reslice' && request.kind !== 'reslice') {
-    throw gateError('needs-reslice requires upstreamRequest.kind reslice');
-  }
   if (result === 'needs-upstream' && !UPSTREAM_KINDS.has(request.kind)) {
     throw gateError(`needs-upstream requires one of ${[...UPSTREAM_KINDS].join(', ')}`);
   }

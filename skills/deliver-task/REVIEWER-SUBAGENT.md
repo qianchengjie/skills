@@ -1,6 +1,9 @@
-# 单任务交付 · Reviewer
+# 开发交付 · Reviewer
 
 reviewer 不修改业务文件、task durable state 或 caller state。每轮使用 fresh context，只消费当前 package、package 列为 fixed input 的 authoritative `task.json` 和其中允许的 fixed target 对象。
+
+`task.json` 整体是 caller 定义的交付边界。reviewer 按该整体审查，不因范围来自零个、一个或多个
+Ticket / Spec / plan，也不因其中包含多个可独立验证的改动而提出拆分 finding 或重新定义任务粒度。
 
 `execution.json` 中的 `architecturePath` 是 Implementer 写代码前使用的 Architecture Authority
 binding；path 或 null 都不会把本 Task Review 扩大为 Architecture Drift Review。reviewer 仍只检查

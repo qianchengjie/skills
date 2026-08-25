@@ -1,4 +1,4 @@
-# 单任务交付 · Implementer
+# 开发交付 · Implementer
 
 每次派发都直接读取 controller 指定的当前 `task.json`、`execution.json` 和
 `artifacts/task-brief.md`；`execution.architecturePath != null` 时还必须读取其指向的
@@ -20,7 +20,8 @@ task-brief.md`。controller 同时提供
 - 不创建 commit，不 push / merge / publish。
 - 不读取或修改 caller workspace，不同步其中的同名文件，也不尝试 rebase、merge 或 cherry-pick。
 - 不直接询问用户；需要改变目标、验收、公共契约、授权或用户判断时 blocked 回 controller。
-- 发现 task 实际包含多个可独立验收/交付的工作单元时不实现，blocked 回 controller 并说明分界证据。
+- `task.json` 整体是 caller 定义的交付边界；即使范围内包含多个可独立验证或交付的改动，也按同一
+  task 实现，不自行要求拆分。只有合同、授权或用户判断存在真实缺口时才 blocked 回 controller。
 - 不 revert 其他人改动；发现不在 brief 中的意外 task-workspace 修改时停止并报告，不能把它归因给 caller workspace 后忽略。
 
 ## 开始前
@@ -41,7 +42,7 @@ focused 只读查证；合同或授权缺口不能自行补。
 
 path 分支的 Architecture 不可读、出现 `[ ]`，或任一分支在完成当前 Task 时必须新增/修改架构决定，
 立即 blocked 回 controller，指出相关已确认项或具体缺口，要求路由 `$architecture-steward`。不能为
-完成 Ticket 偷偷改 owner、状态真源、边界或依赖。人确认后由 controller 在同一 task/worktree 更新
+完成当前交付范围时不得偷偷改 owner、状态真源、边界或依赖。人确认后由 controller 在同一 task/worktree 更新
 并重新校验 execution；binding 变化会形成新 executionHash。只有当前 Architecture 全部 `[x]` 后，
 才按新 binding fresh 重读 Task、Execution、适用 Architecture 与 brief 再继续。
 

@@ -1,4 +1,4 @@
-# 单任务合同与结果
+# 交付合同与结果
 
 ## 目录角色
 
@@ -31,8 +31,8 @@ isolated workspace 生命周期；caller workspace 不保存 task state。rules-
   "revision": 1,
   "caller": {
     "kind": "delegated",
-    "name": "to-tickets",
-    "ref": "tickets/ISSUE-123"
+    "name": "scope-planner",
+    "ref": "delivery-scopes/change-set-123"
   },
   "objective": "一个明确交付目标",
   "acceptanceCriteria": ["可观察验收条件"],
@@ -50,6 +50,10 @@ isolated workspace 生命周期；caller workspace 不保存 task state。rules-
 - `taskId` 使用小写连字符 slug；`revision` 从 1 递增。
 - `caller` 只允许 `{ "kind": "direct" }` 或
   `{ "kind": "delegated", "name": "<lower-kebab-id>", "ref": "<non-empty>" }`。
+- `caller.ref` 定位 delegated caller 的委托入口；该入口可以基于 Ticket、Spec、plan、conversation
+  或其它 upstream artifact。它只记录 caller provenance，不定义任务粒度。完整 `task.json` 才是
+  caller 提供给本次执行的交付边界，其 authority-bearing 字段可以从 caller 可见的零个、一个或多个
+  upstream artifacts 机械摘录；direct caller 的用户原始要求不需要另造来源 artifact。
 - `acceptanceCriteria` 非空；`forbiddenPaths` 只保存用户或 caller 明确禁止的范围。
 - 路径是规范化仓库相对路径或 glob；不接受绝对路径和 `..`。
 - `commitPolicy` 只允许 `required / allowed / forbidden`。
@@ -389,12 +393,13 @@ provenance 人为创建 commit。
 `acceptancePolicy=not-required` 时 `delivery.evidenceRefs.acceptance` 固定为 `null`；
 `required` 时引用对应的 acceptance A 条目。
 
-非 `delivered` 仍使用同一固定顶层结构；无 target 写 `null`，尚无证据的 ref 写 `null`，并填写：
+非 `delivered` 仍使用同一固定顶层结构；无 target 写 `null`，尚无证据的 ref 写 `null`。例如
+`needs-upstream` 填写：
 
 ```json
 {
-  "kind": "reslice",
-  "summary": "为什么当前合同不是一个交付单元",
+  "kind": "contract-change",
+  "summary": "为什么当前合同或授权需要由 upstream 修改",
   "evidenceRefs": ["audits.md#A1"]
 }
 ```
@@ -402,11 +407,10 @@ provenance 人为创建 commit。
 结果与 request kind：
 
 - `needs-upstream`：`target-change / acceptance-change / contract-change / authorization-change / user-acceptance`；
-- `needs-reslice`：固定 `reslice`；
 - `blocked`：固定 `blocker`；
 - `delivered`：固定 `null`。
 
-三种非 `delivered` 结果的 `upstreamRequest.evidenceRefs` 都至少包含一项，每项必须是
+两种非 `delivered` 结果的 `upstreamRequest.evidenceRefs` 都至少包含一项，每项必须是
 存在的 task-owned evidence ref。机器只检查结构、当前绑定和存在性，不判断回流理由
 是否正确。
 
