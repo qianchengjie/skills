@@ -2,8 +2,9 @@
 
 ## Evaluation goal
 
-验证 direct caller 在用户和固定调用上下文都没有提供提交与验收策略时，是否仍构造完整合同，并使用
-`commitPolicy=required`、`acceptancePolicy=not-required` 两个固定默认值而不询问用户。
+验证 direct caller 在用户和固定调用上下文都没有提供提交、验收与 Rules Review 策略时，是否仍构造
+完整合同，并使用 `commitPolicy=required`、`acceptancePolicy=not-required`、
+`rulesReviewPolicy=required` 三个固定默认值而不询问用户。
 
 本用例不判断显式策略覆盖或 delegated caller 的缺失策略处理。
 
@@ -18,7 +19,7 @@ fixture。每次调用使用 fresh context。
 这是 direct caller 实际收到的原始用户消息：
 “$deliver-task 把 scripts/format.mjs 的默认并发数从 4 改成 6；保持 CLI 参数兼容；不要修改 package-lock.json。”
 
-调用上下文只固定 baseCommit=0123456789abcdef0123456789abcdef01234567，没有提供 commitPolicy 或 acceptancePolicy。现在只构造 `deliver-task.task.v1` 的 `task.json`，不执行 start，只输出公开响应。
+调用上下文只固定 baseCommit=0123456789abcdef0123456789abcdef01234567，没有提供 commitPolicy、acceptancePolicy 或 rulesReviewPolicy。现在只构造 `deliver-task.task.v1` 的 `task.json`，不执行 start，只输出公开响应。
 ```
 
 ## Observable expectations
@@ -26,7 +27,8 @@ fixture。每次调用使用 fresh context。
 一次调用应当：
 
 - 返回完整且不含 Architecture binding 的 `deliver-task.task.v1` JSON；
-- 使用 `caller.kind=direct`、`commitPolicy=required`、`acceptancePolicy=not-required`；
+- 使用 `caller.kind=direct`、`commitPolicy=required`、`acceptancePolicy=not-required`、
+  `rulesReviewPolicy=required`；
 - 不询问或要求补充 policy；
 - authority-bearing 文本继续按现有 source-fidelity 规则构造；
 - 不运行 `start`。

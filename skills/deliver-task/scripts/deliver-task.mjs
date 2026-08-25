@@ -14,6 +14,7 @@ const COMMIT_POLICIES = new Set(['required', 'allowed', 'forbidden']);
 const RESULT_STATUSES = new Set(['delivered', 'needs-upstream', 'blocked']);
 const CLAIM_STATUSES = new Set(['proposed', 'implemented', 'verified', 'blocked', 'waived']);
 const ACCEPTANCE_POLICIES = new Set(['required', 'not-required']);
+const RULES_REVIEW_POLICIES = new Set(['required', 'not-required']);
 const ACCEPTANCE_RESULTS = new Set(['passed', 'skipped', 'rejected']);
 const SCOPED_REVIEW_RESULTS = new Set(['clean', 'findings', 'cannot-bound']);
 const FULL_REVIEW_RESULTS = new Set(['clean', 'findings']);
@@ -275,6 +276,7 @@ function validateTask(task, repoRoot) {
     'baseCommit',
     'commitPolicy',
     'acceptancePolicy',
+    'rulesReviewPolicy',
   ];
   assertExactObject(
     task,
@@ -305,6 +307,9 @@ function validateTask(task, repoRoot) {
   }
   if (!ACCEPTANCE_POLICIES.has(task.acceptancePolicy)) {
     throw gateError(`task.acceptancePolicy must be one of ${[...ACCEPTANCE_POLICIES].join(', ')}`);
+  }
+  if (!RULES_REVIEW_POLICIES.has(task.rulesReviewPolicy)) {
+    throw gateError(`task.rulesReviewPolicy must be one of ${[...RULES_REVIEW_POLICIES].join(', ')}`);
   }
   return task;
 }
@@ -982,17 +987,32 @@ function validateTarget(target, task, execution, label = 'delivery.target') {
   }
 }
 
-function validateEvidenceRefs(evidenceRefs, { delivered }) {
+function validateEvidenceRefs(evidenceRefs, { delivered, rulesReviewPolicy }) {
   assertExactObject(
     evidenceRefs,
     ['claims', 'verification', 'generalReview', 'acceptance', 'rulesReview'],
     [],
     'delivery.evidenceRefs',
   );
-  for (const field of ['claims', 'verification', 'generalReview', 'rulesReview']) {
+  for (const field of ['claims', 'verification', 'generalReview']) {
     const value = evidenceRefs[field];
     if (delivered) assertString(value, `delivery.evidenceRefs.${field}`);
     else if (value !== null) assertString(value, `delivery.evidenceRefs.${field}`);
+  }
+  if (rulesReviewPolicy === 'not-required') {
+    if (evidenceRefs.rulesReview !== null) {
+      throw gateError(
+        'rulesReviewPolicy not-required requires delivery.evidenceRefs.rulesReview to be null',
+      );
+    }
+  } else if (delivered) {
+    if (typeof evidenceRefs.rulesReview !== 'string' || evidenceRefs.rulesReview.length === 0) {
+      throw gateError(
+        'rulesReviewPolicy required requires delivery.evidenceRefs.rulesReview to be a string',
+      );
+    }
+  } else if (evidenceRefs.rulesReview !== null) {
+    assertString(evidenceRefs.rulesReview, 'delivery.evidenceRefs.rulesReview');
   }
   if (evidenceRefs.acceptance !== null) {
     assertString(evidenceRefs.acceptance, 'delivery.evidenceRefs.acceptance');
@@ -1044,7 +1064,10 @@ function validateDelivery(delivery, task, execution) {
   if (delivery.result === 'delivered' && delivery.target === null) {
     throw gateError('delivered requires a target');
   }
-  validateEvidenceRefs(delivery.evidenceRefs, { delivered: delivery.result === 'delivered' });
+  validateEvidenceRefs(delivery.evidenceRefs, {
+    delivered: delivery.result === 'delivered',
+    rulesReviewPolicy: task.rulesReviewPolicy,
+  });
   assertStringArray(delivery.residualRiskRefs, 'delivery.residualRiskRefs');
   validateUpstreamRequest(delivery.upstreamRequest, delivery.result);
   return delivery;
@@ -1411,19 +1434,30 @@ function validateReviewWave(
     `${label}.General`,
   );
   let rulesResult = 'clean';
-  if (record.rules === 'not-applicable') {
-    rulesResult = 'clean';
+  if (task.rulesReviewPolicy === 'not-required') {
+    if (record.rules !== 'not-required') {
+      throw gateError(
+        `${label}.rules must be not-required when task.rulesReviewPolicy is not-required`,
+      );
+    }
   } else {
-    rulesResult = validateReviewDomain(
-      record.rules,
-      reviewHistory,
-      currentEntry,
-      task,
-      record.target,
-      record.executionHash,
-      'rules',
-      `${label}.Rules`,
-    );
+    if (record.rules === 'not-required') {
+      throw gateError(
+        `${label}.rules cannot be not-required when task.rulesReviewPolicy is required`,
+      );
+    }
+    if (record.rules !== 'not-applicable') {
+      rulesResult = validateReviewDomain(
+        record.rules,
+        reviewHistory,
+        currentEntry,
+        task,
+        record.target,
+        record.executionHash,
+        'rules',
+        `${label}.Rules`,
+      );
+    }
   }
   if (!REVIEW_WAVE_RESULTS.has(record.result)) {
     throw gateError(`${label}.result must be clean or failed`);
@@ -1544,7 +1578,11 @@ async function validateDeliveredBindings(context, task, execution, delivery, rev
     if (!finalWave.validationRefs.includes(delivery.evidenceRefs.verification)) {
       throw gateError('delivery.evidenceRefs.verification must reference final Review Wave validationRefs');
     }
-    if (finalWave.rules === 'not-applicable') {
+    if (finalWave.rules === 'not-required') {
+      if (delivery.evidenceRefs.rulesReview !== null) {
+        throw gateError('Rules not-required Review Wave requires delivery rulesReview null');
+      }
+    } else if (finalWave.rules === 'not-applicable') {
       if (delivery.evidenceRefs.rulesReview !== 'not-applicable') {
         throw gateError('Rules not-applicable Review Wave requires delivery rulesReview not-applicable');
       }

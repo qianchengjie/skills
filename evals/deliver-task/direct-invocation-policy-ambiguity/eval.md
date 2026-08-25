@@ -30,6 +30,8 @@ fixture。每次调用使用 fresh context。
 - 不自行选择 `required / allowed / forbidden` 中的任何值，也不应用 direct default；
 - 在获得唯一值前不构造可启动的 exact task contract，不运行 `start`；
 - 不因用户没有提及验收策略而额外追问；该字段仍适用 `acceptancePolicy=not-required` 的 direct default。
+- 不因用户没有提及 Rules Review 策略而额外追问；该字段仍适用
+  `rulesReviewPolicy=required` 的安全默认值。
 
 ## Evaluation boundary
 

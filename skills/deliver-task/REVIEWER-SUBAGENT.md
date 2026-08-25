@@ -2,6 +2,10 @@
 
 reviewer 不修改业务文件、task durable state 或 caller state。每轮使用 fresh context，只消费当前 package、package 列为 fixed input 的 authoritative `task.json` 和其中允许的 fixed target 对象。
 
+`task.rulesReviewPolicy` 只控制独立 Rules Review concern：`required` 才允许派发 Rules Full / Scoped；
+`not-required` 时 controller 不派发 Rules reviewer。它不改变 General reviewer 的范围，也不表示实现可以
+忽略项目 rules。
+
 `task.json` 整体是 caller 定义的交付边界。reviewer 按该整体审查，不因范围来自零个、一个或多个
 Ticket / Spec / plan，也不因其中包含多个可独立验证的改动而提出拆分 finding 或重新定义任务粒度。
 
@@ -45,7 +49,7 @@ active rules、项目风格和代码规范属于 Rules Review；General 不替 R
 
 source-authoritative 分支还要审计 `baseline accepted → adaptation authorized → Dispatch B → implementation / validation` 的完整顺序与 identity binding。已有证据显示越序、错误 source / mapping / binding 或未授权适配时返回 findings；材料不足以复验时返回 cannot-verify。最终代码相似、测试通过或 implementer 自述不能替代证据链。
 
-首次 General Full 与适用的 Rules Full 可以并行。它们用于 discovery，controller 合并 findings；reviewer 不计 failed Review Wave。
+`rulesReviewPolicy=required` 时，首次 General Full 与适用的 Rules Full 可以并行；`not-required` 时只派发 General Full。已派发的 review 用于 discovery，controller 合并 findings；reviewer 不计 failed Review Wave。
 
 ## General Scoped Repair Verification
 
@@ -68,17 +72,17 @@ source-authoritative 分支还要审计 `baseline accepted → adaptation author
 - repair 是否改变相关规则 applicability；
 - repair 是否击穿直接相关的既有规则结论。
 
-其它 domain finding 仍作为 repair input 提供完整因果上下文；Rules 检查对应 repair delta 的规则影响，但不替另一 domain disposition 原 finding。不要执行完整 rules discovery，不生成或伪装 v8 的 dispatch、shard、finalReview 或 `ready_for_merge`。影响面无法可靠限定时返回 `cannot-bound`；否则返回 `clean` 或 `findings`。active rule catalog 真实为空时由 controller 记录 `not-applicable`，不派发本 reviewer。
+其它 domain finding 仍作为 repair input 提供完整因果上下文；Rules 检查对应 repair delta 的规则影响，但不替另一 domain disposition 原 finding。不要执行完整 rules discovery，不生成或伪装 v8 的 dispatch、shard、finalReview 或 `ready_for_merge`。影响面无法可靠限定时返回 `cannot-bound`；否则返回 `clean` 或 `findings`。active rule catalog 真实为空时由 controller 记录 `not-applicable`，`rulesReviewPolicy=not-required` 时记录 `not-required`；两种情况都不派发本 reviewer，且二者不得互换。
 
 ## Scoped 结果与 Full 升级
 
-General 与 Rules scoped 默认并行，不根据 finding 来源只跑其中一个。每个 domain 恰好返回：
+`rulesReviewPolicy=required` 且 Rules applicable 时，General 与 Rules scoped 默认并行，不根据 finding 来源只跑其中一个；`not-required` 时只运行 General scoped。每个实际运行的 domain 恰好返回：
 
 - `clean`：该 domain 在本次 repair causal boundary 内闭合；
 - `findings`：返回本 domain 原 finding dispositions 与 repair 引入的新相关 findings；
 - `cannot-bound`：说明无法可靠限定的边界与证据缺口，不猜 clean。
 
-controller 只把 `cannot-bound` 的 domain 升级 Full：General 使用 General Full Review；Rules 使用现有 `rules-review` v8 完整审查当前 TARGET。已经 clean 的另一个 domain 不重跑。Full 新发现 finding 时进入下一轮 repair，再执行双 scoped。
+controller 只把 `cannot-bound` 的 domain 升级 Full：General 使用 General Full Review；`rulesReviewPolicy=required` 时 Rules 使用现有 `rules-review` v8 完整审查当前 TARGET。已经 clean 的另一个 domain 不重跑。`not-required` 禁止派发 Rules Full。Full 新发现 finding 时进入下一轮 repair，再执行 policy 要求的 scoped verification。
 
 ## 输出与重派
 

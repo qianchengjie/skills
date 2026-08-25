@@ -34,6 +34,7 @@ async function createFixture({
   commitPolicy = 'allowed',
   caller = { kind: 'direct' },
   acceptancePolicy = 'not-required',
+  rulesReviewPolicy = 'required',
   ignoreWorktrees = true,
   architectureContent = '- [x] Controller snapshot 是核心运行状态唯一可写真源。\n',
 } = {}) {
@@ -69,6 +70,7 @@ async function createFixture({
     baseCommit,
     commitPolicy,
     acceptancePolicy,
+    rulesReviewPolicy,
   };
   return { root, taskDir: null, workspacePath: null, task, baseCommit, architecturePath };
 }
@@ -251,11 +253,14 @@ async function writeDelivery(
     verification = 'audits.md#A1',
     generalReview = 'audits.md#A2',
     acceptance = null,
-    rulesReview = 'not-applicable',
+    rulesReview,
     upstreamRequest = null,
   } = {},
 ) {
   const hash = await taskHash(fixture);
+  const resolvedRulesReview = rulesReview === undefined
+    ? (fixture.task.rulesReviewPolicy === 'not-required' ? null : 'not-applicable')
+    : rulesReview;
   const delivery = {
     schemaVersion: 'deliver-task.delivery.v1',
     task: taskBinding(fixture, hash),
@@ -268,7 +273,7 @@ async function writeDelivery(
             verification,
             generalReview,
             acceptance,
-            rulesReview,
+            rulesReview: resolvedRulesReview,
           }
         : {
             claims: 'claims.json',
@@ -385,7 +390,7 @@ async function prepareReviewWaveDelivery(
   const target = await snapshotTarget(fixture);
   const hash = await taskHash(fixture);
   const generalScopedResult = waveOptions.general?.scopedResult ?? 'clean';
-  const rulesScopedResult = waveOptions.rules === 'not-applicable'
+  const rulesScopedResult = new Set(['not-applicable', 'not-required']).has(waveOptions.rules)
     ? null
     : (waveOptions.rules?.scopedResult ?? 'clean');
   await appendFile(
@@ -436,7 +441,11 @@ async function prepareReviewWaveDelivery(
       target,
       verification: verification ?? 'audits.md#A4',
       generalReview: reference,
-      rulesReview: rulesReview ?? (waveOptions.rules === 'not-applicable' ? 'not-applicable' : reference),
+      rulesReview: rulesReview === undefined
+        ? (waveOptions.rules === 'not-required'
+            ? null
+            : (waveOptions.rules === 'not-applicable' ? 'not-applicable' : reference))
+        : rulesReview,
     });
   } else {
     await writeDelivery(fixture, {
@@ -1004,6 +1013,12 @@ test('start 接受 exact task schema 与通用 caller，并拒绝旧字段或非
     assert.equal(result.status, 0, `${JSON.stringify(caller)}: ${result.stderr}`);
   }
 
+  for (const rulesReviewPolicy of ['required', 'not-required']) {
+    const fixture = await createFixture({ rulesReviewPolicy });
+    const result = runStart(fixture, { workspace: fixture.root });
+    assert.equal(result.status, 0, `${rulesReviewPolicy}: ${result.stderr}`);
+  }
+
   const invalidTasks = [
     (task) => ({ ...task, allowedPaths: ['src/**'], upstreamAcceptance: { status: 'not-required' } }),
     (task) => ({ ...task, caller: { kind: 'direct', ref: 'unexpected' } }),
@@ -1012,6 +1027,8 @@ test('start 接受 exact task schema 与通用 caller，并拒绝旧字段或非
     (task) => ({ ...task, caller: { kind: 'planner', ref: 'x' } }),
     (task) => Object.fromEntries(Object.entries(task).filter(([key]) => key !== 'commitPolicy')),
     (task) => Object.fromEntries(Object.entries(task).filter(([key]) => key !== 'acceptancePolicy')),
+    (task) => Object.fromEntries(Object.entries(task).filter(([key]) => key !== 'rulesReviewPolicy')),
+    (task) => ({ ...task, rulesReviewPolicy: 'auto' }),
   ];
   for (const buildTask of invalidTasks) {
     const fixture = await createFixture();
@@ -1202,6 +1219,95 @@ test('clean Review Wave 以当前 target、affected validation 和双域 scoped 
   assert.equal(result.status, 0, result.stderr);
   result = run(fixture.root, ['close-check', fixture.taskDir]);
   assert.equal(result.status, 0, result.stderr);
+});
+
+test('rulesReviewPolicy=not-required 跳过独立 Rules Review 并要求 delivery ref 为 null', async () => {
+  const fixture = await createFixture({ rulesReviewPolicy: 'not-required' });
+  const { target } = await prepareDelivered(fixture);
+  let delivery = JSON.parse(await readFile(path.join(fixture.taskDir, 'delivery.json'), 'utf8'));
+  assert.equal(delivery.evidenceRefs.rulesReview, null);
+
+  let result = run(fixture.root, ['validate-result', fixture.taskDir]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fixture.root, ['close-check', fixture.taskDir]);
+  assert.equal(result.status, 0, result.stderr);
+
+  await writeDelivery(fixture, { target, rulesReview: 'not-applicable' });
+  delivery = JSON.parse(await readFile(path.join(fixture.taskDir, 'delivery.json'), 'utf8'));
+  assert.equal(delivery.evidenceRefs.rulesReview, 'not-applicable');
+  result = run(fixture.root, ['validate-result', fixture.taskDir]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /rulesReviewPolicy not-required.*rulesReview.*null/i);
+});
+
+test('rulesReviewPolicy=required 保留 Rules Review closure，不能用 null 表示人工关闭', async () => {
+  const fixture = await createFixture();
+  const { target } = await prepareDelivered(fixture);
+  await writeDelivery(fixture, { target, rulesReview: null });
+
+  const result = run(fixture.root, ['validate-result', fixture.taskDir]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /rulesReviewPolicy required.*rulesReview.*string/i);
+});
+
+test('Review Wave rules 状态必须与 rulesReviewPolicy 一致', async () => {
+  {
+    const fixture = await createFixture();
+    await prepareReviewWaveDelivery(fixture, {
+      waveOptions: { rules: 'not-applicable' },
+    });
+    const delivery = JSON.parse(await readFile(path.join(fixture.taskDir, 'delivery.json'), 'utf8'));
+    assert.equal(delivery.evidenceRefs.rulesReview, 'not-applicable');
+    const result = run(fixture.root, ['validate-result', fixture.taskDir]);
+    assert.equal(result.status, 0, result.stderr);
+  }
+
+  {
+    const fixture = await createFixture({ rulesReviewPolicy: 'not-required' });
+    const { reference } = await prepareReviewWaveDelivery(fixture, {
+      waveOptions: { rules: 'not-required' },
+    });
+    const delivery = JSON.parse(await readFile(path.join(fixture.taskDir, 'delivery.json'), 'utf8'));
+    assert.equal(delivery.evidenceRefs.generalReview, reference);
+    assert.equal(delivery.evidenceRefs.rulesReview, null);
+    const result = run(fixture.root, ['validate-result', fixture.taskDir]);
+    assert.equal(result.status, 0, result.stderr);
+  }
+
+  for (const testCase of [
+    {
+      name: 'required rejects not-required',
+      rulesReviewPolicy: 'required',
+      rules: 'not-required',
+      deliveryRulesReview: 'not-applicable',
+    },
+    {
+      name: 'not-required rejects not-applicable',
+      rulesReviewPolicy: 'not-required',
+      rules: 'not-applicable',
+      deliveryRulesReview: null,
+    },
+    {
+      name: 'not-required rejects Rules review object',
+      rulesReviewPolicy: 'not-required',
+      rules: {
+        scopedRef: 'audits.md#A6',
+        scopedResult: 'clean',
+        fullRef: null,
+        fullResult: null,
+      },
+      deliveryRulesReview: null,
+    },
+  ]) {
+    const fixture = await createFixture({ rulesReviewPolicy: testCase.rulesReviewPolicy });
+    await prepareReviewWaveDelivery(fixture, {
+      waveOptions: { rules: testCase.rules },
+      rulesReview: testCase.deliveryRulesReview,
+    });
+    const result = run(fixture.root, ['validate-result', fixture.taskDir]);
+    assert.equal(result.status, 1, `${testCase.name} unexpectedly passed`);
+    assert.match(result.stderr, /Review Wave.*rules.*rulesReviewPolicy/i, testCase.name);
+  }
 });
 
 test('Review Wave scoped evidence 绑定 domain、mode、result 和当前 target', async () => {

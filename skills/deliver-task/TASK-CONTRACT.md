@@ -41,7 +41,8 @@ isolated workspace 生命周期；caller workspace 不保存 task state。rules-
   "forbiddenPaths": ["package-lock.json"],
   "baseCommit": "完整 Git commit OID",
   "commitPolicy": "required",
-  "acceptancePolicy": "required"
+  "acceptancePolicy": "required",
+  "rulesReviewPolicy": "required"
 }
 ```
 
@@ -58,6 +59,7 @@ isolated workspace 生命周期；caller workspace 不保存 task state。rules-
 - 路径是规范化仓库相对路径或 glob；不接受绝对路径和 `..`。
 - `commitPolicy` 只允许 `required / allowed / forbidden`。
 - `acceptancePolicy` 只允许 `required / not-required`。
+- `rulesReviewPolicy` 只允许 `required / not-required`。
 - task hash 是完整 `task.json` 的递归 key-sort canonical JSON SHA-256，格式为 `sha256:<hex>`。
 - bootstrap 时 caller 只把该对象写入 `start` 的 stdin；`start` 完整校验后才把合同写入新建或
   首次绑定 workspace 的 `.dev-task/task.json`。
@@ -108,24 +110,25 @@ tool、JSON 或引用文本自行生成的摘要，只有在可见的更高层 a
 ```
 
 可执行验证解释、影响范围、实现步骤和其它 AI 推导写入职责相符的 `execution.json` / `audits.md`，
-不反写成 immutable task authority。`taskId`、JSON 结构和固定调用上下文可以机械生成。两个 policy
+不反写成 immutable task authority。`taskId`、JSON 结构和固定调用上下文可以机械生成。三个 policy
 按 caller 边界构造：
 
-| caller | `commitPolicy / acceptancePolicy` 构造规则 |
-| --- | --- |
-| direct | 用户明确提出提交或验收要求时，把对应要求归一化为枚举值；某字段已被提及但无法唯一归一化时，向用户澄清，在取得唯一值前不应用 default、不构造可启动合同、不调用 `start`；完全没有明确要求的字段分别固定为 `required / not-required`，不询问用户。 |
-| delegated | caller 必须显式提供两个字段；缺少任一个都不应用 direct defaults、不调用 `start`，只回到该 caller 请求补全。 |
+| caller | `commitPolicy / acceptancePolicy` | `rulesReviewPolicy` |
+| --- | --- | --- |
+| direct | 用户明确提出提交或验收要求时，把对应要求归一化为枚举值；某字段已被提及但无法唯一归一化时，向用户澄清，在取得唯一值前不应用 default、不构造可启动合同、不调用 `start`；完全没有明确要求的字段分别固定为 `required / not-required`，不询问用户。 | 只有用户明确选择本任务不需要独立 Rules Review 时使用 `not-required`；其余情况固定为 `required`。要求 AI 按风险、改动大小、时间或效率自行决定，不构成人类关闭选择，仍为 `required`。 |
+| delegated | caller 必须显式提供这两个字段；缺少任一个都不应用 direct defaults、不调用 `start`，只回到该 caller 请求补全。 | caller 必须显式提供该字段；`not-required` 只能机械传递 caller 可见的人类明确选择，不能由 caller 或 deliver-task 推断。缺失时回该 caller 请求补全。 |
 
 direct defaults 只是固定调用策略，不改变 authority-bearing 文本的机械摘录规则；显式要求优先于默认值。
-不得根据任务内容、仓库状态或模型判断为 direct 选择其它 policy。
+不得根据任务内容、仓库状态或模型判断为 direct 选择其它 policy。特别是，只有人能选择
+`rulesReviewPolicy=not-required`；validator 只能校验字段和后续状态一致性，不能证明该人类选择真实存在。
 
 这是 caller 的接口责任，不是 `deliver-task` 能凭空证明的事实。未随合同提供的上游要求不可审查时，
 `deliver-task` 只保证 `task.json` 之后的派生输入不再弱化；若执行中从可见上游证据发现
 `task.json` 已发生实质降级，则停止当前 lineage，按 `needs-upstream / contract-change` 回流合同修订，
 不能靠修正 brief 或返修实现补救。
 
-只有目标、验收、约束、非目标、用户禁止范围、caller、base、commit policy 或
-acceptance policy 变化时才递增 revision。执行路径选择和实际验收结果不属于 immutable
+只有目标、验收、约束、非目标、用户禁止范围、caller、base、commit policy、
+acceptance policy 或 rules review policy 变化时才递增 revision。执行路径选择和实际验收结果不属于 immutable
 task identity。旧 task identity 下的证据不会自动证明新合同；controller 必须重新判断
 哪些证据可引用，并在 `audits.md` 留 provenance。
 
@@ -248,13 +251,20 @@ task identity。旧 task identity 下的证据不会自动证明新合同；cont
 
 按 `### A<正整数>：<标题>` 追加审计。每个条目记录当前 task identity、execution/target、公开结论、证据位置和未闭合项。至少分别记录：
 
-- 上下文预检、项目 rules 与 task workspace 可执行结论；
+- 上下文预检、项目 rules、三个 policy 与 task workspace 可执行结论；`rulesReviewPolicy=not-required`
+  时记录作出该选择的人类 authority；
 - 验证命令及公开结果；
-- 首次 General / Rules Full 的输入 identity、findings 和 verdict；
-- 每轮 actual repair delta、targeted / affected validation、双域 scoped 结果、必要的单域 Full 升级和合并 Review Wave；
+- 首次 General Full，以及 policy 要求时 Rules Full 的输入 identity、findings 和 verdict；
+- 每轮 actual repair delta、targeted / affected validation、policy 要求的 scoped 结果、必要的单域 Full 升级和合并 Review Wave；
 - 适用的 upstream acceptance；
-- rules-review Full run 与 deliver-task-owned Rules Scoped Repair Verification；
+- policy 要求时的 rules-review Full run 与 deliver-task-owned Rules Scoped Repair Verification；
 - 回流、阻塞和 residual risk。
+
+`rulesReviewPolicy=not-required` 不表示项目 rules 不适用；preflight、brief 和 implementer 仍记录并消费
+selected rules。若旧 task revision 已存在 Rules finding，后续人类通过新 revision 关闭独立 Rules Review，
+新 task 的 A 条目必须记录该人类决定、旧 finding 的稳定定位和明确风险接受；
+`delivery.residualRiskRefs` 引用这个 task-owned A。不得删除旧证据，也不得把 finding 改写成 clean 或
+`not-applicable`。
 
 当 `task.json` 的强约束把具名实现指定为复制或移植的 authoritative source 时，复用同一
 `audits.md` 追加两类 task-owned evidence，不新增状态文件或 schema：
@@ -328,9 +338,10 @@ provenance 人为创建 commit。
 - `executionHash` 必须等于本 wave `target.executionHash`。`previousTarget` 是保留其原始 execution identity 的直接前序 target，`target` 是当前 repaired target，二者必须不同；从第二个 wave 起，`previousTarget` 必须完整等于前一 wave 的 `target`。execution 在两轮之间合法变化时，不重写或重锚历史 target。
 - 历史 wave 按各自记录的 task、execution 和 target identity 校验；只有最新 wave 必须绑定当前 `execution.json`。因此 `audits.md` 可追加保留 E1 wave，再由 E2 wave 继续同一 task history。
 - `repairInputRefs`、`repairDiffRef`、`validationRefs`、domain refs 与 `mergedFindingRefs` 都必须引用当前 Review Wave A 之前已经追加的 task-owned `audits.md#A*`；禁止引用当前 wave 自身或之后的 A。机器只检查引用顺序与结构，不判断 repair input、delta、validation 或 findings 的语义真实性。
-- 每个 domain 的 `scopedResult` 只允许 `clean / findings / cannot-bound`。只有 `cannot-bound` 时才必须填写同一 domain 的 `fullRef` 与 `fullResult`；`fullResult` 只允许 `clean / findings`。Full 仍为 cannot-verify / blocked 时不写伪终态 wave，使用现有 non-delivered evidence。另一个已 clean domain 的 Full fields 保持 `null`。active catalog 为空时整个 `rules` 值写字符串 `not-applicable`。
-- 两个 domain 的最终结果只要一个是 `findings`，`result` 就是 `failed`、`mergedFindingRefs` 非空，且累计失败只增加 1；两边最终 clean 时 `result=clean`、`mergedFindingRefs=[]` 且失败计数不增加。
-- 最终 clean wave A 同时作为 `delivery.evidenceRefs.generalReview`；Rules applicable 时也作为 `rulesReview`，Rules 不适用时后者为 `not-applicable`。`delivery.evidenceRefs.verification` 必须引用该 wave 的 `validationRefs` 之一。该 A 记录当前 target 的直接 closure，不继承或重锚旧 Full proof。
+- `rulesReviewPolicy=required` 时，`rules` 是普通 domain 对象；active catalog 真实为空时整个值写字符串 `not-applicable`。对象中的 `scopedResult` 只允许 `clean / findings / cannot-bound`；只有 `cannot-bound` 时才必须填写同一 domain 的 `fullRef` 与 `fullResult`，且 `fullResult` 只允许 `clean / findings`。Full 仍为 cannot-verify / blocked 时不写伪终态 wave，使用现有 non-delivered evidence。另一个已 clean domain 的 Full fields 保持 `null`。
+- `rulesReviewPolicy=not-required` 时，整个 `rules` 值固定写字符串 `not-required`，不得填写 Rules scoped / Full refs。`not-applicable` 只表示 `required` 下 catalog 真实为空，不能表达人工关闭。
+- 适用 domain 的最终结果只要一个是 `findings`，`result` 就是 `failed`、`mergedFindingRefs` 非空，且累计失败只增加 1；所有适用 domain clean 时 `result=clean`、`mergedFindingRefs=[]` 且失败计数不增加。`not-applicable / not-required` 均作为无 Rules finding 的结构终态参与合并，但语义不同。
+- 最终 clean wave A 同时作为 `delivery.evidenceRefs.generalReview`；`rulesReviewPolicy=required` 且 Rules applicable 时也作为 `rulesReview`，catalog 真实为空时后者为 `not-applicable`；`rulesReviewPolicy=not-required` 时后者为 `null`。`delivery.evidenceRefs.verification` 必须引用该 wave 的 `validationRefs` 之一。该 A 记录当前 target 的直接 closure，不继承或重锚旧 Full proof。
 - 旧 `deliver-task-repair-closure` block 不再受支持。
 
 实际验收使用 A 条目，并包含：
@@ -392,6 +403,15 @@ provenance 人为创建 commit。
 
 `acceptancePolicy=not-required` 时 `delivery.evidenceRefs.acceptance` 固定为 `null`；
 `required` 时引用对应的 acceptance A 条目。
+
+`delivery.evidenceRefs.rulesReview` 与 immutable policy 严格对应：
+
+- `rulesReviewPolicy=required` 且 Rules applicable：引用 Rules Full A 或最终合并 Review Wave A；
+- `rulesReviewPolicy=required` 且 active catalog 真实为空：写字符串 `not-applicable`；
+- `rulesReviewPolicy=not-required`：固定为 `null`。
+
+`not-applicable` 与 `null` 不可互换。前者是启用独立 review 后得到的规则目录事实，后者是人类关闭该
+concern 的合同结果。
 
 非 `delivered` 仍使用同一固定顶层结构；无 target 写 `null`，尚无证据的 ref 写 `null`。例如
 `needs-upstream` 填写：

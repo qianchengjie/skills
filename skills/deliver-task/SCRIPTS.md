@@ -48,7 +48,7 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
 | `task-hash` | 输出已有 task state 的 canonical task hash |
 | `validate-execution` | 校验 deliver-owned `execution.json`、task binding、Architecture binding、路径和 evidence refs，并输出 canonical execution hash |
 | `snapshot-target` | 从当前 execution boundary 按 commitPolicy 输出带 execution hash 的薄 target identity |
-| `validate-result` | 校验 delivery schema、identity binding、Review Wave history/count、acceptance、non-delivered evidence 和薄结构 |
+| `validate-result` | 校验 delivery schema、identity binding、Rules Review policy 状态、Review Wave history/count、acceptance、non-delivered evidence 和薄结构 |
 | `close-check` | 对 delivered 重验 claims、evidence refs、review-wave/acceptance binding 与当前 Git target |
 
 退出码：`0` 通过，`1` 协议或门禁失败，`2` 参数/路径错误。
@@ -100,7 +100,7 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
 
 目标类型是结构格式校验、流程状态门禁、Git identity 和路径边界检查。机器可确定：
 
-- JSON exact schema、枚举、task hash 和 execution hash；
+- JSON exact schema、三个 policy 枚举、task hash 和 execution hash；
 - `execution.architecturePath` 字段存在且为 `null` 或合规绝对路径；非 null 时检查文件名、可读性，
   以及文本中显式 `[x]` 存在与 `[ ]` 缺失；
 - workspace locator 的 exact schema、task/base/branch 绑定、canonical Git root、初始 clean 状态和
@@ -114,11 +114,16 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
   identity 与最新 current execution binding；
 - scoped / Full A 的 task/execution/target/domain/mode/result exact binding、所有 wave refs 的先于
   wave 顺序、merged result、累计 failed-wave 计数与 4 次停止边界；
+- Review Wave 的 `rules` 与 `task.rulesReviewPolicy` 一致：`not-required` 只接受同名字符串，
+  `required` 拒绝该字符串并只接受 Rules domain 对象或 `not-applicable`；
+- delivered 的 `delivery.evidenceRefs.rulesReview` 与 policy 一致：`not-required` 必须为 `null`，
+  `required` 必须为非空字符串；最终 Review Wave 存在时还校验 `null / not-applicable / wave ref` 映射；
 - acceptance 的 task/target/status 显式绑定及 task-owned evidence ref 存在；
 - non-delivered request 的 kind、非空 evidence refs 及存在性；
 - delivery 没有内嵌完整证据。
 
-机器明确不检查：人是否真实确认过 `execution.architecturePath` 的 path / null 决定、Architecture 内容是否正确/完整/属于架构域、checkbox 的人工确认是否真实、当前 Task 与适用 Architecture 是否能同时满足，provided workspace 是否真实独占、目标是否正确、验收是否充分、targeted / affected
+机器明确不检查：人是否真实选择过 `rulesReviewPolicy=not-required`、该选择是否来自有权的人、
+active catalog 是否真的为空而可写 `not-applicable`、人是否真实确认过 `execution.architecturePath` 的 path / null 决定、Architecture 内容是否正确/完整/属于架构域、checkbox 的人工确认是否真实、当前 Task 与适用 Architecture 是否能同时满足，provided workspace 是否真实独占、目标是否正确、验收是否充分、targeted / affected
 validation 是否足以覆盖实际 repair delta、影响面是否可可靠限定、scoped reviewer 是否应返回
 `clean / findings / cannot-bound`、Full 升级是否语义上必要、review finding 是否正确、rules 是否适用、
 回流理由是否正确、证据强度或用户确认真实性。这些由运行环境保证，或由 controller/reviewer 裁决并

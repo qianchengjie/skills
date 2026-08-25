@@ -21,11 +21,12 @@ disable-model-invocation: true
 
 使用 [TASK-CONTRACT.md](TASK-CONTRACT.md) 的 exact task contract 作为 stdin 调用契约。
 
-- 直接调用：按合同的 source-fidelity 规则，把用户原始 authority 机械摘录成结构化合同，`caller` 固定为 `{ "kind": "direct" }`。用户明确提出的提交与验收要求先归一化为对应 policy；某个 policy 已被提及但因要求冲突或把选择留给模型而无法唯一归一化时，不视为缺失且不得使用默认值，必须向用户澄清，在得到唯一值前不构造可启动合同、不调用 `start`；任一 policy 没有明确要求时分别固定使用 `commitPolicy=required`、`acceptancePolicy=not-required`，不为缺失值询问用户，也不根据任务内容、仓库状态或模型判断选择其它值。
+- 直接调用：按合同的 source-fidelity 规则，把用户原始 authority 机械摘录成结构化合同，`caller` 固定为 `{ "kind": "direct" }`。用户明确提出的提交与验收要求先归一化为对应 policy；某个 policy 已被提及但因要求冲突或把选择留给模型而无法唯一归一化时，不视为缺失且不得使用默认值，必须向用户澄清，在得到唯一值前不构造可启动合同、不调用 `start`；没有明确要求时分别固定使用 `commitPolicy=required`、`acceptancePolicy=not-required`。`rulesReviewPolicy` 是人类所有的开关：只有 direct 用户明确选择本任务不需要独立 Rules Review 时才写 `not-required`，其余情况固定为 `required`；把选择留给模型不构成关闭授权，仍使用 `required`。不得根据任务内容、改动大小、风险、时间、成本、仓库状态或模型判断选择 `not-required`。
 - 上游委托：caller 对其实际收到的 upstream authority 负责，只传递按同一规则机械摘录的 immutable task contract，使用通用
   `{ "kind": "delegated", "name", "ref" }`；caller 不创建 task directory、不落盘 task state，
-  也不填写 `execution.json`。delegated caller 必须显式提供两个 policy；缺少任一个都不继承 direct
-  defaults、不调用 `start`，只回到该 caller 请求补全。
+  也不填写 `execution.json`。delegated caller 必须显式提供三个 policy；缺少任一个都不继承 direct
+  defaults、不调用 `start`，只回到该 caller 请求补全。`rulesReviewPolicy=not-required` 只能机械传递
+  可见的人类明确选择；caller 不能自行按风险或效率关闭。
 - deliver-task 在 preflight 后创建和维护 `execution.json`；`start` 不提前生成。
 
 `deliver-task` 不能证明未随合同提供的 upstream source fidelity；把 caller 或 AI 生成的摘要写进
@@ -98,7 +99,9 @@ workspace 已含旧 identity 时拒绝覆盖。任何 caller 状态变化都由 
    失败互不阻塞的改动，也只安排当前范围内的实现与验证，不要求拆分、不创建 tickets，也不返回粒度
    相关结果。只有合同本身、授权或用户判断需要变化时才按下一步回流。
 6. 检查是否需要改变 immutable task contract；需要时返回 `needs-upstream`。用户未提供文件清单本身不是回流条件。
-7. 在同一 preflight A 中记录允许/禁止路径、非目标、停止条件、规则读取和判断依据。
+7. 在同一 preflight A 中记录允许/禁止路径、非目标、停止条件、规则读取、三个 policy 和判断依据；
+   `rulesReviewPolicy=not-required` 时还要记录作出该选择的人类 authority。关闭独立 Rules Review 不
+   取消 controller / implementer 读取、选择和遵守适用项目 rules。
 8. 在同一 preflight A 中形成并记录“当前 task workspace 能执行本任务所需实现与验证命令”的明确
    结论和证据。该结论是 implementer 开始前的显式前置条件；未形成或仍有未闭合项时，停止在
    controller，不形成可派发 brief、不派 implementer，也不允许测试或生产代码写入。这里不规定
@@ -142,6 +145,20 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
 
 把输出原样用作 `delivery.json.target` 和本轮 review package 的 target identity。
 
+## rulesReviewPolicy
+
+这是独立 Rules Review concern 的人类开关，不是由 AI 评估风险后选择的优化项。
+
+| 值 | 行为 | `delivery.evidenceRefs.rulesReview` |
+| --- | --- | --- |
+| `required` | active catalog 非空时执行 Rules Full / repair Rules Scoped；catalog 真实为空时记录 `not-applicable` | 适用时为证据 ref；真实空 catalog 时为 `not-applicable` |
+| `not-required` | 跳过首次 Rules Full、repair Rules Scoped 和 Rules Full 升级 | `null` |
+
+- `not-applicable` 是 `required` 下 active catalog 真实为空的事实终态，不是人工关闭值，也不能用来规避 review。
+- `not-required` 只取消独立 Rules Review concern；项目 rules 仍是实现和验证输入，General Review、任务验证与 acceptance gate 均不因此削弱。
+- 修改该值就是 immutable task contract revision，不得写入或覆盖 `execution.json`。
+- 已有 Rules finding 后再由人改为 `not-required` 时，旧 finding 不得被删除、改写为 clean 或 `not-applicable`；新 revision 在 `audits.md` 记录人对已知风险的明确接受，并由 `delivery.residualRiskRefs` 引用该 task-owned A。
+
 ## 执行闭环
 
 完整执行规则见 [EXECUTION-RULES.md](EXECUTION-RULES.md)。固定顺序是：
@@ -153,11 +170,11 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
 2. controller 根据 `task.json` 语义判断是否命中具名源码的强制复制/移植要求。普通任务按 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 单次派发 fresh implementer；命中时先做 baseline-only Dispatch A 并停止，controller 对 live baseline 独立复验并在 `audits.md` 记录 accepted baseline A，再追加绑定它的 adaptation authorization A，最后才派发明确引用该 authorization 的 Dispatch B。task workspace 同时只允许一个业务文件 writer。
 3. 接收后按当前 `execution.json` 及 task/execution 两层 forbidden paths 核对实际 diff、task report 和 claims，运行任务验证；source-authoritative 分支的实现接收与验证证据继续引用 Dispatch B 的 authorization。
 4. 按 `commitPolicy` 固定 commit range、worktree snapshot 或 no-change target。
-5. 生成绑定 task、execution、target 三个 identity 的首次 review package，并把 live authoritative `task.json` 列为同 task identity 的可读 fixed input，不复制合同正文。并行派发 General Full Review，以及 active rule catalog 非空时由 `rules-review` v8 执行的 Rules Full Review；两边都是 discovery，合并 findings 后再决定 repair。首次 Full 不属于 repair Review Wave，也不消耗 failed-wave budget。
+5. 生成绑定 task、execution、target 三个 identity 的首次 review package，并把 live authoritative `task.json` 列为同 task identity 的可读 fixed input，不复制合同正文。始终派发 General Full Review；`rulesReviewPolicy=required` 时，active rule catalog 非空则并行派发由 `rules-review` v8 执行的 Rules Full Review，catalog 真实为空则 Rules 记为 `not-applicable`；`not-required` 时不派发独立 Rules Review。已派发的 Full 都是 discovery，合并 findings 后再决定 repair。首次 Full 不属于 repair Review Wave，也不消耗 failed-wave budget。
 6. General finding 进入 repair 前，controller 先按 `task.json` 与已有适用合同分流：当前状态与事件顺序下能唯一推出结果时只修复到该结果；无法唯一推出或需要新增语义、契约、授权或用户判断时直接 `needs-upstream`，不派发 repair。有可执行 finding 时再尽量把 General 与 Rules findings 合并成同一次 repair。writer 停止后固定从直接前序 target 到 live content 的实际 repair delta；controller 根据真实因果影响与既有验证契约选择 targeted / affected validation，只有无法可靠限定、涉及广泛 runtime / contract / shared behavior，或验证契约明确要求时才升级完整 validation。不得按文件类型、行数、finding 类型或“改动很小”自动分类。
-7. validation 通过后固定新 target，并按 [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md) 并行派发 General Scoped Repair Verification 与 Rules Scoped Repair Verification；不要根据 finding 来源只跑一边。active rule catalog 为空时 Rules 明确记为 `not-applicable`。任一 domain 返回 `cannot-bound` 时只把该 domain 升级 Full，保留另一 domain 已完成的 clean 结论。每个 scoped / 必要 Full 结论先以绑定 task、execution、current target、domain、mode 和 result 的 task-owned A 记录。
+7. validation 通过后固定新 target，并按 [REVIEWER-SUBAGENT.md](REVIEWER-SUBAGENT.md) 派发 repair verification。General Scoped 始终运行；`rulesReviewPolicy=required` 时还并行运行 Rules Scoped，active rule catalog 真实为空则 Rules 记为 `not-applicable`；`not-required` 时不派发 Rules reviewer，Review Wave 的 `rules` 固定写 `not-required`。适用 domain 返回 `cannot-bound` 时只把该 domain 升级 Full，保留另一 domain 已完成的 clean 结论；`not-required` 禁止 Rules Full 升级。每个实际运行的 scoped / 必要 Full 结论先以绑定 task、execution、current target、domain、mode 和 result 的 task-owned A 记录。
 8. controller 把两个 domain 的最终结果合并为一个 Review Wave；wave 的所有 refs 只能指向它之前已经追加的 A。任一 domain 有 findings，整个 wave 只失败一次并进入下一轮 repair；scoped 发现由 repair 引入的新相关 finding 也同样处理。连续累计 4 个 failed Review Waves 后停止自动 repair，由 controller adjudication / escalation；不能因预算耗尽而交付。clean wave 不增加失败计数，首次 Full discovery 也不计数。
-9. Review closure clean 后按 `acceptancePolicy` 处理 upstream acceptance；`required` 且当前 target 没有 `passed / skipped` A 条目时返回 `needs-upstream / user-acceptance`。`not-required` 只取消 upstream acceptance gate，不削弱 `acceptanceCriteria`、任务 validation、General 或适用的 Rules closure。验收结果留在 `audits.md`，不改变 task identity。
+9. Review closure clean 后按 `acceptancePolicy` 处理 upstream acceptance；`required` 且当前 target 没有 `passed / skipped` A 条目时返回 `needs-upstream / user-acceptance`。acceptance 的 `not-required` 只取消 upstream acceptance gate；Rules Review 的 `not-required` 只取消独立 Rules concern。二者都不削弱 `acceptanceCriteria`、任务 validation、General 或实现时适用的项目 rules。验收结果留在 `audits.md`，不改变 task identity。
 10. 把事实证据分别写入 `claims.json`、`audits.md`、review 工件和 rules-review run；最后只在 `delivery.json` 写引用。运行 `validate-result`；仅 `delivered` 再运行 `close-check`。
 
 任何实现、验证或 Task Review 环节如果发现完成当前 Task 必须新增或改变 Architecture，立即停止业务 writer；不以临时实现、repair finding 或扩大 allowlist 绕过。只把具体缺口或候选 Delta 路由 `$architecture-steward`，等待人确认后更新适用 binding、重新校验 execution，并 fresh 重读 Task + Execution + applicable Architecture + Rules + Codebase 再继续。binding 变化只使 execution/target/review stale；同路径 Architecture 正文变化不进入 task 或 execution hash。Task Review 仍只审查当前 Task correctness，不在 deliver-task 内新增宽视角 Architecture Review。
@@ -173,7 +190,7 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs snapshot-target <taskDir>
 - repair 明显越过原 finding 的因果范围或原 implementation boundary 时，不能用连续 scoped review 掩盖扩边：在当前 task / execution 内能够重新界定时升级受影响 domain 的 Full；需要扩大 immutable contract 或授权时回流 upstream。
 - 结构合法的负审查结论不能靠重派 reviewer 洗掉。reviewer 未返回、越界写文件或结果无法绑定输入时，同一输入最多 fresh 重派一次；这类调用故障不是 failed Review Wave。
 
-精确记录和 binding 见 [TASK-CONTRACT.md](TASK-CONTRACT.md)。`rules-review` v8 继续只负责完整 Rules discovery / Full 升级；Rules Scoped Repair Verification 是 deliver-task 自己的 reviewer 能力，不生成或伪装 v8 run。
+精确记录和 binding 见 [TASK-CONTRACT.md](TASK-CONTRACT.md)。`rulesReviewPolicy=required` 时，`rules-review` v8 继续只负责完整 Rules discovery / Full 升级；Rules Scoped Repair Verification 是 deliver-task 自己的 reviewer 能力，不生成或伪装 v8 run。`not-required` 时两者都不派发。
 
 ## 结果选择
 
@@ -208,7 +225,7 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs validate-result <taskDir>
 node <deliver-task-skill-dir>/scripts/deliver-task.mjs close-check <taskDir>
 ```
 
-其中 `delivery.evidenceRefs.acceptance` 在 `acceptancePolicy=not-required` 时为 `null`，否则引用绑定当前 target 的验收 A 条目。非 `delivered` 的 `upstreamRequest.evidenceRefs` 至少一项，且都引用存在的 task-owned evidence。
+其中 `delivery.evidenceRefs.acceptance` 在 `acceptancePolicy=not-required` 时为 `null`，否则引用绑定当前 target 的验收 A 条目。`delivery.evidenceRefs.rulesReview` 在 `rulesReviewPolicy=not-required` 时为 `null`；policy 为 `required` 时，适用 Rules 引用证据，active catalog 真实为空才写 `not-applicable`。非 `delivered` 的 `upstreamRequest.evidenceRefs` 至少一项，且都引用存在的 task-owned evidence。
 
 机器只检查 schema、task/execution/target binding、Git target、路径边界、引用存在和明确终态；不判断实现正确性、证据强度、reviewer 判断、验收理由或规则语义。命令细节见 [SCRIPTS.md](SCRIPTS.md)。
 

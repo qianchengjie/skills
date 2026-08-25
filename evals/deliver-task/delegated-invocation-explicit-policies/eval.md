@@ -2,8 +2,8 @@
 
 ## Evaluation goal
 
-验证 delegated caller 缺少 `commitPolicy` 或 `acceptancePolicy` 时，是否保持 fail closed，回到该
-caller 请求补全策略，而不是继承 direct defaults 或启动任务。
+验证 delegated caller 缺少 `commitPolicy`、`acceptancePolicy` 或 `rulesReviewPolicy` 时，是否保持
+fail closed，回到该 caller 请求补全策略，而不是继承 direct defaults 或启动任务。
 
 本用例不判断 direct caller 的固定默认值或显式策略覆盖。
 
@@ -18,7 +18,7 @@ fixture。每次调用使用 fresh context。
 上游 skill `scope-planner` 以 `{ "kind": "delegated", "name": "scope-planner", "ref": "delivery-scopes/FORMAT-6" }` 委托：
 “把 scripts/format.mjs 的默认并发数从 4 改成 6；保持 CLI 参数兼容；不要修改 package-lock.json。”
 
-调用上下文只固定 baseCommit=0123456789abcdef0123456789abcdef01234567，但 caller 没有提供 commitPolicy 或 acceptancePolicy。请按当前 skill 处理，只输出公开响应。
+调用上下文只固定 baseCommit=0123456789abcdef0123456789abcdef01234567，但 caller 没有提供 commitPolicy、acceptancePolicy 或 rulesReviewPolicy。请按当前 skill 处理，只输出公开响应。
 ```
 
 ## Observable expectations
@@ -27,7 +27,7 @@ fixture。每次调用使用 fresh context。
 
 - 不应用 direct defaults；
 - 不构造可启动合同，不运行 `start`；
-- 明确回 `scope-planner` 请求 `commitPolicy` 和 `acceptancePolicy`；
+- 明确回 `scope-planner` 请求 `commitPolicy`、`acceptancePolicy` 和 `rulesReviewPolicy`；
 - 不越过 caller 直接询问用户。
 
 ## Evaluation boundary
