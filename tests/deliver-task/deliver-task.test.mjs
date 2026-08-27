@@ -894,35 +894,113 @@ test('同 revision 合同漂移 fail closed，不创建第二个 branch 或 work
   );
 });
 
-test('更高 revision 默认建立新的确定性 branch 和 worktree', async () => {
+test('相似 taskId 的 delivery branch 不会被误认成当前 delivery', async () => {
+  const fixture = await createFixture();
+  const siblingWorkspace = await realpath(await mkdtemp(path.join(os.tmpdir(), 'deliver-task-sibling-')));
+  await rm(siblingWorkspace, { recursive: true });
+  git(fixture.root, [
+    'worktree',
+    'add',
+    '-q',
+    '-b',
+    'deliver-task/slug-whitespace-rules-r1-aaaaaaaaaaaa',
+    siblingWorkspace,
+    fixture.baseCommit,
+  ]);
+
+  const current = startTask(fixture);
+
+  assert.equal(current.task.taskId, 'slug-whitespace');
+  assert.notEqual(current.workspacePath, siblingWorkspace);
+});
+
+test('更高 revision 在同一 delivery 中复用原 worktree、branch 与 baseCommit', async () => {
   const fixture = await createFixture();
   const previous = startTask(fixture);
+  await appendFile(
+    path.join(previous.taskDir, 'audits.md'),
+    '\n### A1：旧 revision 验证事实\n\n与超时阈值无关的构建事实。\n',
+  );
+  await writeExecution(fixture);
+  await writeFile(
+    path.join(previous.workspacePath, 'src/slug.mjs'),
+    "export const slug = (value) => value.trim().toLowerCase().replace(/\\s+/g, '-');\n",
+  );
+  git(previous.workspacePath, ['add', 'src/slug.mjs']);
+  git(previous.workspacePath, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '保留已有实现']);
+  const previousTarget = await snapshotTarget(fixture);
+  await appendGeneralReview(fixture, previousTarget, { anchor: 'A2' });
+  const previousHash = await taskHash(fixture);
+  await writeVerifiedClaims(fixture, previousHash);
+  await writeDelivery(fixture, { target: previousTarget });
+  const previousClose = run(previous.workspacePath, ['close-check', previous.taskDir]);
+  assert.equal(previousClose.status, 0, previousClose.stderr);
+  const previousHead = git(previous.workspacePath, ['rev-parse', 'HEAD']);
+  const previousAudits = await readFile(path.join(previous.taskDir, 'audits.md'), 'utf8');
+  const beforeWorktrees = git(fixture.root, ['worktree', 'list', '--porcelain']);
+  const beforeBranches = git(fixture.root, ['for-each-ref', '--format=%(refname)', 'refs/heads/deliver-task']);
   fixture.task = { ...fixture.task, revision: 2, objective: '显式改变后的目标。' };
 
   const current = startTask(fixture);
 
   assert.equal(current.task.revision, 2);
-  assert.notEqual(current.workspacePath, previous.workspacePath);
-  assert.notEqual(current.branch, previous.branch);
-  assert.match(current.branch, /^refs\/heads\/deliver-task\/slug-whitespace-r2-[0-9a-f]{12}$/);
-  assert.equal(git(current.workspacePath, ['rev-parse', 'HEAD']), fixture.baseCommit);
-  assert.equal(JSON.parse(await readFile(path.join(previous.taskDir, 'task.json'), 'utf8')).revision, 1);
+  assert.equal(current.workspacePath, previous.workspacePath);
+  assert.equal(current.branch, previous.branch);
+  assert.equal(current.baseCommit, fixture.baseCommit);
+  assert.equal(git(current.workspacePath, ['rev-parse', 'HEAD']), previousHead);
+  assert.equal(git(fixture.root, ['worktree', 'list', '--porcelain']), beforeWorktrees);
+  assert.equal(
+    git(fixture.root, ['for-each-ref', '--format=%(refname)', 'refs/heads/deliver-task']),
+    beforeBranches,
+  );
+  assert.equal(JSON.parse(await readFile(path.join(current.taskDir, 'task.json'), 'utf8')).revision, 2);
+  assert.equal(await readFile(path.join(current.taskDir, 'audits.md'), 'utf8'), previousAudits);
+  const currentClaims = JSON.parse(await readFile(path.join(current.taskDir, 'claims.json'), 'utf8'));
+  assert.equal(currentClaims.task.revision, 2);
+  assert.deepEqual(currentClaims.claims, []);
+  const currentClose = run(current.workspacePath, ['close-check', current.taskDir]);
+  assert.equal(currentClose.status, 1);
+  assert.match(currentClose.stderr, /stale task binding|missing or unreadable/i);
 });
 
-test('provided workspace 已含旧 identity 时拒绝 higher revision 且不覆盖旧状态', async () => {
+test('provided workspace 的 higher revision 复用当前 delivery 且保留旧 evidence', async () => {
   const fixture = await createFixture();
   const previous = startTask(fixture, { workspace: fixture.root });
   await appendFile(path.join(previous.taskDir, 'audits.md'), '\n### A1：旧证据\n\n保留。\n');
-  const beforeTask = await readFile(path.join(previous.taskDir, 'task.json'), 'utf8');
   const beforeAudits = await readFile(path.join(previous.taskDir, 'audits.md'), 'utf8');
   const next = { ...fixture.task, revision: 2, objective: '新 revision。' };
 
-  const result = runStart(fixture, { task: next, workspace: fixture.root });
+  const current = startTask(fixture, { task: next, workspace: fixture.root });
 
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /provided workspace.*existing task identity/i);
-  assert.equal(await readFile(path.join(previous.taskDir, 'task.json'), 'utf8'), beforeTask);
+  assert.equal(current.workspacePath, previous.workspacePath);
+  assert.equal(current.branch, previous.branch);
+  assert.equal(current.baseCommit, fixture.baseCommit);
+  assert.equal(current.task.revision, 2);
+  assert.equal(JSON.parse(await readFile(path.join(previous.taskDir, 'task.json'), 'utf8')).revision, 2);
   assert.equal(await readFile(path.join(previous.taskDir, 'audits.md'), 'utf8'), beforeAudits);
+});
+
+test('delivery lineage 的 baseCommit 变化时建立新的 branch 和 worktree', async () => {
+  const fixture = await createFixture();
+  const previous = startTask(fixture);
+  await writeFile(path.join(fixture.root, 'src/slug.mjs'), "export const slug = () => 'new-base';\n");
+  git(fixture.root, ['add', 'src/slug.mjs']);
+  git(fixture.root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', '建立新 delivery 基线']);
+  const nextBaseCommit = git(fixture.root, ['rev-parse', 'HEAD']);
+  fixture.task = {
+    ...fixture.task,
+    revision: 2,
+    objective: '基于新 delivery lineage 的目标。',
+    baseCommit: nextBaseCommit,
+  };
+
+  const current = startTask(fixture);
+
+  assert.notEqual(current.workspacePath, previous.workspacePath);
+  assert.notEqual(current.branch, previous.branch);
+  assert.equal(current.baseCommit, nextBaseCommit);
+  assert.equal(git(current.workspacePath, ['rev-parse', 'HEAD']), nextBaseCommit);
+  assert.equal(JSON.parse(await readFile(path.join(previous.taskDir, 'task.json'), 'utf8')).revision, 1);
 });
 
 test('已有 branch/worktree 但证明缺失或不完整时拒绝恢复', async () => {
@@ -950,6 +1028,20 @@ test('已有 branch/worktree 但证明缺失或不完整时拒绝恢复', async 
     assert.equal(result.status, 1);
     assert.match(result.stderr, /proof state.*incomplete|claims\.json.*missing/i);
     await assert.rejects(access(path.join(output.taskDir, 'claims.json')));
+  }
+
+  {
+    const fixture = await createFixture();
+    const output = startTask(fixture);
+    await writeFile(path.join(output.taskDir, 'task.json'), '{broken-json\n');
+    const next = { ...fixture.task, revision: 2, objective: '不得绕过损坏的旧 delivery。' };
+    const beforeWorktrees = git(fixture.root, ['worktree', 'list', '--porcelain']);
+
+    const result = runStart(fixture, { task: next });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /proof state.*incomplete|task\.json.*valid JSON/i);
+    assert.equal(git(fixture.root, ['worktree', 'list', '--porcelain']), beforeWorktrees);
   }
 });
 

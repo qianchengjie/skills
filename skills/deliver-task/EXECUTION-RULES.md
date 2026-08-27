@@ -16,9 +16,9 @@ schema、完整 `baseCommit`、repo 和 provided workspace，再原子初始化
 Git ignore；脚本不修改 ignore 配置，未命中时 fail closed。
 
 exact identity 且 `.dev-task/` 完整时幂等返回，不重写证据。同 revision 合同漂移、已有
-branch/worktree 但证明缺失或不完整、provided workspace 已有旧 identity 时 fail closed；不能从
-commits、branch、聊天摘要或外部 registry 恢复证明。higher revision 的默认模式从同一 base
-建立新 branch/worktree。
+branch/worktree 但证明缺失或不完整时 fail closed；不能从 commits、branch、聊天摘要或外部
+registry 恢复证明。同一 delivery 的 higher revision 原位更新当前合同，继续使用当前 worktree、
+branch 与固定 `baseCommit`；只有 delivery lineage 真正变化时才建立新 worktree。
 
 task workspace 建立后使用 snapshot-at-start 语义：caller workspace 后续出现 dirty、修改
 同一逻辑文件、产生新 commit 或切换分支，都不改变当前 base、execution、target 或已有
@@ -97,6 +97,11 @@ controller 在 `artifacts/task-brief.md` 只收束当前 task/execution identity
 upstream authority 表明 `task.json` 已被弱化，则停止当前执行，按 `needs-upstream / contract-change`
 回流。Architecture 未闭合或当前 Task 必须改变 Architecture 时，不修改业务文件，只路由
 `$architecture-steward`；人确认后在同一 task/worktree 更新并重新校验 execution。
+
+contract revision 后不得对旧 revision 的 implementer 使用 follow-up；controller 必须在新合同下重做
+preflight 并派发 fresh implementer。旧 review / validation evidence 保留为可审计输入，但不自动证明
+新 revision，也不自动全量作废；controller 按新合同重新判定每项 evidence，只对证据缺口补充或重跑，
+并在当前 `audits.md` 记录引用与判断依据。
 
 Implementer 的上述读取与 blocked 能力只是 writer 侧 fail-safe，不能替代 controller preflight 的
 compatibility check，也不能作为“先派发、再判断”的理由。

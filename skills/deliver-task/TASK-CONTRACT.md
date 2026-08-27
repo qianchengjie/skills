@@ -127,13 +127,15 @@ direct defaults 只是固定调用策略，不改变 authority-bearing 文本的
 
 这是 caller 的接口责任，不是 `deliver-task` 能凭空证明的事实。未随合同提供的上游要求不可审查时，
 `deliver-task` 只保证 `task.json` 之后的派生输入不再弱化；若执行中从可见上游证据发现
-`task.json` 已发生实质降级，则停止当前 lineage，按 `needs-upstream / contract-change` 回流合同修订，
+`task.json` 已发生实质降级，则停止当前 writer，按 `needs-upstream / contract-change` 回流合同修订，
 不能靠修正 brief 或返修实现补救。
 
 只有目标、验收、约束、非目标、用户禁止范围、caller、base、commit policy、acceptance policy、
 rules review policy 或 initial repair policy 变化时才递增 revision。一次具体 repair 决定、执行路径
-选择和实际验收结果不属于 immutable task identity。旧 task identity 下的证据不会自动证明新合同；controller 必须重新判断
-哪些证据可引用，并在 `audits.md` 留 provenance。
+选择和实际验收结果不属于 immutable task identity。普通 contract revision 只改变 authority，不改变
+当前 delivery 的 workspace identity 或固定 `baseCommit`。旧 task identity 下的证据不会自动证明新合同，
+也不自动全量作废；controller 必须按新合同重新判断哪些证据可继续引用、哪些需要补充或重跑，并在
+`audits.md` 留 provenance。
 
 ## artifacts/workspace.json
 
@@ -169,8 +171,8 @@ rules review policy 或 initial repair policy 变化时才递增 revision。一�
   可移植交付 identity，也不形成 workspace revision、历史链或状态机。
 - exact identity 且 `.dev-task/` 完整时 `start` 幂等返回，不重写 locator 或其它证据。同 revision
   只改变 task hash 时拒绝，防止绕过 revision 规则静默换合同。
-- higher revision 在默认模式建立新的确定性 branch/worktree；provided workspace 已含旧
-  identity 时拒绝覆盖，旧状态继续归其 owner。
+- 同一 delivery 的 higher revision 继续绑定当前 worktree、branch 与 `baseCommit`；只有 delivery
+  lineage 真正变化时才建立新的 workspace。
 - branch/worktree 已存在但 `.dev-task/`、locator 或其它初始证明状态缺失、不完整时 fail
   closed；不按 branch 重新发现并补写 locator，也不根据 commits 或摘要恢复证明。
 - `.dev-task/.gitignore` 内容固定为 `*`。正常状态不进入 Git；被强制暂存或提交时仍由 target

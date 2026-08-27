@@ -8,6 +8,8 @@ disable-model-invocation: true
 
 ## 第一原则
 
+> **Contract revision changes authority, not workspace identity.**
+
 在 task-scoped isolated workspace 中完成 caller 定义的交付范围，返回一个交付结果；不接管 caller 的生命周期，也不负责把结果集成回 caller workspace。
 
 - caller 通过目标、验收、约束和用户禁止范围定义完整交付边界；调用策略由 upstream 显式值或适用的 direct defaults 确定。`task.json` 是 deliver-task 内的 authoritative Task contract，不是 upstream authority 的授权证明；其中承载 authority 的文本必须按 [TASK-CONTRACT.md](TASK-CONTRACT.md) 从可见 upstream authority 机械摘录。`execution.json.architecturePath` 是本次实现与后续 Architecture Review 共用的 Architecture Authority binding；implementer 按其 path / null 终态消费适用输入，派生 brief 不能覆盖或弱化 Task、Execution 或适用 Architecture。
@@ -34,7 +36,8 @@ disable-model-invocation: true
 `deliver-task` 不能证明未随合同提供的 upstream source fidelity；把 caller 或 AI 生成的摘要写进
 `task.json` 也不会使它自动获得 upstream authority。只有可见的更高层 authority 明确委托某个中间
 载体承载相应决定时，caller 才能从该载体摘录。若执行中从可见 upstream evidence 发现合同本身已
-弱化，按 contract revision 回流，不继续当前实现 lineage。
+弱化，停止当前 writer 并按 contract revision 回流；普通 revision 仍属于当前 delivery，不改变
+workspace identity。
 
 启动前按以下优先级选择 workspace，命中后停止：
 
@@ -71,8 +74,11 @@ implementer、生成 target 或进入实现、验证、review、delivery 闭环�
 
 exact identity 且 `.dev-task/` 完整时 `start` 幂等返回，不重写证据。同 revision 合同漂移，或
 已有 task branch/worktree 但 `.dev-task/` 缺失、不完整时 fail closed；不得根据 commits、branch、
-聊天摘要或重建 locator 推断历史证明。higher revision 默认建立新的 branch/worktree；provided
-workspace 已含旧 identity 时拒绝覆盖。任何 caller 状态变化都由 caller 在收到结果后决定。
+聊天摘要或重建 locator 推断历史证明。同一 delivery 的普通 higher revision 继续使用当前
+worktree、branch 与固定 `baseCommit`，停止旧 writer，并在新合同 preflight 闭合后派发 fresh
+implementer。旧 review / validation evidence 不自动证明新 revision，也不自动全量作废；controller
+按新合同重新判定哪些 evidence 可继续引用，只对未闭合部分补证或重跑。只有 delivery lineage 真正
+变化时才建立新 worktree。任何 caller 状态变化都由 caller 在收到结果后决定。
 
 ## 开始前判断
 
@@ -205,7 +211,7 @@ input；不控制 clean closure，也不用于 repair 后的 Review Wave。
 - Review Wave history 可跨合法的 execution 更新追加：历史 wave 保留并校验自身 execution/target identity，下一 wave 的 `previousTarget` 完整等于前一 wave 的 `target`，只有最新 wave 绑定当前 `execution.json`。不得为了当前 execution 重写旧 wave 或 target。
 - `repairInputRefs`、repair diff、validation、scoped / Full 结果和 merged findings 都必须在 wave A 之前存在；禁止当前 wave 自证或引用未来 A。scoped / Full ref 还必须匹配同一 current target、domain、mode 和 result。
 - 最多允许 4 个 failed Review Waves。第 4 次失败后不再自动修改业务文件；controller 根据现有 result taxonomy 选择 `blocked`，或在确需改变合同、授权、边界或用户判断时选择 `needs-upstream`，并保留当前证据引用。
-- 安全返修优先复用原 implementer；目标、验收、公共契约、用户禁止范围、调用策略或 claims 契约实质变化时停止并回流。
+- 安全返修优先复用原 implementer；目标、验收、公共契约、用户禁止范围、调用策略或 claims 契约实质变化时停止并回流。contract revision 恢复执行后必须派发 fresh implementer，不对旧 revision 的 implementer 使用 follow-up。
 - repair 明显越过原 finding 的因果范围或原 implementation boundary 时，不能用连续 scoped review 掩盖扩边：在当前 task / execution 内能够重新界定时升级受影响 domain 的 Full；需要扩大 immutable contract 或授权时回流 upstream。
 - 结构合法的负审查结论不能靠重派 reviewer 洗掉。reviewer 未返回、越界写文件或结果无法绑定输入时，同一输入最多 fresh 重派一次；这类调用故障不是 failed Review Wave。
 

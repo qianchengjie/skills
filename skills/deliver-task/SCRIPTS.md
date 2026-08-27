@@ -44,7 +44,7 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
 
 | 命令 | 作用 |
 | --- | --- |
-| `start` | 校验 stdin 合同，创建或绑定 isolated workspace，并原子初始化 `.dev-task/` |
+| `start` | 校验 stdin 合同，创建或绑定 isolated workspace，并初始化或更新当前 delivery 的 `.dev-task/` |
 | `task-hash` | 输出已有 task state 的 canonical task hash |
 | `validate-execution` | 校验 deliver-owned `execution.json`、task binding、Architecture binding、路径和 evidence refs，并输出 canonical execution hash |
 | `snapshot-target` | 从当前 execution boundary 按 commitPolicy 输出带 execution hash 的薄 target identity |
@@ -66,8 +66,8 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
 - exact identity 且上述状态完整时幂等返回，不重写证据。同 revision 合同漂移，或 task
   branch/worktree 已存在但证明状态缺失、不完整时 fail closed，不从 commit、branch、摘要或
   locator 推断历史证明。
-- 默认模式的 higher revision 创建新 branch/worktree。provided workspace 已存在任何其它
-  task identity 时拒绝覆盖。
+- 同一 `taskId + baseCommit` 的 higher revision 复用当前 branch/worktree；只有该 delivery identity
+  变化时才建立新 workspace。provided workspace 已属于另一 delivery 时拒绝覆盖。
 - 失败只回滚本次创建的 `.dev-task/`、worktree 和 branch。provided workspace 的原有内容、
   既有 worktree 和既有 branch 不删除。
 - provided workspace 首次绑定必须属于同一 Git repository、`HEAD == task.baseCommit` 且业务区

@@ -514,11 +514,16 @@ async function gitCommonDir(root) {
   return fs.realpath(absolute);
 }
 
-function taskRevisionRefs(root, task) {
-  const prefix = `refs/heads/deliver-task/${task.taskId}-r${task.revision}-`;
+function isTaskDeliveryRef(reference, task) {
+  const prefix = `refs/heads/deliver-task/${task.taskId}-r`;
+  return reference?.startsWith(prefix)
+    && /^\d+-[0-9a-f]{12}$/.test(reference.slice(prefix.length));
+}
+
+function taskDeliveryRefs(root, task) {
   return git(root, ['for-each-ref', '--format=%(refname)', 'refs/heads'])
     .split(/\r?\n/)
-    .filter((reference) => reference.startsWith(prefix));
+    .filter((reference) => isTaskDeliveryRef(reference, task));
 }
 
 function outputForStart(record) {
@@ -567,7 +572,7 @@ async function readCompleteTaskState(workspaceRoot, task) {
   }
 }
 
-async function findTaskRevisionWorkspace(repoRoot, task) {
+async function findTaskWorkspace(repoRoot, task) {
   const matches = [];
   for (const worktree of registeredWorktrees(repoRoot)) {
     if (!worktree.workspacePath) continue;
@@ -577,7 +582,15 @@ async function findTaskRevisionWorkspace(repoRoot, task) {
       workspaceRoot = await fs.realpath(worktree.workspacePath);
       source = await fs.readFile(path.join(workspaceRoot, '.dev-task', 'task.json'), 'utf8');
     } catch (error) {
-      if (error.code === 'ENOENT') continue;
+      if (
+        error.code === 'ENOENT'
+        && !isTaskDeliveryRef(worktree.branch, task)
+      ) {
+        continue;
+      }
+      if (error.code === 'ENOENT') {
+        throw gateError('task delivery branch exists but its live task proof state is missing');
+      }
       throw gateError(`cannot inspect live task proof state: ${error.message}`);
     }
 
@@ -585,13 +598,18 @@ async function findTaskRevisionWorkspace(repoRoot, task) {
     try {
       candidate = JSON.parse(source);
     } catch {
+      if (isTaskDeliveryRef(worktree.branch, task)) {
+        throw gateError('task proof state is incomplete: task.json must contain valid JSON');
+      }
       continue;
     }
     if (
       !isPlainObject(candidate) ||
-      candidate.taskId !== task.taskId ||
-      candidate.revision !== task.revision
+      candidate.taskId !== task.taskId
     ) {
+      if (isTaskDeliveryRef(worktree.branch, task)) {
+        throw gateError('task proof state is incomplete: task branch does not match task.json');
+      }
       continue;
     }
 
@@ -601,14 +619,22 @@ async function findTaskRevisionWorkspace(repoRoot, task) {
     } catch (error) {
       throw gateError(`task proof state is incomplete: ${error.message}`);
     }
-    if (canonicalJson(existingTask) !== canonicalJson(task)) {
-      throw gateError('same revision contract drift detected; increment task.revision');
+    if (existingTask.revision === task.revision) {
+      if (canonicalJson(existingTask) !== canonicalJson(task)) {
+        throw gateError('same revision contract drift detected; increment task.revision');
+      }
+      matches.push({ workspaceRoot, task: existingTask });
+      continue;
     }
-    matches.push(workspaceRoot);
+    if (existingTask.baseCommit !== task.baseCommit) continue;
+    if (existingTask.revision > task.revision) {
+      throw gateError('task revision is older than the live delivery revision');
+    }
+    matches.push({ workspaceRoot, task: existingTask });
   }
 
   if (matches.length > 1) {
-    throw gateError('multiple live workspaces contain the same task identity');
+    throw gateError('multiple live workspaces contain the same task delivery');
   }
   if (matches.length === 1) return matches[0];
 
@@ -622,13 +648,47 @@ async function findTaskRevisionWorkspace(repoRoot, task) {
     if (workspaceRoot === repoRoot) {
       throw gateError('task branch is checked out in the source workspace without isolated proof state');
     }
-    return workspaceRoot;
+    return { workspaceRoot, task };
   }
 
-  if (taskRevisionRefs(repoRoot, task).length > 0) {
-    throw gateError('same revision contract drift detected; increment task.revision');
+  for (const deliveryRef of taskDeliveryRefs(repoRoot, task)) {
+    if (!worktreePathForBranch(repoRoot, deliveryRef)) {
+      throw gateError('task delivery branch exists but its live task proof workspace is missing');
+    }
   }
   return null;
+}
+
+async function reviseTaskState(workspaceRoot, existingTask, task) {
+  if (existingTask.taskId !== task.taskId || existingTask.baseCommit !== task.baseCommit) {
+    throw gateError('contract revision must stay in the current task delivery');
+  }
+  if (task.revision <= existingTask.revision) {
+    throw gateError('contract revision must increase task.revision');
+  }
+
+  await readCompleteTaskState(workspaceRoot, existingTask);
+  const taskDir = path.join(workspaceRoot, '.dev-task');
+  const context = await resolveContext(taskDir);
+  const record = await readJson(workspaceRecordPath(context), 'artifacts/workspace.json');
+  const revisedRecord = { ...record, task: bindingForTask(task) };
+  await validateWorkspaceRecord(revisedRecord, task, workspaceRoot);
+
+  await writeJson(path.join(taskDir, 'claims.json'), {
+    schemaVersion: CLAIMS_SCHEMA,
+    task: bindingForTask(task),
+    claims: [],
+  });
+  await writeJson(workspaceRecordPath(context), revisedRecord);
+  await writeJson(path.join(taskDir, 'task.json'), task);
+  return readCompleteTaskState(workspaceRoot, task);
+}
+
+async function continueTaskState(binding, task) {
+  if (canonicalJson(binding.task) === canonicalJson(task)) {
+    return readCompleteTaskState(binding.workspaceRoot, task);
+  }
+  return reviseTaskState(binding.workspaceRoot, binding.task, task);
 }
 
 async function writeInitialTaskState(workspaceRoot, task, record) {
@@ -689,13 +749,12 @@ async function startWithProvidedWorkspace(repoRoot, task, providedPath) {
     throw gateError('provided workspace must belong to the same Git repository');
   }
 
-  const boundWorkspace = await findTaskRevisionWorkspace(repoRoot, task);
-  if (boundWorkspace !== null) {
-    const output = await readCompleteTaskState(boundWorkspace, task);
-    if (boundWorkspace !== workspaceRoot) {
+  const binding = await findTaskWorkspace(repoRoot, task);
+  if (binding !== null) {
+    if (binding.workspaceRoot !== workspaceRoot) {
       throw gateError('task identity is already bound to another live workspace');
     }
-    return output;
+    return continueTaskState(binding, task);
   }
 
   const taskDir = path.join(workspaceRoot, '.dev-task');
@@ -748,8 +807,8 @@ async function startWithProvidedWorkspace(repoRoot, task, providedPath) {
 }
 
 async function startWithManagedWorkspace(repoRoot, task) {
-  const existingWorkspace = await findTaskRevisionWorkspace(repoRoot, task);
-  if (existingWorkspace) return readCompleteTaskState(existingWorkspace, task);
+  const binding = await findTaskWorkspace(repoRoot, task);
+  if (binding) return continueTaskState(binding, task);
 
   const shortBranch = workspaceBranch(task);
   const branch = `refs/heads/${shortBranch}`;
