@@ -68,8 +68,10 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
   locator 推断历史证明。
 - 同一 `taskId + baseCommit` 的 higher revision 复用当前 branch/worktree；只有该 delivery identity
   变化时才建立新 workspace。provided workspace 已属于另一 delivery 时拒绝覆盖。
-- 失败只回滚本次创建的 `.dev-task/`、worktree 和 branch。provided workspace 的原有内容、
-  既有 worktree 和既有 branch 不删除。
+- higher revision 更新 task、claims 与 workspace binding 前先安装临时恢复快照；任一写入失败时回滚
+  完整旧 revision，进程中断遗留的恢复标记会在下一次 `start` 读取 live task state 前完成回滚。
+- 首次 bootstrap 失败只回滚本次创建的 `.dev-task/`、worktree 和 branch。provided workspace 的
+  原有内容、既有 worktree 和既有 branch 不删除。
 - provided workspace 首次绑定必须属于同一 Git repository、`HEAD == task.baseCommit` 且业务区
   干净；它可以来自 caller、当前 harness linked worktree 或 harness 原生机制。运行环境负责保证
   它真实独占，机器不推断这一语义事实。
@@ -110,8 +112,9 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
 - execution allowlist、两层 forbidden path 和 `.dev-task/` 写边界；
 - claim 明确终态与 evidence ref 存在；
 - General 的 task/execution/target 显式绑定；
-- Review Wave 的 exact block、连续 wave 编号、跨 execution 的直接前序/当前 target chain、历史自身
-  identity 与最新 current execution binding；
+- 当前 revision Review Wave 的 exact block、连续 wave 编号、跨 execution 的直接前序/当前 target
+  chain、历史自身 identity 与最新 current execution binding；旧 revision wave 只校验 task binding
+  分代边界，并排除在当前 chain、failed-wave count 与 closure 之外；
 - scoped / Full A 的 task/execution/target/domain/mode/result exact binding、所有 wave refs 的先于
   wave 顺序、merged result、累计 failed-wave 计数与 4 次停止边界；
 - Review Wave 的 `rules` 与 `task.rulesReviewPolicy` 一致：`not-required` 只接受同名字符串，

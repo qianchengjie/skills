@@ -134,8 +134,9 @@ direct defaults 只是固定调用策略，不改变 authority-bearing 文本的
 rules review policy 或 initial repair policy 变化时才递增 revision。一次具体 repair 决定、执行路径
 选择和实际验收结果不属于 immutable task identity。普通 contract revision 只改变 authority，不改变
 当前 delivery 的 workspace identity 或固定 `baseCommit`。旧 task identity 下的证据不会自动证明新合同，
-也不自动全量作废；controller 必须按新合同重新判断哪些证据可继续引用、哪些需要补充或重跑，并在
-`audits.md` 留 provenance。
+也不自动全量作废；controller 可以把按新合同重新判断后仍成立的测试输出、日志与事实材料带 provenance
+作为当前输入，只对其缺口补充或重跑。旧 General / Rules verdict 及其 task/execution/target closure
+binding 不能替代当前 revision 自己的 Initial Discovery。
 
 ## artifacts/workspace.json
 
@@ -353,9 +354,9 @@ provenance 人为创建 commit。
 ```
 ````
 
-- `wave` 从 1 连续递增；`failedWaveCount` 是截至本 wave 的累计 failed Review Wave 数。首次 Full discovery 不写这个 block，也不进入计数。前一 wave 已累计 4 次失败时不得再出现下一自动 wave。
+- `wave` 在同一 task revision 内从 1 连续递增；`failedWaveCount` 是截至本 revision 当前 wave 的累计 failed Review Wave 数。首次 Full discovery 不写这个 block，也不进入计数。当前 revision 前一 wave 已累计 4 次失败时不得再出现下一自动 wave。
 - `executionHash` 必须等于本 wave `target.executionHash`。`previousTarget` 是保留其原始 execution identity 的直接前序 target，`target` 是当前 repaired target，二者必须不同；从第二个 wave 起，`previousTarget` 必须完整等于前一 wave 的 `target`。execution 在两轮之间合法变化时，不重写或重锚历史 target。
-- 历史 wave 按各自记录的 task、execution 和 target identity 校验；只有最新 wave 必须绑定当前 `execution.json`。因此 `audits.md` 可追加保留 E1 wave，再由 E2 wave 继续同一 task history。
+- 同一 task revision 的历史 wave 按各自记录的 task、execution 和 target identity 校验；只有该 revision 的最新 wave 必须绑定当前 `execution.json`。因此 `audits.md` 可追加保留 E1 wave，再由 E2 wave 继续同一 revision history。task revision 变化后，旧 revision wave 保留为历史但不进入当前 wave chain、`failedWaveCount` 或 closure；当前 revision 从 `wave=1` 重新计数。
 - `repairInputRefs`、`repairDiffRef`、`validationRefs`、domain refs 与 `mergedFindingRefs` 都必须引用当前 Review Wave A 之前已经追加的 task-owned `audits.md#A*`；禁止引用当前 wave 自身或之后的 A。机器只检查引用顺序与结构，不判断 repair input、delta、validation 或 findings 的语义真实性。
 - `rulesReviewPolicy=required` 时，`rules` 是普通 domain 对象；active catalog 真实为空时整个值写字符串 `not-applicable`。对象中的 `scopedResult` 只允许 `clean / findings / cannot-bound`；只有 `cannot-bound` 时才必须填写同一 domain 的 `fullRef` 与 `fullResult`，且 `fullResult` 只允许 `clean / findings`。Full 仍为 cannot-verify / blocked 时不写伪终态 wave，使用现有 non-delivered evidence。另一个已 clean domain 的 Full fields 保持 `null`。
 - `rulesReviewPolicy=not-required` 时，整个 `rules` 值固定写字符串 `not-required`，不得填写 Rules scoped / Full refs。`not-applicable` 只表示 `required` 下 catalog 真实为空，不能表达人工关闭。

@@ -30,8 +30,10 @@ Subject 使用待测版本的 `skills/deliver-task/` package。Harness 只替换
   业务提交和原 `baseCommit`，不创建或切换 worktree；
 - 停止旧 revision 的 writer，在新合同 preflight 闭合后派发 fresh implementer，不对旧 implementer
   使用 follow-up；
-- 保留旧 review / validation evidence，由 controller 按 45 秒的新合同逐项重新判定：仍有证明力的
-  evidence 可以带 provenance 继续引用，受影响或不足的部分才补证或重跑；
+- 保留旧 review / validation evidence，由 controller 按 45 秒的新合同逐项重新判定：仍成立的测试
+  输出、日志与事实材料可以带 provenance 作为当前输入，受影响或不足的事实部分才补证或重跑；
+- 旧 General / Rules verdict 及其旧 task/execution/target binding 不能满足 revision 2 的 closure；
+  revision 2 仍按固定闭环运行自己的 General Full 与 policy 要求的 Rules branch；
 - 明确旧 evidence 不能自动证明 revision 2，也不能因为 revision 变化而机械全量作废。
 
 以下任一公开可观察行为使本次调用失败：

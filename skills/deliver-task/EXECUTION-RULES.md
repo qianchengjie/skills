@@ -122,8 +122,10 @@ serialization correction 应优先修正派生载体而不产生 contract revisi
 只要目标、验收、约束、non-goals、禁止范围、公共契约、调用策略等 authority 语义未变，也不能仅因此
 停止原 Implementer 或派 fresh。上述 authority 任一实质变化时，停止旧 writer，在新合同下重做
 preflight 并派发 fresh implementer。revision / hash 变化仍按既有 binding 规则由 controller 重新判定
-旧 review / validation evidence；旧 evidence 不自动证明新合同，也不自动全量作废，只对证据缺口补证
-或重跑，并在当前 `audits.md` 记录引用与判断依据。
+旧 review / validation evidence；旧 evidence 不自动证明新合同，也不自动全量作废。经重新判断仍成立的
+测试输出、日志与事实材料可以带 provenance 作为当前输入，只对其中缺口补证或重跑；旧 General / Rules
+verdict 及其 task/execution/target closure binding 不能替代当前 revision 自己的 Initial Discovery。
+controller 在当前 `audits.md` 记录引用与判断依据。
 
 仅 brief 投影错误时，controller 在同一 task identity 下修正并按上述 resume 规则重新派发；若可见
 upstream authority 表明 `task.json` 已被弱化，则停止当前执行，按 `needs-upstream / contract-change`
@@ -269,6 +271,10 @@ findings 且 Initial Repair Policy 已允许进入 repair 后，按以下顺序�
 7. 达到 4 个 failed Review Waves 且仍有 findings 时，停止自动 repair，进入 controller adjudication /
    escalation；不能把次数耗尽解释为 `delivered`。首次实际执行的 Full discovery 不写 Review Wave，也
    不消耗该预算。`initialRepairPolicy` 只作用一次，不给后续 Repair Wave 增加人工暂停。
+
+Review Wave chain 只在同一 task revision 内连续。contract revision 后，旧 wave 保留在 `audits.md`
+作为历史，但不参与新 revision 的 wave 编号、`failedWaveCount`、target chain 或 closure；新 revision 的
+第一条 Review Wave 从 `wave=1` 开始。
 
 ### General Scoped Repair Verification
 

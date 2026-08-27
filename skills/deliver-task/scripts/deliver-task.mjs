@@ -20,6 +20,7 @@ const ACCEPTANCE_RESULTS = new Set(['passed', 'skipped', 'rejected']);
 const SCOPED_REVIEW_RESULTS = new Set(['clean', 'findings', 'cannot-bound']);
 const FULL_REVIEW_RESULTS = new Set(['clean', 'findings']);
 const REVIEW_WAVE_RESULTS = new Set(['clean', 'failed']);
+const REVISION_TRANSACTION_NAME = '.revision-transaction';
 const UPSTREAM_KINDS = new Set([
   'target-change',
   'acceptance-change',
@@ -188,6 +189,74 @@ async function optionalLstat(target) {
     return await fs.lstat(target);
   } catch (error) {
     if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function replaceFileFromSnapshot(snapshotPath, destinationPath) {
+  const restoreDir = await fs.mkdtemp(
+    path.join(path.dirname(destinationPath), '.revision-restore-'),
+  );
+  const restorePath = path.join(restoreDir, path.basename(destinationPath));
+  try {
+    await fs.copyFile(snapshotPath, restorePath);
+    await fs.rename(restorePath, destinationPath);
+  } finally {
+    await fs.rm(restoreDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function recoverRevisionTransaction(taskDir, expectedTaskId = null) {
+  const transactionDir = path.join(taskDir, REVISION_TRANSACTION_NAME);
+  const transactionState = await optionalLstat(transactionDir);
+  if (transactionState === null) return false;
+  if (!transactionState.isDirectory() || transactionState.isSymbolicLink()) {
+    throw gateError('revision transaction recovery state must be a real directory');
+  }
+
+  const oldTaskPath = path.join(transactionDir, 'old-task.json');
+  const oldTask = await readJson(oldTaskPath, 'revision transaction old-task.json');
+  if (expectedTaskId !== null && oldTask.taskId !== expectedTaskId) return false;
+  const snapshots = [
+    [oldTaskPath, path.join(taskDir, 'task.json')],
+    [path.join(transactionDir, 'old-claims.json'), path.join(taskDir, 'claims.json')],
+    [
+      path.join(transactionDir, 'old-workspace.json'),
+      path.join(taskDir, 'artifacts', 'workspace.json'),
+    ],
+  ];
+  for (const [snapshotPath] of snapshots) {
+    const state = await optionalLstat(snapshotPath);
+    if (state === null || !state.isFile() || state.isSymbolicLink()) {
+      throw gateError('revision transaction recovery state is incomplete');
+    }
+  }
+  for (const [snapshotPath, destinationPath] of snapshots) {
+    await replaceFileFromSnapshot(snapshotPath, destinationPath);
+  }
+  await fs.rm(transactionDir, { recursive: true });
+  return true;
+}
+
+async function stageRevisionTransaction(taskDir) {
+  const transactionDir = path.join(taskDir, REVISION_TRANSACTION_NAME);
+  if (await optionalLstat(transactionDir)) {
+    throw gateError('revision transaction recovery must complete before a new revision');
+  }
+  const stagingDir = await fs.mkdtemp(
+    path.join(taskDir, `${REVISION_TRANSACTION_NAME}.tmp-`),
+  );
+  try {
+    await fs.copyFile(path.join(taskDir, 'task.json'), path.join(stagingDir, 'old-task.json'));
+    await fs.copyFile(path.join(taskDir, 'claims.json'), path.join(stagingDir, 'old-claims.json'));
+    await fs.copyFile(
+      path.join(taskDir, 'artifacts', 'workspace.json'),
+      path.join(stagingDir, 'old-workspace.json'),
+    );
+    await fs.rename(stagingDir, transactionDir);
+    return transactionDir;
+  } catch (error) {
+    await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
     throw error;
   }
 }
@@ -580,6 +649,10 @@ async function findTaskWorkspace(repoRoot, task) {
     let source;
     try {
       workspaceRoot = await fs.realpath(worktree.workspacePath);
+      await recoverRevisionTransaction(
+        path.join(workspaceRoot, '.dev-task'),
+        task.taskId,
+      );
       source = await fs.readFile(path.join(workspaceRoot, '.dev-task', 'task.json'), 'utf8');
     } catch (error) {
       if (
@@ -673,14 +746,27 @@ async function reviseTaskState(workspaceRoot, existingTask, task) {
   const record = await readJson(workspaceRecordPath(context), 'artifacts/workspace.json');
   const revisedRecord = { ...record, task: bindingForTask(task) };
   await validateWorkspaceRecord(revisedRecord, task, workspaceRoot);
-
-  await writeJson(path.join(taskDir, 'claims.json'), {
+  const revisedClaims = {
     schemaVersion: CLAIMS_SCHEMA,
     task: bindingForTask(task),
     claims: [],
-  });
-  await writeJson(workspaceRecordPath(context), revisedRecord);
-  await writeJson(path.join(taskDir, 'task.json'), task);
+  };
+  const transactionDir = await stageRevisionTransaction(taskDir);
+  try {
+    await writeJson(path.join(taskDir, 'claims.json'), revisedClaims);
+    await writeJson(workspaceRecordPath(context), revisedRecord);
+    await writeJson(path.join(taskDir, 'task.json'), task);
+    await fs.rm(transactionDir, { recursive: true });
+  } catch (error) {
+    try {
+      await recoverRevisionTransaction(taskDir);
+    } catch (recoveryError) {
+      throw gateError(
+        `cannot revise task state: ${error.message}; recovery failed: ${recoveryError.message}`,
+      );
+    }
+    throw gateError(`cannot revise task state: ${error.message}`);
+  }
   return readCompleteTaskState(workspaceRoot, task);
 }
 
@@ -1564,14 +1650,24 @@ async function validateReviewWaveHistory(context, task, execution) {
   if (allBlocks.length !== records.length) {
     throw gateError('each deliver-task-review-wave block must be inside one audits.md A entry');
   }
-  if (records.length > 0 && execution === null) {
+  const currentRecords = records.filter(({ record, entry }) => {
+    validateBindingShape(record?.task, `${entry.reference} Review Wave.task`);
+    if (record.task.taskId !== task.taskId) {
+      throw gateError(`${entry.reference} Review Wave belongs to a different taskId`);
+    }
+    if (record.task.revision > task.revision) {
+      throw gateError(`${entry.reference} Review Wave belongs to a future task revision`);
+    }
+    return record.task.revision === task.revision;
+  });
+  if (currentRecords.length > 0 && execution === null) {
     throw gateError('Review Wave history requires delivery.target and execution.json binding');
   }
   const reviewHistory = { entriesByRef };
   const validated = [];
   let failedWaveCount = 0;
   let previousWaveTarget = null;
-  for (const [index, { record, entry }] of records.entries()) {
+  for (const [index, { record, entry }] of currentRecords.entries()) {
     const result = validateReviewWave(
       record,
       task,

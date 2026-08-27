@@ -80,9 +80,10 @@ worktree、branch 与固定 `baseCommit`。projection / serialization correction
 产生 contract revision；revision / metadata 变化本身也不是派发 fresh Implementer 的充分条件。只有
 目标、验收、约束、non-goals、禁止范围、公共契约、调用策略等 Task authority 实质变化时，才停止旧
 writer，并在新合同 preflight 闭合后派发 fresh implementer。旧 review / validation evidence 不自动
-证明新 revision，也不自动全量作废；controller 按新合同重新判定哪些 evidence 可继续引用，只对未闭合
-部分补证或重跑。只有 delivery lineage 真正变化时才建立新 worktree。任何 caller 状态变化都由 caller
-在收到结果后决定。
+证明新 revision，也不自动全量作废；可继续引用的是 controller 按新合同重新判定过的测试输出、日志与
+事实材料，不是旧 General / Rules verdict 或旧 task/execution/target closure binding。当前 revision 仍执行
+自己的 Initial Discovery，只对事实材料的缺口补证或重跑。只有 delivery lineage 真正变化时才建立新
+worktree。任何 caller 状态变化都由 caller 在收到结果后决定。
 
 ## 开始前判断
 
@@ -216,7 +217,7 @@ input；不控制 clean closure，也不用于 repair 后的 Review Wave。
 
 - 首次 discovery finding 先通过 Initial Discovery JOIN 与 `initialRepairPolicy`；获准进入 repair 后，以及后续 General Review、验证、用户拒收或项目规则 finding 触发返修时，先把失败依据写入 `audits.md`，再刷新 brief。用户拒收但 immutable task contract 未变化时保持同一 task identity；返修形成新 target 后旧验收证据自然失效。
 - 每个 repair target 只形成一个合并 Review Wave；General / Rules scoped、某个 domain 的 Full 升级、reviewer 调用或 finding 数量都不单独计次。wave 只有合并后仍有 finding 时才让 `failedWaveCount + 1`。
-- Review Wave history 可跨合法的 execution 更新追加：历史 wave 保留并校验自身 execution/target identity，下一 wave 的 `previousTarget` 完整等于前一 wave 的 `target`，只有最新 wave 绑定当前 `execution.json`。不得为了当前 execution 重写旧 wave 或 target。
+- 同一 task revision 的 Review Wave history 可跨合法的 execution 更新追加：历史 wave 保留并校验自身 execution/target identity，下一 wave 的 `previousTarget` 完整等于前一 wave 的 `target`，只有最新 wave 绑定当前 `execution.json`。task revision 变化时开始新的 wave chain，`wave` 与 `failedWaveCount` 从当前 revision 独立计算；旧 revision wave 只保留为历史，不进入当前 closure。不得为了当前 execution 或 revision 重写旧 wave 或 target。
 - `repairInputRefs`、repair diff、validation、scoped / Full 结果和 merged findings 都必须在 wave A 之前存在；禁止当前 wave 自证或引用未来 A。scoped / Full ref 还必须匹配同一 current target、domain、mode 和 result。
 - 最多允许 4 个 failed Review Waves。第 4 次失败后不再自动修改业务文件；controller 根据现有 result taxonomy 选择 `blocked`，或在确需改变合同、授权、边界或用户判断时选择 `needs-upstream`，并保留当前证据引用。
 - 安全返修优先复用原 implementer；controller 先刷新职责相符的 durable repair inputs / brief，再用完整

@@ -3,6 +3,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import {
   access,
   appendFile,
+  chmod,
+  copyFile,
   mkdtemp,
   mkdir,
   readFile,
@@ -980,6 +982,70 @@ test('provided workspace 的 higher revision 复用当前 delivery 且保留旧 
   assert.equal(await readFile(path.join(previous.taskDir, 'audits.md'), 'utf8'), beforeAudits);
 });
 
+test('revision 写入任一步失败后恢复完整旧 task state', async () => {
+  for (const failurePath of ['claims.json', 'artifacts/workspace.json', 'task.json']) {
+    const fixture = await createFixture();
+    const previous = startTask(fixture);
+    await appendFile(
+      path.join(previous.taskDir, 'audits.md'),
+      '\n### A1：旧 revision evidence\n\n保留。\n',
+    );
+    const taskPath = path.join(previous.taskDir, 'task.json');
+    const claimsPath = path.join(previous.taskDir, 'claims.json');
+    const workspacePath = path.join(previous.taskDir, 'artifacts/workspace.json');
+    const beforeTask = await readFile(taskPath, 'utf8');
+    const beforeClaims = await readFile(claimsPath, 'utf8');
+    const beforeWorkspace = await readFile(workspacePath, 'utf8');
+    await chmod(path.join(previous.taskDir, failurePath), 0o400);
+    const next = { ...fixture.task, revision: 2, objective: '新的 revision。' };
+
+    const result = runStart(fixture, { task: next });
+
+    assert.equal(result.status, 1, `${failurePath} failure unexpectedly succeeded`);
+    assert.equal(await readFile(taskPath, 'utf8'), beforeTask);
+    assert.equal(await readFile(claimsPath, 'utf8'), beforeClaims);
+    assert.equal(await readFile(workspacePath, 'utf8'), beforeWorkspace);
+    await assert.rejects(access(path.join(previous.taskDir, '.revision-transaction')));
+    const resumed = runStart(fixture);
+    assert.equal(resumed.status, 0, resumed.stderr);
+  }
+});
+
+test('start 在读取 mixed state 前恢复未完成的 revision transaction', async () => {
+  const fixture = await createFixture();
+  const previous = startTask(fixture);
+  const taskPath = path.join(previous.taskDir, 'task.json');
+  const claimsPath = path.join(previous.taskDir, 'claims.json');
+  const workspacePath = path.join(previous.taskDir, 'artifacts/workspace.json');
+  const beforeTask = await readFile(taskPath, 'utf8');
+  const beforeClaims = await readFile(claimsPath, 'utf8');
+  const beforeWorkspace = await readFile(workspacePath, 'utf8');
+  const transactionDir = path.join(previous.taskDir, '.revision-transaction');
+  await mkdir(transactionDir);
+  await copyFile(taskPath, path.join(transactionDir, 'old-task.json'));
+  await copyFile(claimsPath, path.join(transactionDir, 'old-claims.json'));
+  await copyFile(workspacePath, path.join(transactionDir, 'old-workspace.json'));
+  const mixedBinding = {
+    taskId: fixture.task.taskId,
+    revision: 2,
+    taskHash: `sha256:${'a'.repeat(64)}`,
+  };
+  const mixedClaims = JSON.parse(beforeClaims);
+  mixedClaims.task = mixedBinding;
+  const mixedWorkspace = JSON.parse(beforeWorkspace);
+  mixedWorkspace.task = mixedBinding;
+  await writeFile(claimsPath, `${JSON.stringify(mixedClaims, null, 2)}\n`);
+  await writeFile(workspacePath, `${JSON.stringify(mixedWorkspace, null, 2)}\n`);
+
+  const result = runStart(fixture);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(await readFile(taskPath, 'utf8'), beforeTask);
+  assert.equal(await readFile(claimsPath, 'utf8'), beforeClaims);
+  assert.equal(await readFile(workspacePath, 'utf8'), beforeWorkspace);
+  await assert.rejects(access(transactionDir));
+});
+
 test('delivery lineage 的 baseCommit 变化时建立新的 branch 和 worktree', async () => {
   const fixture = await createFixture();
   const previous = startTask(fixture);
@@ -1593,6 +1659,94 @@ test('历史 Review Wave 保留自身 execution identity，只有最终 wave 绑
   });
 
   let result = run(fixture.root, ['validate-result', fixture.taskDir]);
+  assert.equal(result.status, 0, result.stderr);
+  result = run(fixture.root, ['close-check', fixture.taskDir]);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('旧 revision Review Wave 保留为历史且不参与新 revision closure', async () => {
+  const fixture = await createFixture();
+  await prepareReviewWaveDelivery(fixture, {
+    waveOptions: {
+      failedWaveCount: 1,
+      general: {
+        scopedRef: 'audits.md#A5',
+        scopedResult: 'findings',
+        fullRef: null,
+        fullResult: null,
+      },
+      mergedFindingRefs: ['audits.md#A5'],
+      result: 'failed',
+    },
+    deliveryResult: 'blocked',
+  });
+  let result = run(fixture.root, ['validate-result', fixture.taskDir]);
+  assert.equal(result.status, 0, result.stderr);
+
+  fixture.task = {
+    ...fixture.task,
+    revision: 2,
+    acceptanceCriteria: ['slug("  Hello   World  ") 在新合同下返回 "hello-world"。'],
+  };
+  startTask(fixture);
+  await appendFile(
+    path.join(fixture.taskDir, 'audits.md'),
+    '\n### A8：revision 2 preflight\n\n新合同执行边界已闭合。\n',
+  );
+  await writeExecution(fixture, { evidenceRefs: ['audits.md#A8'] });
+  const previousTarget = await snapshotTarget(fixture);
+  await appendGeneralReview(fixture, previousTarget, { anchor: 'A9' });
+  await writeFile(
+    path.join(fixture.workspacePath, 'src/slug.mjs'),
+    "export const slug = (value) => value.trim().toLowerCase().replace(/\\s+/g, '-');\n",
+  );
+  const target = await snapshotTarget(fixture);
+  const hash = await taskHash(fixture);
+  await appendFile(
+    path.join(fixture.taskDir, 'audits.md'),
+    '\n### A10：revision 2 repair diff\n\nfixed.\n\n### A11：revision 2 validation\n\npassed.\n',
+  );
+  await appendReviewResult(fixture, target, {
+    anchor: 'A12',
+    domain: 'general',
+    mode: 'scoped',
+    result: 'clean',
+  });
+  await appendReviewResult(fixture, target, {
+    anchor: 'A13',
+    domain: 'rules',
+    mode: 'scoped',
+    result: 'clean',
+  });
+  const currentWave = await appendReviewWave(fixture, previousTarget, target, {
+    anchor: 'A14',
+    repairInputRefs: ['audits.md#A9'],
+    repairDiffRef: 'audits.md#A10',
+    validationRefs: ['audits.md#A11'],
+    general: {
+      scopedRef: 'audits.md#A12',
+      scopedResult: 'clean',
+      fullRef: null,
+      fullResult: null,
+    },
+    rules: {
+      scopedRef: 'audits.md#A13',
+      scopedResult: 'clean',
+      fullRef: null,
+      fullResult: null,
+    },
+  });
+  await writeVerifiedClaims(fixture, hash, [currentWave.reference]);
+  await writeDelivery(fixture, {
+    target,
+    verification: 'audits.md#A11',
+    generalReview: currentWave.reference,
+    rulesReview: currentWave.reference,
+  });
+
+  const audits = await readFile(path.join(fixture.taskDir, 'audits.md'), 'utf8');
+  assert.equal([...audits.matchAll(/```deliver-task-review-wave/g)].length, 2);
+  result = run(fixture.root, ['validate-result', fixture.taskDir]);
   assert.equal(result.status, 0, result.stderr);
   result = run(fixture.root, ['close-check', fixture.taskDir]);
   assert.equal(result.status, 0, result.stderr);
