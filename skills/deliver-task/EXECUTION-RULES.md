@@ -26,9 +26,16 @@ evidence。不得在执行中自动 refresh base、同步文件、rebase、merge
 读取“更新版本”。upstream 明确要求吸收新基线时，按 immutable task contract change 回流，
 不能偷偷更新当前任务。
 
-`start` 只建立 task workspace 与 task proof bootstrap；它成功不表示 task workspace 已可执行。
-Architecture 决定或 task workspace 可执行结论任一未闭合时，不得形成可派发执行上下文、派
-implementer、生成 target 或进入实现闭环。
+`start` 只建立 task workspace 与 task proof bootstrap；它成功不表示 execution 已有效、项目 setup
+已完成或任何验证已经通过。Architecture 决定未闭合时，不得形成有效 execution、派 implementer、
+生成 target 或进入实现闭环。
+
+Task / Execution validity、Architecture closure / compatibility、rule applicability 与 claims bootstrap
+闭合后，项目已经明确提供 setup 命令时由 controller 直接在 task workspace 执行；没有明确 setup 时
+不推断通用命令。setup 与缺少已声明依赖、test runner 暂不可用等可恢复环境问题属于普通执行：使用
+项目既有机制恢复并重跑，不形成 readiness state、readiness evidence、readiness closure 或独立
+dispatch eligibility。恢复要求改变 immutable task contract、授权或用户判断时才回流；现有边界内
+持续且不可恢复时才 `blocked`。
 
 `execution.architecturePath` 非 null 时是上述 caller workspace 隔离的唯一显式只读例外。后续各阶段
 读取该路径的当前内容，而不从 task worktree 的同名副本重建。语义变更必须由
@@ -60,7 +67,6 @@ Architecture；冲突闭合后 fresh 重做 preflight。null 分支不搜索 Arc
 - 人明确确认的 `architecturePath` path / null 决定；非 null 时记录已直接读取及当前无 `[ ]` 事实，
   不复制 Architecture 正文；
 - path 分支的 Task ↔ Architecture compatibility 结论及判断依据；
-- 当前 task workspace 能执行本任务所需实现与验证命令的明确结论、task-owned evidence 和未闭合项；
 - `commitPolicy`、`acceptancePolicy`、`rulesReviewPolicy`、`initialRepairPolicy`、baseCommit 和 caller；
 - `rulesReviewPolicy=not-required` 时作出该选择的人类 authority；该值不取消项目 rules 的读取、
   execution-time applicability 分类或 implementer 的遵守义务；
@@ -76,28 +82,21 @@ upstream artifact 的数量和结构都不是拆分信号。
 
 preflight 依据写入 `audits.md` 后，由 controller 创建当前 `execution.json`；caller 和 implementer 都不填写。用户没有提供文件清单时，controller 仍应根据真实代码、直接消费者、相邻测试和项目规则建立最小完整 allowlist。`execution.evidenceRefs` 引用本次判断依据，并运行 `validate-execution` 后才生成 brief。
 
-task workspace 可执行是 implementer 开始前独立于 `start`、Architecture closure 和
-`validate-execution` 的显式前置条件。只有 controller 已在 preflight A 中形成明确结论并记录
-task-owned evidence，才可把 brief 变为可派发输入；缺少结论、证据或仍有未闭合项时，停在
-controller，不派 implementer，也不允许测试或生产代码写入。`start` 成功、workspace clean、
-`validate-execution` 通过、源码或 lockfile 存在、时间压力都不能替代该结论。本规则只定义前置门禁，
-暂不规定 setup/readiness 的发现、执行、判断或恢复机制，也不引入新 schema、状态文件或脚本命令。
-
 controller 同时直接阅读 `task.json` 的完整语义，判断它是否以强制复制、移植或等价方式把具名实现指定为 authoritative source。该判断属于合同解释，由 controller 结合目标、验收、约束和代码上下文负责；不得用 `must / copy / reuse` 等关键词扫描器代替。没有命中时继续普通单次派发，不能要求普通任务携带 mapping、snapshot 或 authorization。
 
 ## 实现派发
 
-controller 在 `artifacts/task-brief.md` 只收束当前 task/execution identity、preflight、已解析路径、claims、验证、selected rules、本轮修复依据、task workspace 可执行结论与 task-owned evidence 引用，并引用 authoritative `task.json` 与 `execution.json`；不复制 Architecture 正文，不把目标、验收或约束重新摘要成可独立执行的合同副本。只有该结论已明确闭合并可由 brief 定位证据时，才创建默认 blocked 的 task report 并派发 implementer。
+controller 在 `artifacts/task-brief.md` 只收束当前 task/execution identity、preflight、已解析路径、claims、验证、selected rules、本轮修复依据与 task-owned evidence 引用，并引用 authoritative `task.json` 与 `execution.json`；不复制 Architecture 正文，不把目标、验收或约束重新摘要成可独立执行的合同副本。随后创建默认 blocked 的 task report 并派发 implementer。
 
-Task / Execution validity、Architecture closure / compatibility、workspace readiness、claims bootstrap、rule
-applicability classification、audit evidence 与 dispatch eligibility 都由 controller 负责。Implementer 负责
+Task / Execution validity、Architecture closure / compatibility、claims bootstrap、rule applicability
+classification 与 audit evidence 都由 controller 负责。Implementer 负责
 实现理解、TDD、代码修改、范围内验证，以及直接输入冲突、实现中新 authority 缺口和路径越界的 writer-side
 fail-safe；不能用该 fail-safe 替代 controller preflight，也不能“先派发、再判断”。
 
 fresh 派发提供绝对 `taskDir` 与 `workspacePath`，要求 implementer 完整读取当前 `task.json`、
 `execution.json`、`artifacts/task-brief.md`、适用 Architecture、项目 rules、相关源码与测试，但不要求其
-展开 brief 中 controller-owned proof / evidence refs 来重建 identity、claims、readiness、Architecture
-closure / compatibility、rule applicability 或 dispatch eligibility。proof refs 默认只用于 provenance；
+展开 brief 中 controller-owned proof / evidence refs 来重建 identity、claims、Architecture
+closure / compatibility 或 rule applicability。proof refs 默认只用于 provenance；
 只有 controller 明确指出某个 ref 包含实现所需事实时才读取。
 
 resume 原 Implementer 时，controller 先更新职责相符的 durable input 与 brief，再在
@@ -149,6 +148,12 @@ baseline `cannot-verify` 时不创建 authorization，也不派发 Dispatch B。
 接收门禁失败时先记录依据。实际 diff 已越界时不得事后回填 allowlist 使该轮通过。若所需扩边仍在 immutable task contract 内，controller 先记录原因、更新 `execution.json`、重新校验并重新派发；不创建新 task revision。命中 task 用户禁止范围或要求改变 immutable task contract 时才 `needs-upstream`。
 
 ## 验证与 target
+
+TDD 的 RED 必须是测试已经真实运行，并因目标行为尚未实现而出现预期失败。`command not found`、缺少
+已声明依赖、权限 / 配置错误、test collection 失败等环境或工具错误都不是 RED；先使用项目既有 setup
+与已声明依赖恢复环境，再由原 Implementer 重跑同一测试。可恢复失败不创建新的生命周期状态或换 writer；
+恢复要求改变 immutable task contract、授权或用户判断时才回流，现有边界内持续且不可恢复时才
+`blocked`。
 
 首次实现执行 task 指定验证及由变更直接触发的 focused lint/type/test/build。Review repair 后先在唯一 writer 停止时固定实际 repair delta，再由 controller 按因果影响、直接消费者、边界与既有验证契约选择 targeted / affected validation。只有影响无法可靠限定、修改涉及广泛 runtime / contract / shared behavior，或验证契约明确要求时才升级完整 validation。文件类型、修改行数、finding 来源或“改动很小”都不能替代该语义判断。每条命令、状态、摘要、选择依据和证据写 `audits.md`；不得把一条 `validate passed` 当作语义正确或整体收口。validation 若改写业务内容，原 delta 和 target 尚未冻结，必须重新核对实际 delta 后再验证。
 

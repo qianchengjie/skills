@@ -69,8 +69,8 @@ worktree。`.worktrees/` 必须已被 Git ignore；脚本不修改 ignore 配置
 其中 `taskDir == <workspacePath>/.dev-task`，`workspacePath` 是后续 preflight、实现、验证、提交、
 review 和收口的唯一业务工作目录。不得继续从 caller workspace 读取业务代码。
 
-`start` 成功只表示 task workspace 与 task proof bootstrap 已建立，不表示 task workspace 已经可执行。
-Architecture 决定或 task workspace 可执行结论任一未闭合时，不得形成可派发执行上下文、派
+`start` 成功只表示 task workspace 与 task proof bootstrap 已建立，不表示 execution 已有效、项目
+setup 已完成或任何验证已经通过。Architecture 决定未闭合时，不得形成有效 execution、派
 implementer、生成 target 或进入实现、验证、review、delivery 闭环。
 
 exact identity 且 `.dev-task/` 完整时 `start` 幂等返回，不重写证据。同 revision 合同漂移，或
@@ -114,17 +114,13 @@ writer，并在新合同 preflight 闭合后派发 fresh implementer。旧 revie
 7. 在同一 preflight A 中记录允许/禁止路径、非目标、停止条件、规则读取、四个 policy 和判断依据；
    `rulesReviewPolicy=not-required` 或 `initialRepairPolicy=auto` 时还要记录作出该选择的人类 authority。
    关闭独立 Rules Review 不取消 controller / implementer 读取、选择和遵守适用项目 rules。
-8. 在同一 preflight A 中形成并记录“当前 task workspace 能执行本任务所需实现与验证命令”的明确
-   结论和证据。该结论是 implementer 开始前的显式前置条件；未形成或仍有未闭合项时，停止在
-   controller，不形成可派发 brief、不派 implementer，也不允许测试或生产代码写入。这里不规定
-   setup/readiness 的具体发现、执行、判断或恢复机制，也不新增状态字段、文件或脚本命令。
-9. 根据上述真实上下文创建包含必填 `architecturePath` 的当前 `execution.json`，运行：
+8. 根据上述真实上下文创建包含必填 `architecturePath` 的当前 `execution.json`，运行：
 
 ```bash
 node <deliver-task-skill-dir>/scripts/deliver-task.mjs validate-execution <taskDir>
 ```
 
-10. 在 `claims.json` 写当前任务要证明的 claims；不得提前声明验证、General Review、rules-review 或 close-check 已通过。
+9. 在 `claims.json` 写当前任务要证明的 claims；不得提前声明验证、General Review、rules-review 或 close-check 已通过。
 
 同一授权目标内需要调整执行路径或 Architecture binding 时，先取得适用的人类决定并追加审计依据，
 再原地更新 `execution.json`；`null → path`、`path A → path B` 和 `path → null` 只改变 execution hash，
@@ -191,12 +187,15 @@ input；不控制 clean closure，也不用于 repair 后的 Review Wave。
 
 完整执行规则见 [EXECUTION-RULES.md](EXECUTION-RULES.md)。固定顺序是：
 
-1. 只在 preflight A 已记录并闭合 task workspace 可执行结论后，生成引用 `task.json` 与
-   `execution.json` 的派生 `artifacts/task-brief.md` 和默认 blocked 的 `artifacts/task-report.json`；
-   brief 必须携带该结论及 task-owned evidence 引用。fresh implementer 完整读取当前 Task、Execution、
-   brief、适用 Architecture、Rules、相关源码与测试，但不主动展开 controller-owned proof refs；resume
-   原 implementer 时，controller 用完整 `Reread / Unchanged` 声明指定刷新输入，声明不完整或有歧义
-   就 fail-safe 回完整 implementation-input reread，Implementer 不自行发现 delta。
+1. Task / Execution validity、Architecture closure / compatibility、rule applicability 与 claims bootstrap
+   闭合后，项目已经明确提供 setup 命令时由 controller 直接在 task workspace 执行；没有明确 setup 时
+   不推断通用命令。缺少已声明依赖、test runner 暂不可用等可恢复环境问题按普通执行失败处理：使用
+   项目既有机制恢复并重跑，不创建 readiness state、readiness evidence、readiness closure 或独立
+   dispatch eligibility。随后生成引用 `task.json` 与 `execution.json` 的派生
+   `artifacts/task-brief.md` 和默认 blocked 的 `artifacts/task-report.json`。fresh implementer 完整读取当前
+   Task、Execution、brief、适用 Architecture、Rules、相关源码与测试，但不主动展开 controller-owned
+   proof refs；resume 原 implementer 时，controller 用完整 `Reread / Unchanged` 声明指定刷新输入，声明
+   不完整或有歧义就 fail-safe 回完整 implementation-input reread，Implementer 不自行发现 delta。
 2. controller 根据 `task.json` 语义判断是否命中具名源码的强制复制/移植要求。普通任务按 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 单次派发 fresh implementer；命中时先做 baseline-only Dispatch A 并停止，controller 对 live baseline 独立复验并在 `audits.md` 记录 accepted baseline A，再追加绑定它的 adaptation authorization A，最后才派发明确引用该 authorization 的 Dispatch B。task workspace 同时只允许一个业务文件 writer。
 3. 接收后按当前 `execution.json` 及 task/execution 两层 forbidden paths 核对实际 diff、task report 和 claims，运行任务验证；source-authoritative 分支的实现接收与验证证据继续引用 Dispatch B 的 authorization。
 4. 按 `commitPolicy` 固定 commit range、worktree snapshot 或 no-change target。

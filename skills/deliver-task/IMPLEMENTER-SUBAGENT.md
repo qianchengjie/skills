@@ -31,8 +31,8 @@ execution.json + applicable Architecture > task-brief.md`。controller 同时提
 ## 开始前
 
 controller 只应在 Task / Execution validity、Task ↔ Architecture compatibility、Architecture closure、
-rule applicability、claims bootstrap、task workspace readiness、audit evidence 与 dispatch eligibility
-都已闭合后派发。Implementer 不主动重建这些 controller-owned proof，也不为复核 preflight 展开
+rule applicability、claims bootstrap 与 audit evidence 都已闭合后派发。Implementer 不主动重建这些
+controller-owned proof，也不为复核 preflight 展开
 `task-brief.md` 中的 evidence refs；这些引用默认只提供 provenance。只有 controller 明确指出某个 ref
 包含实现所需事实时，才 focused 读取该 ref。
 
@@ -55,7 +55,12 @@ path 分支的 Architecture 不可读、出现 `[ ]`，或任一分支在完成�
 
 ## 实现
 
-在现有边界内做最小完整实现，补直接相关测试，运行 brief 指定验证。只能修复自己本轮直接造成的验证失败；需要越界时先停止。
+在现有边界内按 TDD 做最小完整实现，补直接相关测试，运行 brief 指定验证。只有测试已经真实运行，并因
+目标行为尚未实现而出现预期失败，才形成 RED；`command not found`、缺少已声明依赖、权限 / 配置错误、
+test collection 失败等环境或工具错误都不是 RED。先使用项目既有 setup 与已声明依赖恢复并重跑，保持
+当前 Implementer 上下文，不新增 lifecycle state。恢复要求修改未授权文件、增加未获授权的依赖、改变
+immutable task contract、授权或用户判断时 blocked 回 controller；现有边界内持续且不可恢复时也如实
+blocked。只能修复自己本轮直接造成的业务验证失败；需要越界时先停止。
 
 若 controller 明确本任务进入具名源码的 source-authoritative 分支，还必须遵守本轮阶段：
 

@@ -16,8 +16,8 @@ node <deliver-task-skill-dir>/scripts/deliver-task.mjs start <repo> - --workspac
 
 `start` 在创建任何状态前校验 repo、stdin `deliver-task.task.v1` exact schema、完整 `baseCommit` 和
 provided workspace。它只建立 task workspace 与 task proof bootstrap；成功不表示 execution 已有效或
-task workspace 已可执行，`validate-execution` 通过也不形成可执行性结论。该结论由 controller 按
-执行规则在 implementer 派发前明确记录；脚本不探测或准备项目运行环境。成功时固定输出：
+任何项目验证已通过。脚本不探测或准备项目运行环境；项目已有 setup 与可恢复环境问题按普通执行处理，
+不新增 readiness 状态或命令。成功时固定输出：
 
 ```json
 {
