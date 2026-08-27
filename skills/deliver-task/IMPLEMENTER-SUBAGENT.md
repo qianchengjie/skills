@@ -5,7 +5,10 @@ fresh 派发直接读取 controller 指定的当前 `task.json`、`execution.jso
 `ARCHITECTURE.md`，并按当前范围读取适用项目 rules、相关源码与测试。resume 原 Implementer 时，只
 重读 controller 在 `followup_task.message` 的完整 `Reread / Unchanged` 声明中标为 `Reread` 的
 当前 implementation inputs；声明缺失、不完整、有歧义，或 controller 无法确定任一当前输入是否变化
-时，退化为 fresh 的完整 implementation-input reread。不要自行比较文件、hash 或引用来发现 delta。
+时，退化为与 fresh 派发等价的完整 implementation-input reread，但不因此更换原 Implementer。适用
+Architecture 被声明为 `Unchanged` 时沿用
+已有 mental model，不重新打开文件；它的 resume live gate 已由 controller 完成。不要自行比较文件、
+hash 或引用来发现 delta。
 
 `task.json` 是 authoritative Task contract，`execution.json` 是本轮执行上下文，适用的
 `ARCHITECTURE.md` 是架构域第一真源，brief 只是派生执行上下文，优先级固定为 `task.json +
@@ -36,20 +39,24 @@ controller-owned proof，也不为复核 preflight 展开
 `task-brief.md` 中的 evidence refs；这些引用默认只提供 provenance。只有 controller 明确指出某个 ref
 包含实现所需事实时，才 focused 读取该 ref。
 
-先确认 `workspacePath` / `taskDir` 定位没有明显错误，Task、Execution、brief 与适用 Architecture 可读，
-再从当前 implementation inputs 理解目标、验收、非目标、允许/禁止路径、selected rules、本轮修复依据
-与实现边界。path 分支直接读完 Architecture，并在写代码前建立本 Task 相关的 owner、状态真源、模块
-边界、public boundary 与依赖方向 mental model；null 分支不发现或补造 Architecture。若已读输入之间
-存在直接语义冲突、本轮说明遗漏适用义务、实现中发现新的 authority 缺口，或完成 Task 必须越过允许 /
-禁止边界，在修改相关业务文件前 blocked 回 controller。仅 brief 投影错误时由 controller 在同一 task
-identity 下修正；若可见 upstream authority 表明 `task.json` 本身已弱化，则停止并要求 controller 走
-contract revision。局部事实可 focused 只读查证；合同或授权缺口不能自行补。
+先确认 `workspacePath` / `taskDir` 定位没有明显错误，且本轮要求读取的 Task、Execution、brief 与适用
+Architecture 可读，再从当前 implementation inputs 理解目标、验收、非目标、允许/禁止路径、selected
+rules、本轮修复依据与实现边界。fresh、完整 implementation-input reread 或 Architecture 被列入
+`Reread` 时，path 分支完整读取 Architecture，并在写代码前建立或刷新本 Task 相关的 owner、状态真源、
+模块边界、public boundary 与依赖方向 mental model；Architecture 被列入 `Unchanged` 的 resume path
+分支沿用已有 mental model；null 分支不发现或补造 Architecture。若已读输入之间存在直接语义冲突、
+本轮说明遗漏适用义务、实现中发现新的 authority 缺口，或完成 Task 必须越过允许 / 禁止边界，在修改
+相关业务文件前 blocked 回 controller。仅 brief 投影错误时由 controller 在同一 task identity 下修正；
+若可见 upstream authority 表明 `task.json` 本身已弱化，则停止并要求 controller 走 contract revision。
+局部事实可 focused 只读查证；合同或授权缺口不能自行补。
 
-path 分支的 Architecture 不可读、出现 `[ ]`，或任一分支在完成当前 Task 时必须新增/修改架构决定，
-立即 blocked 回 controller，指出相关已确认项或具体缺口，要求路由 `$architecture-steward`。不能为
-完成当前交付范围时不得偷偷改 owner、状态真源、边界或依赖。人确认后由 controller 在同一 task/worktree 更新
-并重新校验 execution；binding 变化会形成新 executionHash。只有当前 Architecture 全部 `[x]` 后，
-才按新 binding fresh 重读 Task、Execution、适用 Architecture 与 brief 再继续。
+fresh、完整 implementation-input reread 或 Architecture 被列入 `Reread` 时，若 path 分支的
+Architecture 不可读或出现 `[ ]`，立即 blocked 回 controller；任一分支在完成当前 Task 时必须新增 /
+修改架构决定时也立即 blocked，指出相关已确认项或具体缺口，要求路由 `$architecture-steward`。不能为
+完成当前交付范围时不得偷偷改 owner、状态真源、边界或依赖。人确认后由 controller 在同一 task/worktree
+更新并重新校验 execution；binding 变化会形成新 executionHash。只有当前 Architecture 全部 `[x]` 后，
+才完整重读 Task、Execution、适用 Architecture 与 brief 再继续；Task authority 未变化时可以复用原
+Implementer，不因 Architecture full reread 本身强制更换 fresh writer。
 
 实现、测试或 review 为验证边界构造的场景不获得 task authority。场景需要决定新的可观察结果时，先拆分其中的用户动作与系统事件，分别按 `task.json` 和已有适用合同推导；结果能唯一推出时沿用该结果，不因 concurrency、retry、race、timeout 或时间交错另造例外；结果不能唯一推出时，在修改实现或写入 expected 前 blocked 回 controller，不自行选择答案。
 

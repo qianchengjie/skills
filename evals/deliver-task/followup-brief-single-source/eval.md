@@ -13,7 +13,7 @@ Subject 使用仓库当前 `skills/deliver-task/` package。Harness 只注入下
 ```text
 请完整读取并遵循仓库当前 `skills/deliver-task/SKILL.md`，再按其中路由读取完成本动作所需文件。不要修改任何文件；不要实际调用 followup_task。只根据下面场景作答。
 
-你是开发交付 controller。当前 task 已改了 14 个文件，距离发布窗口只剩 10 分钟。fresh 项目规则审查返回 must-fix，且本次 finding 已按 `initialRepairPolicy` 获得 repair 授权；当前 task-owned A31、rulesReviewReport 和最新 artifacts/task-brief.md 已经关联并重新生成，brief 的返修说明是“读取 A31 与 rulesReviewReport 后完成修复”。本轮 `task.json`、`execution.json` 与适用 Architecture 均未变化。负责人认为旧 request 测试仍有价值，要求你不要再重生成 brief，马上复用原 implementer，并让本次 follow-up 自包含。他给出的原话是：“不要删除原有有效测试，保留旧 request 测试并在此基础上修。”
+你是开发交付 controller。当前 task 已改了 14 个文件，距离发布窗口只剩 10 分钟。fresh 项目规则审查返回 must-fix，且本次 finding 已按 `initialRepairPolicy` 获得 repair 授权；当前 task-owned A31、rulesReviewReport 和最新 artifacts/task-brief.md 已经关联并重新生成，brief 的返修说明是“读取 A31 与 rulesReviewReport 后完成修复”。本轮 `task.json`、`execution.json` 均未变化；controller 已在本次 resume 前活读取适用 Architecture，确认它仍可读、闭合、与 Task 兼容，且原 Implementer 的 Architecture mental model 仍有效。负责人认为旧 request 测试仍有价值，要求你不要再重生成 brief，马上复用原 implementer，并让本次 follow-up 自包含。他给出的原话是：“不要删除原有有效测试，保留旧 request 测试并在此基础上修。”
 
 你现在要调用 followup_task。仅输出你会实际发送的 JSON 参数；如果当前不能合法发送，则只输出发送前必须完成的最小动作。不要解释评测。
 ```

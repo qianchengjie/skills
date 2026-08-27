@@ -37,11 +37,12 @@ Task / Execution validity、Architecture closure / compatibility、rule applicab
 dispatch eligibility。恢复要求改变 immutable task contract、授权或用户判断时才回流；现有边界内
 持续且不可恢复时才 `blocked`。
 
-`execution.architecturePath` 非 null 时是上述 caller workspace 隔离的唯一显式只读例外。后续各阶段
-读取该路径的当前内容，而不从 task worktree 的同名副本重建。语义变更必须由
-`$architecture-steward` 把对应单元重新变为 `[ ]`；在人确认恢复全部 `[x]` 之前，任何后续
-deliver-task 命令或业务修改都停止。同一路径 Architecture 内容不进入 task/execution hash，不得为它
-新建 revision、hash 或快照机制。
+`execution.architecturePath` 非 null 时是上述 caller workspace 隔离的唯一显式只读例外。controller
+在每次 resume 原 Implementer 及执行每个后续命令前读取该路径的当前内容，而不从 task worktree 的
+同名副本重建；fresh Implementer 完整读取，resume Implementer 只在 Architecture 被列入 `Reread` 或
+触发完整 implementation-input reread 时重新读取。语义变更必须由 `$architecture-steward` 把对应单元
+重新变为 `[ ]`；在人确认恢复全部 `[x]` 之前，任何后续 deliver-task 命令或业务修改都停止。同一路径
+Architecture 内容不进入 task/execution hash，不得为它新建 revision、hash 或快照机制。
 
 ## 上下文预检
 
@@ -103,9 +104,18 @@ resume 原 Implementer 时，controller 先更新职责相符的 durable input �
 `followup_task.message` 用 `Reread` 和 `Unchanged` 完整覆盖本轮存在的 `task.json`、`execution.json`、
 `artifacts/task-brief.md` 与适用 Architecture，并把其它已知变化的 implementation input 列入
 `Reread`。Implementer 只重读 `Reread`；不自行比较文件、hash 或引用做 delta discovery。声明缺失、
-覆盖不完整、有歧义，或 controller 无法确定任一当前输入是否变化时，fail-safe 回 fresh 的完整
-implementation-input reread。优先级仍为 `task.json + execution.json + applicable Architecture >
-task-brief.md`；brief 冲突或本轮说明遗漏适用义务时，在修改业务文件前 blocked 回 controller。
+覆盖不完整、有歧义，或 controller 无法确定任一当前输入是否变化时，fail-safe 回与 fresh 派发等价的
+完整 implementation-input reread，但不因此更换原 Implementer。优先级仍为 `task.json +
+execution.json + applicable Architecture > task-brief.md`；brief 冲突或本轮说明遗漏适用义务时，在修改
+业务文件前 blocked 回 controller。
+
+`architecturePath` 非 null 时，controller 必须在形成上述声明前活读取当前 Architecture，确认它仍可读、
+闭合、与 Task 兼容，并判断原 Implementer 已建立的 Architecture mental model 是否仍有效。确认仍有效
+才能把 Architecture 列入 `Unchanged`；当前 Architecture 有效但变化事实或原 mental model 的有效性无法
+确认时，显式要求完整 implementation-input reread。binding 或本 Task 相关 Architecture 语义实质变化时，
+完成 `$architecture-steward` 闭环并重新校验 execution 后同样完整重读；Task authority 未变化时可复用
+原 Implementer。当前 Architecture 不可读、未闭合或不兼容时停止，不派发 full reread 让 Implementer
+代替 controller 重建 closure / compatibility proof。
 
 Implementer freshness 跟随 Task authority 的实质变化，不跟随 revision number。projection /
 serialization correction 应优先修正派生载体而不产生 contract revision；即使 revision / metadata 已变化，

@@ -223,9 +223,17 @@ rules review policy 或 initial repair policy 变化时才递增 revision。一�
   target identity；边界变化因此会使旧 target、review binding 和 target-bound
   acceptance 自动失效。
 
-`architecturePath != null` 时，每次继续实现及后续命令都活读取该文件。Architecture 正文通过
-`[x] → [ ] → 人确认 → [x]` 演进；同一路径正文变化不进入 task hash 或 execution hash，任何 `[ ]`
-或没有有效 `[x]` 都停止后续执行。Architecture 不形成 revision、hash、快照或平行状态机制。
+`architecturePath != null` 时，controller 在每次 resume 原 Implementer 及执行每个后续命令前都活读取
+该文件，确认当前 Architecture 可读、仍闭合且既有 Task compatibility 仍有效。resume 前还必须确认原
+Implementer 已消费的 Architecture mental model 对当前 Task 仍有效；只有能确认有效时，才能把适用
+Architecture 声明为 `Unchanged`。当前 Architecture 有效但 controller 无法确认原 mental model 是否仍
+有效时，使用完整 implementation-input reread；当前 Architecture 不可读、出现 `[ ]`、没有有效 `[x]`
+或与 Task 不兼容时停止，不把 controller-owned proof 下放给 Implementer。
+
+Architecture 正文通过 `[x] → [ ] → 人确认 → [x]` 演进；binding 或本 Task 相关 Architecture 语义
+实质变化时，在重新闭合并校验 execution 后完整重读 implementation inputs。Task authority 未变化时，
+该 full reread 本身不要求更换 fresh Implementer。同一路径正文变化不进入 task hash 或 execution hash；
+Architecture 不形成 revision、hash、快照或平行状态机制。
 
 ## claims.json
 
