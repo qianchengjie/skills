@@ -89,24 +89,39 @@ controller 同时直接阅读 `task.json` 的完整语义，判断它是否以�
 
 controller 在 `artifacts/task-brief.md` 只收束当前 task/execution identity、preflight、已解析路径、claims、验证、selected rules、本轮修复依据、task workspace 可执行结论与 task-owned evidence 引用，并引用 authoritative `task.json` 与 `execution.json`；不复制 Architecture 正文，不把目标、验收或约束重新摘要成可独立执行的合同副本。只有该结论已明确闭合并可由 brief 定位证据时，才创建默认 blocked 的 task report 并派发 implementer。
 
-每次 fresh 或 follow-up 派发都提供绝对 `taskDir` 与 `workspacePath`，要求 implementer 重新读取当前
-`task.json`、`execution.json` 和 `artifacts/task-brief.md`；只有 `execution.architecturePath != null`
-时才读取其指向的 Architecture。优先级固定为 `task.json + execution.json + applicable Architecture
-> task-brief.md`；brief 冲突或本轮说明遗漏适用义务时，implementer 必须在修改业务文件前 blocked
-回 controller。仅 brief 投影错误时，controller 在同一 task identity 下修正并重新派发；若可见
+Task / Execution validity、Architecture closure / compatibility、workspace readiness、claims bootstrap、rule
+applicability classification、audit evidence 与 dispatch eligibility 都由 controller 负责。Implementer 负责
+实现理解、TDD、代码修改、范围内验证，以及直接输入冲突、实现中新 authority 缺口和路径越界的 writer-side
+fail-safe；不能用该 fail-safe 替代 controller preflight，也不能“先派发、再判断”。
+
+fresh 派发提供绝对 `taskDir` 与 `workspacePath`，要求 implementer 完整读取当前 `task.json`、
+`execution.json`、`artifacts/task-brief.md`、适用 Architecture、项目 rules、相关源码与测试，但不要求其
+展开 brief 中 controller-owned proof / evidence refs 来重建 identity、claims、readiness、Architecture
+closure / compatibility、rule applicability 或 dispatch eligibility。proof refs 默认只用于 provenance；
+只有 controller 明确指出某个 ref 包含实现所需事实时才读取。
+
+resume 原 Implementer 时，controller 先更新职责相符的 durable input 与 brief，再在
+`followup_task.message` 用 `Reread` 和 `Unchanged` 完整覆盖本轮存在的 `task.json`、`execution.json`、
+`artifacts/task-brief.md` 与适用 Architecture，并把其它已知变化的 implementation input 列入
+`Reread`。Implementer 只重读 `Reread`；不自行比较文件、hash 或引用做 delta discovery。声明缺失、
+覆盖不完整、有歧义，或 controller 无法确定任一当前输入是否变化时，fail-safe 回 fresh 的完整
+implementation-input reread。优先级仍为 `task.json + execution.json + applicable Architecture >
+task-brief.md`；brief 冲突或本轮说明遗漏适用义务时，在修改业务文件前 blocked 回 controller。
+
+Implementer freshness 跟随 Task authority 的实质变化，不跟随 revision number。projection /
+serialization correction 应优先修正派生载体而不产生 contract revision；即使 revision / metadata 已变化，
+只要目标、验收、约束、non-goals、禁止范围、公共契约、调用策略等 authority 语义未变，也不能仅因此
+停止原 Implementer 或派 fresh。上述 authority 任一实质变化时，停止旧 writer，在新合同下重做
+preflight 并派发 fresh implementer。revision / hash 变化仍按既有 binding 规则由 controller 重新判定
+旧 review / validation evidence；旧 evidence 不自动证明新合同，也不自动全量作废，只对证据缺口补证
+或重跑，并在当前 `audits.md` 记录引用与判断依据。
+
+仅 brief 投影错误时，controller 在同一 task identity 下修正并按上述 resume 规则重新派发；若可见
 upstream authority 表明 `task.json` 已被弱化，则停止当前执行，按 `needs-upstream / contract-change`
 回流。Architecture 未闭合或当前 Task 必须改变 Architecture 时，不修改业务文件，只路由
 `$architecture-steward`；人确认后在同一 task/worktree 更新并重新校验 execution。
 
-contract revision 后不得对旧 revision 的 implementer 使用 follow-up；controller 必须在新合同下重做
-preflight 并派发 fresh implementer。旧 review / validation evidence 保留为可审计输入，但不自动证明
-新 revision，也不自动全量作废；controller 按新合同重新判定每项 evidence，只对证据缺口补充或重跑，
-并在当前 `audits.md` 记录引用与判断依据。
-
-Implementer 的上述读取与 blocked 能力只是 writer 侧 fail-safe，不能替代 controller preflight 的
-compatibility check，也不能作为“先派发、再判断”的理由。
-
-需要新增业务取舍或返修约束时，先写回现有 task / execution / claims / audits 中职责相符的真源并重新生成 brief。`followup_task.message` 只携带 task directory 定位、Task / execution / brief、适用 Architecture 的路径和本轮 task-owned evidence 引用，不携带目标、约束、实现取舍或第二份返修说明。
+需要新增业务取舍或返修约束时，先写回现有 task / execution / claims / audits 中职责相符的真源并重新生成 brief。`followup_task.message` 只携带 resume 定位、完整 `Reread / Unchanged` 声明和新增 durable input 的定位，不携带新的 requirement、acceptance、business ruling、implementation decision、repair interpretation 或第二份返修说明。
 
 ### Source-authoritative 条件分支
 

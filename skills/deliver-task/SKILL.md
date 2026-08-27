@@ -8,7 +8,8 @@ disable-model-invocation: true
 
 ## 第一原则
 
-> **Contract revision changes authority, not workspace identity.**
+> **Contract authority 与 delivery workspace identity 分离；Implementer freshness 跟随 authority change，
+> 不跟随 revision numbering。**
 
 在 task-scoped isolated workspace 中完成 caller 定义的交付范围，返回一个交付结果；不接管 caller 的生命周期，也不负责把结果集成回 caller workspace。
 
@@ -75,10 +76,13 @@ implementer、生成 target 或进入实现、验证、review、delivery 闭环�
 exact identity 且 `.dev-task/` 完整时 `start` 幂等返回，不重写证据。同 revision 合同漂移，或
 已有 task branch/worktree 但 `.dev-task/` 缺失、不完整时 fail closed；不得根据 commits、branch、
 聊天摘要或重建 locator 推断历史证明。同一 delivery 的普通 higher revision 继续使用当前
-worktree、branch 与固定 `baseCommit`，停止旧 writer，并在新合同 preflight 闭合后派发 fresh
-implementer。旧 review / validation evidence 不自动证明新 revision，也不自动全量作废；controller
-按新合同重新判定哪些 evidence 可继续引用，只对未闭合部分补证或重跑。只有 delivery lineage 真正
-变化时才建立新 worktree。任何 caller 状态变化都由 caller 在收到结果后决定。
+worktree、branch 与固定 `baseCommit`。projection / serialization correction 应优先修正派生载体而不
+产生 contract revision；revision / metadata 变化本身也不是派发 fresh Implementer 的充分条件。只有
+目标、验收、约束、non-goals、禁止范围、公共契约、调用策略等 Task authority 实质变化时，才停止旧
+writer，并在新合同 preflight 闭合后派发 fresh implementer。旧 review / validation evidence 不自动
+证明新 revision，也不自动全量作废；controller 按新合同重新判定哪些 evidence 可继续引用，只对未闭合
+部分补证或重跑。只有 delivery lineage 真正变化时才建立新 worktree。任何 caller 状态变化都由 caller
+在收到结果后决定。
 
 ## 开始前判断
 
@@ -189,8 +193,10 @@ input；不控制 clean closure，也不用于 repair 后的 Review Wave。
 
 1. 只在 preflight A 已记录并闭合 task workspace 可执行结论后，生成引用 `task.json` 与
    `execution.json` 的派生 `artifacts/task-brief.md` 和默认 blocked 的 `artifacts/task-report.json`；
-   brief 必须携带该结论及 task-owned evidence 引用。每次 implementer 派发都要求重读 Task、
-   Execution 与 brief，且仅在 `execution.architecturePath != null` 时读取其指向的 Architecture。
+   brief 必须携带该结论及 task-owned evidence 引用。fresh implementer 完整读取当前 Task、Execution、
+   brief、适用 Architecture、Rules、相关源码与测试，但不主动展开 controller-owned proof refs；resume
+   原 implementer 时，controller 用完整 `Reread / Unchanged` 声明指定刷新输入，声明不完整或有歧义
+   就 fail-safe 回完整 implementation-input reread，Implementer 不自行发现 delta。
 2. controller 根据 `task.json` 语义判断是否命中具名源码的强制复制/移植要求。普通任务按 [IMPLEMENTER-SUBAGENT.md](IMPLEMENTER-SUBAGENT.md) 单次派发 fresh implementer；命中时先做 baseline-only Dispatch A 并停止，controller 对 live baseline 独立复验并在 `audits.md` 记录 accepted baseline A，再追加绑定它的 adaptation authorization A，最后才派发明确引用该 authorization 的 Dispatch B。task workspace 同时只允许一个业务文件 writer。
 3. 接收后按当前 `execution.json` 及 task/execution 两层 forbidden paths 核对实际 diff、task report 和 claims，运行任务验证；source-authoritative 分支的实现接收与验证证据继续引用 Dispatch B 的 authorization。
 4. 按 `commitPolicy` 固定 commit range、worktree snapshot 或 no-change target。
@@ -211,7 +217,11 @@ input；不控制 clean closure，也不用于 repair 后的 Review Wave。
 - Review Wave history 可跨合法的 execution 更新追加：历史 wave 保留并校验自身 execution/target identity，下一 wave 的 `previousTarget` 完整等于前一 wave 的 `target`，只有最新 wave 绑定当前 `execution.json`。不得为了当前 execution 重写旧 wave 或 target。
 - `repairInputRefs`、repair diff、validation、scoped / Full 结果和 merged findings 都必须在 wave A 之前存在；禁止当前 wave 自证或引用未来 A。scoped / Full ref 还必须匹配同一 current target、domain、mode 和 result。
 - 最多允许 4 个 failed Review Waves。第 4 次失败后不再自动修改业务文件；controller 根据现有 result taxonomy 选择 `blocked`，或在确需改变合同、授权、边界或用户判断时选择 `needs-upstream`，并保留当前证据引用。
-- 安全返修优先复用原 implementer；目标、验收、公共契约、用户禁止范围、调用策略或 claims 契约实质变化时停止并回流。contract revision 恢复执行后必须派发 fresh implementer，不对旧 revision 的 implementer 使用 follow-up。
+- 安全返修优先复用原 implementer；controller 先刷新职责相符的 durable repair inputs / brief，再用完整
+  `Reread / Unchanged` 声明恢复原 implementer。声明缺失、不完整或有歧义时 full reread，不让
+  Implementer 自行发现 delta。只有目标、验收、约束、non-goals、禁止范围、公共契约、调用策略等 Task
+  authority 实质变化时才停止旧 writer、回流并在新合同下派发 fresh implementer；revision / metadata
+  变化本身不是 fresh 的充分条件。
 - repair 明显越过原 finding 的因果范围或原 implementation boundary 时，不能用连续 scoped review 掩盖扩边：在当前 task / execution 内能够重新界定时升级受影响 domain 的 Full；需要扩大 immutable contract 或授权时回流 upstream。
 - 结构合法的负审查结论不能靠重派 reviewer 洗掉。reviewer 未返回、越界写文件或结果无法绑定输入时，同一输入最多 fresh 重派一次；这类调用故障不是 failed Review Wave。
 
