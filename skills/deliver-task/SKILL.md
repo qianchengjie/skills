@@ -73,6 +73,9 @@ review 和收口的唯一业务工作目录。不得继续从 caller workspace �
 setup 已完成或任何验证已经通过。Architecture 决定未闭合时，不得形成有效 execution、派
 implementer、生成 target 或进入实现、验证、review、delivery 闭环。
 
+task workspace 的必要 preparation 与环境恢复由 controller 负责；Implementer 只接收已完成当前阶段
+正常项目准备的 workspace，不负责 environment provisioning / recovery。
+
 exact identity 且 `.dev-task/` 完整时 `start` 幂等返回，不重写证据。同 revision 合同漂移，或
 已有 task branch/worktree 但 `.dev-task/` 缺失、不完整时 fail closed；不得根据 commits、branch、
 聊天摘要或重建 locator 推断历史证明。同一 delivery 的普通 higher revision 继续使用当前
@@ -189,10 +192,11 @@ input；不控制 clean closure，也不用于 repair 后的 Review Wave。
 完整执行规则见 [EXECUTION-RULES.md](EXECUTION-RULES.md)。固定顺序是：
 
 1. Task / Execution validity、Architecture closure / compatibility、rule applicability 与 claims bootstrap
-   闭合后，项目已经明确提供 setup 命令时由 controller 直接在 task workspace 执行；没有明确 setup 时
-   不推断通用命令。缺少已声明依赖、test runner 暂不可用等可恢复环境问题按普通执行失败处理：使用
-   项目既有机制恢复并重跑，不创建 readiness state、readiness evidence、readiness closure 或独立
-   dispatch eligibility。随后生成引用 `task.json` 与 `execution.json` 的派生
+   闭合后，由 controller 按当前 workspace 实际状态完成首次业务 writer 派发前必要的正常项目准备；
+   需要准备或恢复且项目明确提供 canonical setup 时优先使用，没有明确 setup 时不推断通用命令，也不
+   把已知环境缺口下放给 Implementer。缺少已声明依赖、test runner 暂不可用等可恢复环境问题按普通执行
+   失败处理，不创建 readiness state、readiness evidence、readiness closure 或独立 dispatch eligibility。
+   随后生成引用 `task.json` 与 `execution.json` 的派生
    `artifacts/task-brief.md` 和默认 blocked 的 `artifacts/task-report.json`。fresh implementer 完整读取当前
    Task、Execution、brief、适用 Architecture、Rules、相关源码与测试，但不主动展开 controller-owned
    proof refs；resume 原 implementer 时，controller 用完整 `Reread / Unchanged` 声明指定刷新输入，声明

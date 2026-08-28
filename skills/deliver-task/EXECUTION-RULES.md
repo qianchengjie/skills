@@ -30,12 +30,16 @@ evidence。不得在执行中自动 refresh base、同步文件、rebase、merge
 已完成或任何验证已经通过。Architecture 决定未闭合时，不得形成有效 execution、派 implementer、
 生成 target 或进入实现闭环。
 
-Task / Execution validity、Architecture closure / compatibility、rule applicability 与 claims bootstrap
-闭合后，项目已经明确提供 setup 命令时由 controller 直接在 task workspace 执行；没有明确 setup 时
-不推断通用命令。setup 与缺少已声明依赖、test runner 暂不可用等可恢复环境问题属于普通执行：使用
-项目既有机制恢复并重跑，不形成 readiness state、readiness evidence、readiness closure 或独立
-dispatch eligibility。恢复要求改变 immutable task contract、授权或用户判断时才回流；现有边界内
-持续且不可恢复时才 `blocked`。
+Controller owns task workspace preparation and environment recovery。Task / Execution validity、
+Architecture closure / compatibility、rule applicability 与 claims bootstrap 闭合后、首次业务 writer
+派发前，controller 负责完成当前 workspace 必要的正常项目准备。需要准备或恢复环境且项目明确提供
+canonical setup 时，优先在 task workspace 使用该 setup；没有明确 setup 时不推断 npm / pnpm /
+gradle 等通用命令，也不把已知环境缺口留给 Implementer。controller 执行 setup 后检查 task workspace
+的 Git 状态；出现意外 tracked changes 时先查明并按现有边界处理，未处理前不派发业务 writer。
+
+workspace preparation 与环境恢复都属于普通执行，不形成 readiness state、readiness evidence、
+readiness closure 或独立 dispatch eligibility。恢复要求改变 immutable task contract、授权或用户判断
+时才回流；现有边界内持续且不可恢复时才 `blocked`。
 
 `execution.architecturePath` 非 null 时是上述 caller workspace 隔离的唯一显式只读例外。controller
 在每次 resume 原 Implementer 及执行每个后续命令前读取该路径的当前内容，而不从 task worktree 的
@@ -162,8 +166,9 @@ baseline `cannot-verify` 时不创建 authorization，也不派发 Dispatch B。
 ## 验证与 target
 
 TDD 的 RED 必须是测试已经真实运行，并因目标行为尚未实现而出现预期失败。`command not found`、缺少
-已声明依赖、权限 / 配置错误、test collection 失败等环境或工具错误都不是 RED；先使用项目既有 setup
-与已声明依赖恢复环境，再由原 Implementer 重跑同一测试。可恢复失败不创建新的生命周期状态或换 writer；
+已声明依赖、权限 / 配置错误、test collection 失败等环境或工具错误都不是 RED。Implementer 记录失败
+命令和错误摘要，停止当前执行并返回 controller；controller 在 task workspace 使用项目既有机制恢复
+环境，再 resume 原 Implementer 重跑同一测试。可恢复失败不创建新的生命周期状态、不换 fresh writer；
 恢复要求改变 immutable task contract、授权或用户判断时才回流，现有边界内持续且不可恢复时才
 `blocked`。
 

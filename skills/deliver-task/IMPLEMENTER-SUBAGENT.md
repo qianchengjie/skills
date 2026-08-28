@@ -64,10 +64,12 @@ Implementer，不因 Architecture full reread 本身强制更换 fresh writer。
 
 在现有边界内按 TDD 做最小完整实现，补直接相关测试，运行 brief 指定验证。只有测试已经真实运行，并因
 目标行为尚未实现而出现预期失败，才形成 RED；`command not found`、缺少已声明依赖、权限 / 配置错误、
-test collection 失败等环境或工具错误都不是 RED。先使用项目既有 setup 与已声明依赖恢复并重跑，保持
-当前 Implementer 上下文，不新增 lifecycle state。恢复要求修改未授权文件、增加未获授权的依赖、改变
-immutable task contract、授权或用户判断时 blocked 回 controller；现有边界内持续且不可恢复时也如实
-blocked。只能修复自己本轮直接造成的业务验证失败；需要越界时先停止。
+test collection 失败等环境或工具错误都不是 RED。不得为准备或修复 task workspace 而自行执行 setup、
+安装或刷新依赖、补 dependency topology、软链或复制 caller workspace 产物。记录失败命令和错误摘要，
+停止当前执行并返回 controller；controller 恢复环境后 resume 原 Implementer，由原 Implementer 重跑同一
+测试，不 fresh、不新增 lifecycle state。该限制只针对 environment provisioning / recovery；任务目标
+本身要求且授权边界允许的依赖相关实现，仍按普通 task implementation 执行。只能修复自己本轮直接造成
+的业务验证失败；需要越界时先停止。
 
 若 controller 明确本任务进入具名源码的 source-authoritative 分支，还必须遵守本轮阶段：
 
