@@ -45,7 +45,7 @@ handoff 只负责定位 live source，不是正确性证书。任何测试摘要
 
 ## 3. 执行动作
 
-用户选择本地合并或 push / PR 后，在执行任何对应 Git / 远端写动作前，再读取一次 source 的完整 HEAD OID 和 dirty 状态，与本轮 fresh verification 时的现场比较。相同才继续；不同则不执行写动作，回到第 1 节重新验证当前 live source，再重新提供适用动作并等待明确选择。比较只使用当前上下文，不落盘新状态。
+用户选择本地合并或 push / PR 后，在执行任何对应 Git / 远端写动作前，再读取一次 source 的完整 HEAD OID 和 dirty 状态，与本轮 fresh verification 时的现场比较。相同才继续，并以这次确认的完整 HEAD OID 作为本次 merge / push 的 source operand，不再用 branch 名重新解析 source；不同则不执行写动作，回到第 1 节重新验证当前 live source，再重新提供适用动作并等待明确选择。比较和确认的 OID 只使用当前上下文，不落盘新状态。
 
 ### 本地合并
 
@@ -53,13 +53,13 @@ handoff 只负责定位 live source，不是正确性证书。任何测试摘要
 
 1. 定位 base branch 所在的主 workspace，确认其 clean；dirty 时停止，不 stash、reset 或 clean。
 2. checkout base，并在有 upstream 时执行安全的 fast-forward-only 更新；无法 fast-forward 时停止。
-3. merge 固定 source branch/HEAD。冲突需要新业务语义、Architecture、需求或公共契约决定时停止，不猜解法。
+3. merge 刚刚确认的完整 source HEAD OID。冲突需要新业务语义、Architecture、需求或公共契约决定时停止，不猜解法。
 4. 在 merged tree 上重新运行完整测试套件；Architecture path 分支同时重新运行 Drift Review。
 5. 任一检查失败时保留 merge/source 现场，不 cleanup。全部通过才进入 cleanup。
 
 ### Push 并创建 PR / MR
 
-只有人选择后才产生远端副作用。named branch 推送当前 branch；detached HEAD 先让人确认新的远端 branch 名，再推送固定 HEAD。使用仓库对应 forge 流程创建 PR/MR，并保留 source workspace 供后续 review 修复。
+只有人选择后才产生远端副作用。named branch 把刚刚确认的完整 HEAD OID 推送到同名远端 branch；detached HEAD 先让人确认新的远端 branch 名，再把刚刚确认的完整 HEAD OID 推送到该 branch。使用仓库对应 forge 流程创建 PR/MR，并保留 source workspace 供后续 review 修复。
 
 ### 保留
 
