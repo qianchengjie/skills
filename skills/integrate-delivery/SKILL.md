@@ -23,7 +23,7 @@ handoff 只负责定位 live source，不是正确性证书。任何测试摘要
 
 1. 确认 workspace 仍存在且属于预期 Git repository，读取 git-dir、git-common-dir、workspace root、branch/detached 状态、完整 HEAD OID 和 dirty 状态。
 2. 从 handoff、当前 Task、对话或 upstream 确定 base branch；无法唯一确定时向人确认，不猜 main。
-3. handoff 具名的 HEAD 或工作区状态与现场不一致时，把 handoff 标为 stale，并以当前现场继续；不能把旧结论套到新 source，也不能只因摘要过期而拒绝 closeout。当前 source 有未提交变化、base 无法确定或任务是否完成已无法判断时，才停止并返回 deliver-task。
+3. handoff 具名的 HEAD 或工作区状态与现场不一致时，把 handoff 标为 stale，并以当前现场继续；不能把旧结论套到新 source，也不能只因摘要过期而拒绝 closeout。当前 source 有未提交变化时按第 2 节的 commitPolicy 分流；base 无法确定或任务是否完成已无法判断时，才停止并返回 deliver-task。
 4. 按当前项目指令运行完整测试套件。命令失败或无法确定可信的完整验证入口时停止，不提供 merge / PR 菜单。
 5. execution.architecturePath 非 null 时，对当前 base → source 运行 fresh Architecture Drift Review：可以宽读以理解结构，但只阻塞与已确认 [x] Architecture 决定相冲突的 drift；非 Architecture finding 不在此路由或修复。path 无法读取、出现 [ ] 或 review 无法闭合时停止。null 分支不搜索 Architecture。
 
@@ -37,12 +37,15 @@ handoff 只负责定位 live source，不是正确性证书。任何测试摘要
 | --- | --- |
 | named branch，业务变化已提交且 clean | 本地合并 / push 并创建 PR 或 MR / 保留 |
 | detached HEAD，业务变化已提交且 clean | push 为新分支并创建 PR 或 MR / 保留 |
-| 存在未提交业务变化 | 保留；需要集成时回到 deliver-task 按现有 commitPolicy 形成可集成 commit |
+| 存在未提交业务变化，commitPolicy 为 required / allowed | 保留；需要集成时回到 deliver-task 形成可集成 commit |
+| 存在未提交业务变化，commitPolicy 为 forbidden | 只能保留；用户明确仍要集成时回 upstream 修改提交授权，不回 deliver-task 尝试提交 |
 | 相对 base 无业务变化 | 保留，或在明确 cleanup 授权下结束 workspace |
 
 “收尾”“处理一下”不自动授权 merge、push、PR、删除 branch/worktree 或 discard。discard 不进入普通菜单；只有用户明确要求，并再次确认准确目标后才执行。
 
 ## 3. 执行动作
+
+用户选择本地合并或 push / PR 后，在执行任何对应 Git / 远端写动作前，再读取一次 source 的完整 HEAD OID 和 dirty 状态，与本轮 fresh verification 时的现场比较。相同才继续；不同则不执行写动作，回到第 1 节重新验证当前 live source，再重新提供适用动作并等待明确选择。比较只使用当前上下文，不落盘新状态。
 
 ### 本地合并
 
