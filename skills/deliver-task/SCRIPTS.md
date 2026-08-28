@@ -1,135 +1,91 @@
 # deliver-task 脚本
 
-## 唯一 bootstrap
+脚本只承担可确定、可复现的 workspace、Task、execution、Git target 与路径边界检查。实现正确性、review、acceptance 和 closeout 由 agent 在 live Git 状态上判断，不编码成 delivery schema。
 
-从 stdin 提供一个完整 task contract：
+## Bootstrap
 
-```bash
+从 stdin 提供完整 task contract：
+
+~~~bash
 node <deliver-task-skill-dir>/scripts/deliver-task.mjs start <repo> - < task-contract.json
-```
+~~~
 
-caller、当前 harness linked worktree 或 harness 原生机制已经提供 isolated workspace 时显式绑定：
+已有 caller/harness isolated workspace 时显式绑定：
 
-```bash
+~~~bash
 node <deliver-task-skill-dir>/scripts/deliver-task.mjs start <repo> - --workspace <workspacePath> < task-contract.json
-```
+~~~
 
-`start` 在创建任何状态前校验 repo、stdin `deliver-task.task.v1` exact schema、完整 `baseCommit` 和
-provided workspace。它只建立 task workspace 与 task proof bootstrap；成功不表示 execution 已有效或
-任何项目验证已通过。脚本不探测或准备项目运行环境；项目已有 setup 与可恢复环境问题按普通执行处理，
-不新增 readiness 状态或命令。成功时固定输出：
-
-```json
-{
-  "task": {
-    "taskId": "fix-slug-whitespace",
-    "revision": 1,
-    "taskHash": "sha256:..."
-  },
-  "taskDir": "/absolute/task-worktree/.dev-task",
-  "workspacePath": "/absolute/task-worktree",
-  "kind": "git-worktree",
-  "branch": "refs/heads/deliver-task/fix-slug-whitespace-r1-0123456789ab",
-  "baseCommit": "完整 Git commit OID"
-}
-```
-
-后续命令只接受该输出中的 live `taskDir`：
-
-```bash
-node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
-```
+start 在 mutation 前校验 repository、task exact schema、完整 baseCommit 和 provided workspace。成功时输出 task binding、taskDir、workspacePath、kind、branch 和 baseCommit；它不表示 execution、setup、实现或验证已经完成。
 
 ## 命令
 
-| 命令 | 作用 |
+| 命令 | 机械作用 |
 | --- | --- |
-| `start` | 校验 stdin 合同，创建或绑定 isolated workspace，并初始化或更新当前 delivery 的 `.dev-task/` |
-| `task-hash` | 输出已有 task state 的 canonical task hash |
-| `validate-execution` | 校验 deliver-owned `execution.json`、task binding、Architecture binding、路径和 evidence refs，并输出 canonical execution hash |
-| `snapshot-target` | 从当前 execution boundary 按 commitPolicy 输出带 execution hash 的薄 target identity |
-| `validate-result` | 校验 delivery schema、identity binding、Rules Review policy 状态、Review Wave history/count、acceptance、non-delivered evidence 和薄结构 |
-| `close-check` | 对 delivered 重验 claims、evidence refs、review-wave/acceptance binding 与当前 Git target |
+| start | 创建或绑定 task workspace，并初始化最小 .dev-task state |
+| task-hash | 输出 authoritative task.json 的 canonical hash |
+| validate-execution | 校验 execution exact schema、Task/Architecture binding、路径和 evidence refs |
+| snapshot-target | 检查当前 Git 与路径边界，输出当前 commit-range、worktree 或 no-change identity |
 
-退出码：`0` 通过，`1` 协议或门禁失败，`2` 参数/路径错误。
+调用形式：
 
-## start identity 与事务边界
+~~~bash
+node <deliver-task-skill-dir>/scripts/deliver-task.mjs <command> <taskDir>
+~~~
 
-- 调用方优先使用 caller 已提供、满足边界的当前 harness linked worktree 或 harness 原生机制
-  建立的 workspace，并通过 `--workspace` 显式绑定；三者都不可用时才进入默认模式。
-- 默认模式从 `task.baseCommit` 在 `<repo>/.worktrees/` 下创建 Git worktree；branch 固定为
-  `deliver-task/<taskId>-r<revision>-<taskHash前12位>`。创建前要求 `.worktrees/` 已被 Git
-  ignore；脚本不修改 ignore 配置，未命中时 fail closed。
-- `.dev-task/` 与业务代码共享 task worktree 生命周期，包含 `task.json`、`claims.json`、
-  `audits.md`、`artifacts/workspace.json` 和内容为 `*` 的 `.gitignore`；`execution.json`
-  只在 preflight 后由 controller 创建。
-- exact identity 且上述状态完整时幂等返回，不重写证据。同 revision 合同漂移，或 task
-  branch/worktree 已存在但证明状态缺失、不完整时 fail closed，不从 commit、branch、摘要或
-  locator 推断历史证明。
-- 同一 `taskId + baseCommit` 的 higher revision 复用当前 branch/worktree；只有该 delivery identity
-  变化时才建立新 workspace。provided workspace 已属于另一 delivery 时拒绝覆盖。
-- higher revision 更新 task、claims 与 workspace binding 前先安装临时恢复快照；任一写入失败时回滚
-  完整旧 revision，进程中断遗留的恢复标记会在下一次 `start` 读取 live task state 前完成回滚。
-- 首次 bootstrap 失败只回滚本次创建的 `.dev-task/`、worktree 和 branch。provided workspace 的
-  原有内容、既有 worktree 和既有 branch 不删除。
-- provided workspace 首次绑定必须属于同一 Git repository、`HEAD == task.baseCommit` 且业务区
-  干净；它可以来自 caller、当前 harness linked worktree 或 harness 原生机制。运行环境负责保证
-  它真实独占，机器不推断这一语义事实。
-- 不提供证明恢复、旧 taskDir 迁移、清理、同步、merge、cherry-pick、rebase、push 或 publish
-  命令。
-- task 只使用 `deliver-task.task.v1`；当前第一版上线前不保留中间 task v2 或 legacy binding 兼容。
-- `execution.json` 必须显式包含 `architecturePath`。`null` 不访问 Architecture；非 null 时要求规范化
-  绝对路径、文件名为 `ARCHITECTURE.md`、文件可读、至少有一个 `[x]` 且没有 `[ ]`。后续命令
-  重新检查同一 live 文件；不复制正文，不建立 Architecture hash/version。
+不存在 validate-result、close-check 或隐式 bootstrap。退出码 0 表示通过，1 表示门禁失败，2 表示参数或命令错误。
+
+## start 与 workspace
+
+- 优先绑定 caller、harness linked worktree 或 harness native workspace；都不可用时才使用默认 fallback。
+- 默认 fallback 从 task.baseCommit 在 repo 的 .worktrees/ 下创建 worktree。该目录必须已被 Git ignore；脚本不修改 ignore 配置。
+- .dev-task/ 只初始化 task.json、audits.md、artifacts/workspace.json 和内容固定为星号的 .gitignore。execution.json 在 preflight 后由 controller 创建。
+- 不创建 claims.json、delivery.json、task-report.json 或 target.json。
+- exact Task identity 且必要 state 完整时幂等返回。同 revision 合同漂移、task branch/worktree 存在但必要 state 损坏时 fail closed。
+- 同一 taskId + baseCommit 的 higher revision 复用当前 workspace。事务快照只保护 task.json 与 workspace locator；audits.md 作为追加记录保留。
+- provided workspace 必须属于同一 repository、HEAD 等于 baseCommit 且业务区 clean。脚本不推断其是否真实独占。
+- 不提供 merge、rebase、cherry-pick、push、cleanup 或 proof recovery 命令。
+
+## executionHash
+
+executionHash 只覆盖执行语义边界：
+
+- schemaVersion；
+- Task binding；
+- allowedPaths / forbiddenPaths；
+- architecturePath。
+
+evidenceRefs 只记录 provenance，不进入 hash。因此依据位置变化不会让相同执行边界产生新 identity；路径或 Architecture binding 变化仍会改变 hash。
 
 ## snapshot-target
 
-- `required` 有业务变化但 `HEAD == baseCommit` 时失败；提交后输出 `commit-range`。
-- `allowed` 可输出 `commit-range / worktree / no-change`。
-- `forbidden` 要求 `HEAD == baseCommit`，只输出 `worktree / no-change`。
-- commit range 或 worktree 中的每个业务路径都必须命中 `execution.allowedPaths`，且不命中
-  `task.forbiddenPaths ∪ execution.forbiddenPaths`。
-- `.dev-task/` 默认被自身 `.gitignore` 忽略；若被强制加入 index、worktree target 或 commit
-  range，路径边界仍拒绝。
-- commit-range 的 dirty/freshness 只检查绑定 task workspace；caller workspace 的 HEAD、dirty、
-  index 和同名文件不参与判断。task workspace 自身仍有额外修改时失败。
-- worktree hash 绑定排序后的路径、regular-file mode 和内容 hash；删除使用明确 deleted 记录。
-- 三种 live target 都包含当前 canonical `executionHash`；execution 变化会使旧 target 和旧 review
-  binding 不能作为当前 delivery proof。已追加的 Review Wave history 保留旧 target 的自身 identity，
-  由最新 wave 重新绑定当前 execution。
+- required：有业务变化时必须形成 clean commit-range。
+- allowed：可输出 commit-range、worktree 或 no-change。
+- forbidden：HEAD 必须保持 baseCommit，只输出 worktree 或 no-change。
+- 所有业务路径必须命中 execution.allowedPaths，且不命中 task.forbiddenPaths 与 execution.forbiddenPaths。
+- .dev-task/ 即使被强制加入 index 或 commit，也会被路径边界拒绝。
+- commit-range 必须以 baseCommit 为祖先，并且 task workspace 没有额外业务 dirty。
+- worktree snapshot hash 绑定排序后的路径、regular-file mode 与内容 hash。
+- 输出包含 executionHash，供当前 review package 和自然语言 handoff 使用；脚本不把它写成 durable target artifact。
 
 ## 机器校验边界
 
-目标类型是结构格式校验、流程状态门禁、Git identity 和路径边界检查。机器可确定：
+机器检查：
 
-- JSON exact schema、四个 policy 枚举、task hash 和 execution hash；
-- `execution.architecturePath` 字段存在且为 `null` 或合规绝对路径；非 null 时检查文件名、可读性，
-  以及文本中显式 `[x]` 存在与 `[ ]` 缺失；
-- workspace locator 的 exact schema、task/base/branch 绑定、canonical Git root、初始 clean 状态和
-  base 祖先关系；
-- 默认 fallback 的 `.worktrees/` 是否已被 Git ignore；
-- Git commit identity、祖先关系、worktree snapshot hash；
-- execution allowlist、两层 forbidden path 和 `.dev-task/` 写边界；
-- claim 明确终态与 evidence ref 存在；
-- General 的 task/execution/target 显式绑定；
-- 当前 revision Review Wave 的 exact block、连续 wave 编号、跨 execution 的直接前序/当前 target
-  chain、历史自身 identity 与最新 current execution binding；旧 revision wave 只校验 task binding
-  分代边界，并排除在当前 chain、failed-wave count 与 closure 之外；
-- scoped / Full A 的 task/execution/target/domain/mode/result exact binding、所有 wave refs 的先于
-  wave 顺序、merged result、累计 failed-wave 计数与 4 次停止边界；
-- Review Wave 的 `rules` 与 `task.rulesReviewPolicy` 一致：`not-required` 只接受同名字符串，
-  `required` 拒绝该字符串并只接受 Rules domain 对象或 `not-applicable`；
-- delivered 的 `delivery.evidenceRefs.rulesReview` 与 policy 一致：`not-required` 必须为 `null`，
-  `required` 必须为非空字符串；最终 Review Wave 存在时还校验 `null / not-applicable / wave ref` 映射；
-- acceptance 的 task/target/status 显式绑定及 task-owned evidence ref 存在；
-- non-delivered request 的 kind、非空 evidence refs 及存在性；
-- delivery 没有内嵌完整证据。
+- Task、execution、workspace locator 的 exact schema 与 binding；
+- Git commit identity、祖先关系、branch/worktree 定位；
+- provided workspace 的 base/clean 条件和 fallback ignore 条件；
+- Architecture path/null 的字段终态、路径、可读性与显式 checklist 闭合；
+- allowed/forbidden 路径；
+- execution evidence ref 是否定位到存在的 audits.md 条目；
+- commit-range 或 worktree snapshot 的确定性 identity。
 
-机器明确不检查：人是否真实选择过 `rulesReviewPolicy=not-required` 或
-`initialRepairPolicy=auto`、该选择是否来自有权的人、Initial Discovery JOIN 的 findings 是否完整、
-`approval-required` 下的 upstream repair 决定是否充分、
-active catalog 是否真的为空而可写 `not-applicable`、人是否真实确认过 `execution.architecturePath` 的 path / null 决定、Architecture 内容是否正确/完整/属于架构域、checkbox 的人工确认是否真实、当前 Task 与适用 Architecture 是否能同时满足，provided workspace 是否真实独占、目标是否正确、验收是否充分、targeted / affected
-validation 是否足以覆盖实际 repair delta、影响面是否可可靠限定、scoped reviewer 是否应返回
-`clean / findings / cannot-bound`、Full 升级是否语义上必要、review finding 是否正确、rules 是否适用、
-回流理由是否正确、证据强度或用户确认真实性。这些由运行环境保证，或由 controller/reviewer 裁决并
-记录在 audits/rules-review run。
+机器不检查：
+
+- Task、Architecture 或 evidence 的语义是否正确；
+- 人是否真的作出 path/null 或 policy 决定；
+- rules applicability、测试充分性、review finding、acceptance 或 repair 判断；
+- source 是否已经满足 closeout；
+- handoff 是否仍与未来的 live Git state 一致。
+
+这些内容由 controller/reviewer 现场判断，并以简洁 Markdown 记录。后续 closeout 重新验证 live source，不读取本脚本不存在的 delivery closure。

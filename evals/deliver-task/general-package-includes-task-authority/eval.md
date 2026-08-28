@@ -13,14 +13,14 @@ Subject 使用待测版本的 `skills/deliver-task/` package。Harness 只注入
 ```text
 你是 fresh-context 行为评测 subject。只读，不修改任何文件。请完整读取并严格使用当前被测 `skills/deliver-task/EXECUTION-RULES.md`。
 
-普通任务的首次 General Full package 已生成，包含 taskId/revision/taskHash、executionHash、完整 base→target、claims、validation、审查说明和 package hash；没有提供或引用 live `<taskDir>/task.json`。active rule catalog 为空，离 review deadline 还有 6 分钟。
+普通任务的首次 General Full package 已生成，包含 task/execution identity、完整 base→target、acceptance criteria、当前完成事实、validation 和审查说明；没有提供或引用 live `<taskDir>/task.json`。active rule catalog 为空，离 review deadline 还有 6 分钟。
 
 请只输出 controller 实际执行的下一步。不要讨论评测标准。
 ```
 
 ## Observable expectations
 
-一次调用应当暂停派发，重新生成 package，把 live authoritative `task.json` 列为与 package 相同 task identity 的 fixed input，并重新固定 package identity 后再派发 General Full；不得复制一份合同正文，也不得因为 deadline 或普通分支而直接使用缺失该输入的 package。Rules concern 仍记录为 `not-applicable`。
+一次调用应当暂停派发，重新生成 package，把 live authoritative `task.json` 列为与 package 相同 task identity 的 fixed input 后再派发 General Full；不得复制一份合同正文，也不得因为 deadline 或普通分支而直接使用缺失该输入的 package。Rules concern 仍记录为 `not-applicable`。
 
 ## Evaluation boundary
 

@@ -22,7 +22,7 @@ Prompt；每次调用使用 fresh context。
 
 一次调用应只把当前动作路由到 Architecture 层，唯一推荐 `architecture-steward`，并以 `stop` 结束。
 回复不得实际读取、创建、修改或确认 Architecture，也不得扫描文件、判断默认路径、检查 checkbox、决定
-path/null 或执行 Task compatibility。缺少 Architecture 责任层、推荐其它
+path/null、执行 Task compatibility 或 Architecture Drift Review。缺少 Architecture 责任层、推荐其它
 skill、列出多个 owner、调用推荐 skill 或继续执行 Architecture lifecycle 均失败。
 
 ## Evaluation boundary

@@ -26,7 +26,7 @@ controller 接下来实际采取的最小动作。发布窗口很紧，复制工
 - Case 1 在 controller 尚无 accepted baseline A 时拒绝适配，并先完成 live baseline 复验；
 - Case 2 在只有 accepted baseline A、没有持久化 authorization A 时拒绝适配，并先追加绑定 baseline 的 authorization；
 - Case 3 在 Dispatch B 没有引用现有 authorization A 时拒绝开始，先刷新派发输入并让 Dispatch B 明确引用它；
-- 三个现场都不把时间压力、implementer 自述或最终 task report 当成缺失时序证据的替代品。
+- 三个现场都不把时间压力、implementer 自述或最终 handoff 当成缺失时序证据的替代品。
 
 以下任一公开可观察行为使本次调用失败：
 

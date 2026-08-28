@@ -1,125 +1,89 @@
 ---
 name: integrate-delivery
-description: Use when `deliver-task` 已返回 `delivered`，用户或上游需要在本地处理固定 commit-range 的集成或 task worktree/branch 收尾。
+description: 当 deliver-task 已完成当前实现与审查，且一个仍可访问的 Git branch/worktree 需要收尾时使用。
 ---
 
-# 集成已交付结果
+# 收尾开发分支
 
-## 职责
+## 原则
 
-`deliver-task` 证明 delivery 正确；本 skill 只负责把这个已交付结果安全集成到当前 destination，并验证新组合没有失败。
+> 不验证旧的交付证明；重新验证当前 Git 状态。
 
-| 责任 | 本 skill 负责的事实 |
+handoff 只负责定位 live source，不是正确性证书。任何测试摘要、review 结论或 .dev-task/ 文件都不能替代本轮对当前 source 的 fresh verification。integration 动作由人选择；选择前只做只读检查和验证。
+
+## 输入
+
+接受 live source workspace 的绝对路径，以及可选的自然语言 handoff。handoff 至少应指出已知的 base branch/base commit、当前 branch 或 detached HEAD、完整 HEAD OID、是否有未提交业务变化，以及上一轮实际运行的验证。
+
+不要求 delivery.json、claims、validate-result 或 close-check。.dev-task/ 存在时可读取 task.json、execution.json 和 artifacts/workspace.json 帮助定位，但它们不构成交付闭环。
+
+## 1. 重验 live source
+
+在提供集成选项前：
+
+1. 确认 workspace 仍存在且属于预期 Git repository，读取 git-dir、git-common-dir、workspace root、branch/detached 状态、完整 HEAD OID 和 dirty 状态。
+2. 从 handoff、当前 Task、对话或 upstream 确定 base branch；无法唯一确定时向人确认，不猜 main。
+3. handoff 具名的 HEAD 或工作区状态与现场不一致时，把 handoff 标为 stale，并以当前现场继续；不能把旧结论套到新 source，也不能只因摘要过期而拒绝 closeout。当前 source 有未提交变化时按第 2 节的 commitPolicy 分流；base 无法确定或任务是否完成已无法判断时，才停止并返回 deliver-task。
+4. 按当前项目指令运行完整测试套件。命令失败或无法确定可信的完整验证入口时停止，不提供 merge / PR 菜单。
+5. execution.architecturePath 非 null 时，对当前 base → source 运行 fresh Architecture Drift Review：可以宽读以理解结构，但只阻塞与已确认 [x] Architecture 决定相冲突的 drift；非 Architecture finding 不在此路由或修复。path 无法读取、出现 [ ] 或 review 无法闭合时停止。null 分支不搜索 Architecture。
+
+这一步验证的是当前 source，不复述或校验历史 evidence。
+
+## 2. 让人选择动作
+
+只提供当前状态可安全执行的动作，然后等待明确选择：
+
+| source 状态 | 可选动作 |
 | --- | --- |
-| integration | 形成并推进 merge candidate，或明确 keep |
-| validation | 验证 `delivery + destination` 的组合结果 |
-| destination safety | 冻结并复核 destination OID，阻止 drift 上推进 |
-| workspace safety | 隔离试合并，保留 dirty / failed 状态，只做安全 cleanup |
+| named branch，业务变化已提交且 clean | 本地合并 / push 并创建 PR 或 MR / 保留 |
+| detached HEAD，业务变化已提交且 clean | push 为新分支并创建 PR 或 MR / 保留 |
+| 存在未提交业务变化，commitPolicy 为 required / allowed | 保留；需要集成时回到 deliver-task 形成可集成 commit |
+| 存在未提交业务变化，commitPolicy 为 forbidden | 只能保留；用户明确仍要集成时回 upstream 修改提交授权，不回 deliver-task 尝试提交 |
+| 相对 base 无业务变化 | 保留，或在明确 cleanup 授权下结束 workspace |
 
-Task validation、General / Rules Review、Acceptance、Repair 和 `delivered` closure 都已由
-`deliver-task` 完成，本 skill 不重跑、不解释，也不创建第二套 lifecycle。本 skill 只消费上述 closed
-source，不读取或判断 Architecture，也不派 Architecture reviewer。
+“收尾”“处理一下”不自动授权 merge、push、PR、删除 branch/worktree 或 discard。discard 不进入普通菜单；只有用户明确要求，并再次确认准确目标后才执行。
 
-本 skill 只处理本地 Git 状态，不 push，不执行远端 side effect，也不回写 `delivery.json`。
+## 3. 执行动作
 
-## 输入与动作
+用户选择本地合并或 push / PR 后，在执行任何对应 Git / 远端写动作前，再读取一次 source 的完整 HEAD OID 和 dirty 状态，与本轮 fresh verification 时的现场比较。相同才继续，并以这次确认的完整 HEAD OID 作为本次 merge / push 的 source operand，不再用 branch 名重新解析 source；不同则不执行写动作，回到第 1 节重新验证当前 live source，再重新提供适用动作并等待明确选择。比较和确认的 OID 只使用当前上下文，不落盘新状态。
 
-接受 live `taskDir`、其中的 `delivery.json` 路径，或包含该绝对 `taskDir` 的 `deliver-task` 返回结果。
+### 本地合并
 
-写入 Git 前只完成以下预检：
+仅适用于 named branch：
 
-1. 定位对应 `deliver-task` skill，并运行：
+1. 定位 base branch 所在的主 workspace，确认其 clean；dirty 时停止，不 stash、reset 或 clean。
+2. checkout base，并在有 upstream 时执行安全的 fast-forward-only 更新；无法 fast-forward 时停止。
+3. merge 刚刚确认的完整 source HEAD OID。冲突需要新业务语义、Architecture、需求或公共契约决定时停止，不猜解法。
+4. 在 merged tree 上重新运行完整测试套件；Architecture path 分支同时重新运行 Drift Review。
+5. 任一检查失败时保留 merge/source 现场，不 cleanup。全部通过才进入 cleanup。
 
-   ```bash
-   node <deliver-task-skill-dir>/scripts/deliver-task.mjs validate-result <taskDir>
-   ```
+### Push 并创建 PR / MR
 
-2. 确认 `delivery.json.result == "delivered"`，读取 target 与 workspace identity。
-3. 对 `commit-range` 确认 `baseCommit`、`headCommit` objects 存在，且 `baseCommit` 是 `headCommit` 的祖先。
-4. 集成时确认 source 与 destination 属于同一 Git 历史，并读取 destination 的项目指令。
+只有人选择后才产生远端副作用。named branch 把刚刚确认的完整 HEAD OID 推送到同名远端 branch；detached HEAD 先让人确认新的远端 branch 名，再把刚刚确认的完整 HEAD OID 推送到该 branch。使用仓库对应 forge 流程创建 PR/MR，并保留 source workspace 供后续 review 修复。
 
-预检不运行 `close-check`，不重读 Review、Acceptance、Rules 或 General 历史，也不读取或判断
-Architecture；`validate-result` 通过就是本 skill 对 delivery closure 的输入门禁。
+### 保留
 
-| target | 主动作 |
-| --- | --- |
-| `commit-range` | `merge` 或 `keep`；未指定时推荐 `merge` |
-| `no-change` | `keep`，按授权做安全 cleanup |
-| `worktree` | `keep`；需要移植时停止并返回 upstream |
+不修改 Git，不清理 source，报告 workspace、branch/detached 状态和完整 HEAD OID。
 
-`merge` 是默认推荐，不是默认授权。用户或 caller 已明确选择动作时直接执行；只给出 delivery 而未选择动作时，完成只读预检后推荐 `merge`，等待确认再写入 Git。`merge` 权限不自动包含 source cleanup、rebase、force update 或 branch 删除权限。
+## Cleanup
 
-`keep` 不需要 destination：保留 source branch/worktree，不形成 candidate，不运行 integration validation，也不 cleanup source。
+只有本地合并成功，或用户明确确认 discard，才考虑 cleanup。
 
-## merge 主流程
-
-### 1. 冻结 destination
-
-确定目标仓库和分支，读取其当前完整 OID `D`。同时记录该分支所在 workspace 是否 dirty；dirty 不阻止 isolated candidate 形成，但会阻止后续推进。
-
-### 2. 隔离形成 candidate
-
-从 `D` 建立本轮专用的 isolated candidate branch/workspace；优先使用运行环境提供的 native workspace，否则使用独立 `git worktree`。在 candidate 中 merge 固定 `headCommit`，不依赖可移动的 source branch 名，也不在用户 caller workspace 中试合并。
-
-Git conflict 只有在当前代码、destination 项目指令和既有 Git 事实能唯一推出解法时，才可在 candidate
-中机械解决并继续；否则立即停止并保留 source 与 isolated 状态，返回冲突路径、固定 source range 和
-destination OID，不猜测解决、不分类所需决定，也不改写 source 或在 destination 中重试。
-
-### 3. integration validation
-
-在 candidate 中运行 destination 项目指令要求的必要验证，以及由本次组合风险直接要求的现有验证入口。validation 只回答：
-
-```text
-delivery 与当前 destination 组合后是否仍然正常？
-```
-
-不重新判断 Task 是否完整，不重跑 Task acceptance，不派 Task、General、Rules 或 Architecture reviewer。
-若验证失败，记录失败命令与结果，保留 candidate 和 source，不推进 destination，不 cleanup；只返回失败
-事实，不分类其属于 Architecture、需求、公共契约或普通业务问题。
-
-### 4. 复核并推进 destination
-
-validation 通过后重新读取目标分支完整 OID 与其 workspace 状态：
-
-- 仍为 `D` 且 workspace clean：用要求旧值为 `D` 的安全 fast-forward 把目标分支推进到 candidate commit `C`；不 rebase、不 force update。
-- 已变为 `D2`：停止；旧 candidate validation 只适用于 `D`，不得复用。保留 candidate/source，不自动 merge 或 rebase 新基线。
-- workspace dirty，或 Git 无法安全推进：停止；不 stash、reset、clean、覆盖或归因用户修改。保留已验证 candidate/source，并返回当前事实。
-
-推进后读取 destination 的完整 OID，作为 `destination after`。任何 compare-and-advance 失败都按未推进处理，不清理 candidate/source。
-
-## cherry-pick 异常路径
-
-只有用户明确要求 `cherry-pick` 才进入本路径；推荐动作和 merge 主流程都不把它列为普通备选。
-
-开始前确认 `baseCommit..headCommit` 是语义与拓扑都明确的线性 range。range 含 merge commit、mainline parent 不明确、依赖 source 拓扑或无法唯一确定重放顺序时立即停止；不猜 `-m`、不展平 merge、不试错后回滚。
-
-满足条件时，从 `D` 在 isolated candidate 中按拓扑顺序重放固定 commits，再复用同一套 integration validation、destination drift 和 workspace safety 门禁。接受新 commit identity，但不改写 source delivery。
-
-## workspace safety 与 cleanup
-
-禁止自动 `stash / reset / clean`，禁止 force-remove worktree 或使用 `git branch -D`。
-
-| 状态 | cleanup 结果 |
-| --- | --- |
-| `keep` | source branch/worktree 全部保留 |
-| validation 失败、destination drift 或 destination 无法安全推进 | candidate/source 全部保留 |
-| 集成成功，worktree 由本流程拥有且 clean | 按已有 cleanup 授权正常删除 |
-| provided / external workspace | 原样保留并交还 owner |
-| 任一待清理 worktree dirty | 保留，不 force remove |
-
-branch 只在已获删除授权且普通安全删除成功时删除；安全删除失败就保留。cleanup 不要求 delivery proof、`.dev-task` 或其它 proof artifact 在删除后继续存活，也不建立 durable-ref / proof-survival lifecycle。
-
-本轮创建的 candidate worktree/branch 只有在 destination 已成功推进、它们 clean 且没有唯一未集成成果时才可正常清理；否则保留。source cleanup 与 candidate cleanup 分别按各自 ownership、dirty 状态和授权判断。
+- 仅正常删除由当前流程或 deliver-task 默认 .worktrees/ / worktrees/ 创建且 clean 的 worktree。
+- provided、external、detached 或 host-managed workspace 原样交还 owner。
+- dirty/untracked worktree 不 force remove；展示 git status，等待人决定如何处理。
+- branch 只用安全删除；失败就保留，禁止 git branch -D。
+- PR/MR 与 keep 都保留 source。
 
 ## 最终输出
 
-只报告以下集成事实，不输出第二套 delivery closure 状态：
+使用简短 Markdown 报告当前事实：
 
-- source target：target 类型；`commit-range` 时为完整 `baseCommit..headCommit`；
-- integration action：`merge / keep / cherry-pick` 及 `completed / stopped`；
-- destination before / after：完整 OID；不适用时写 `not-applicable`；
-- validation result：实际命令与 `passed / failed / not-run`；
-- destination drift：`unchanged / drifted / not-checked`，drift 时带 `D2`；
-- cleanup / keep：各 source/candidate branch/worktree 的 `removed / retained / not-created`。
+- source：workspace、branch/detached、完整 HEAD、base；
+- fresh verification：实际命令和结果；
+- Architecture Drift Review：clean / finding / not-applicable；
+- action：本地合并、PR/MR 或保留，以及是否完成；
+- merged destination：适用时给出 before/after OID；
+- cleanup：每个 branch/worktree 的 removed/retained。
 
-停止原因写入对应事实项，例如 validation failure 写在 validation result，dirty workspace 写在 cleanup / keep；不再附加 Review、Acceptance、Architecture binding 或 proof closure 状态。
+不生成第二套 result schema、delivery proof 或 lifecycle artifact。

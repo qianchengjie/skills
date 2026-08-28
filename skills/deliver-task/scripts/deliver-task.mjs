@@ -8,27 +8,11 @@ import path from 'node:path';
 const TASK_SCHEMA = 'deliver-task.task.v1';
 const WORKSPACE_SCHEMA = 'deliver-task.workspace.v1';
 const EXECUTION_SCHEMA = 'deliver-task.execution.v1';
-const CLAIMS_SCHEMA = 'deliver-task.claims.v1';
-const DELIVERY_SCHEMA = 'deliver-task.delivery.v1';
 const COMMIT_POLICIES = new Set(['required', 'allowed', 'forbidden']);
-const RESULT_STATUSES = new Set(['delivered', 'needs-upstream', 'blocked']);
-const CLAIM_STATUSES = new Set(['proposed', 'implemented', 'verified', 'blocked', 'waived']);
 const ACCEPTANCE_POLICIES = new Set(['required', 'not-required']);
 const RULES_REVIEW_POLICIES = new Set(['required', 'not-required']);
 const INITIAL_REPAIR_POLICIES = new Set(['approval-required', 'auto']);
-const ACCEPTANCE_RESULTS = new Set(['passed', 'skipped', 'rejected']);
-const SCOPED_REVIEW_RESULTS = new Set(['clean', 'findings', 'cannot-bound']);
-const FULL_REVIEW_RESULTS = new Set(['clean', 'findings']);
-const REVIEW_WAVE_RESULTS = new Set(['clean', 'failed']);
 const REVISION_TRANSACTION_NAME = '.revision-transaction';
-const UPSTREAM_KINDS = new Set([
-  'target-change',
-  'acceptance-change',
-  'contract-change',
-  'authorization-change',
-  'user-acceptance',
-]);
-const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
 const TASK_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const GIT_OID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const WORKSPACE_KINDS = new Set(['provided', 'git-worktree']);
@@ -91,7 +75,9 @@ function taskHash(task) {
 }
 
 function executionHash(execution) {
-  return sha256(canonicalJson(execution));
+  const semanticBoundary = { ...execution };
+  delete semanticBoundary.evidenceRefs;
+  return sha256(canonicalJson(semanticBoundary));
 }
 
 function git(root, args, options = {}) {
@@ -180,6 +166,42 @@ async function readOptionalJson(file, label) {
   }
 }
 
+async function readText(file, label) {
+  try {
+    return await fs.readFile(file, 'utf8');
+  } catch (error) {
+    throw gateError(`${label} missing or unreadable: ${error.message}`);
+  }
+}
+
+function assertAuditRef(reference, label) {
+  if (!/^audits\.md#A[1-9][0-9]*$/.test(reference || '')) {
+    throw gateError(`${label} must reference an audits.md A entry`);
+  }
+}
+
+async function resolveEvidenceRef(context, reference) {
+  assertString(reference, 'evidence ref');
+  const [relativeFile, anchor, ...extra] = reference.split('#');
+  if (extra.length > 0 || !relativeFile) throw gateError(`invalid evidence ref: ${reference}`);
+  const normalized = normalizeRepoPattern(relativeFile, `evidence ref ${reference}`);
+  const target = path.resolve(context.taskDir, ...normalized.split('/'));
+  const relative = path.relative(context.taskDir, target);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw gateError(`evidence ref escapes task directory: ${reference}`);
+  }
+  const source = await readText(target, `evidence ref ${reference}`);
+  if (!anchor) return source;
+
+  const escaped = anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const lines = source.split(/\r?\n/);
+  const heading = new RegExp(`^(#{1,6})\\s+${escaped}(?:[：:].*)?$`);
+  if (!lines.some((line) => heading.test(line))) {
+    throw gateError(`evidence ref missing anchor: ${reference}`);
+  }
+  return source;
+}
+
 async function writeJson(file, value) {
   await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
 }
@@ -219,7 +241,6 @@ async function recoverRevisionTransaction(taskDir, expectedTaskId = null) {
   if (expectedTaskId !== null && oldTask.taskId !== expectedTaskId) return false;
   const snapshots = [
     [oldTaskPath, path.join(taskDir, 'task.json')],
-    [path.join(transactionDir, 'old-claims.json'), path.join(taskDir, 'claims.json')],
     [
       path.join(transactionDir, 'old-workspace.json'),
       path.join(taskDir, 'artifacts', 'workspace.json'),
@@ -248,7 +269,6 @@ async function stageRevisionTransaction(taskDir) {
   );
   try {
     await fs.copyFile(path.join(taskDir, 'task.json'), path.join(stagingDir, 'old-task.json'));
-    await fs.copyFile(path.join(taskDir, 'claims.json'), path.join(stagingDir, 'old-claims.json'));
     await fs.copyFile(
       path.join(taskDir, 'artifacts', 'workspace.json'),
       path.join(stagingDir, 'old-workspace.json'),
@@ -515,7 +535,7 @@ async function validateWorkspaceRecord(record, task, expectedWorkspaceRoot = nul
 async function readWorkspaceContext(context, task) {
   const record = await readOptionalJson(workspaceRecordPath(context), 'artifacts/workspace.json');
   if (record === null) {
-    throw gateError('task proof state is incomplete: artifacts/workspace.json is missing');
+    throw gateError('task state is incomplete: artifacts/workspace.json is missing');
   }
   const { workspaceRoot } = await validateWorkspaceRecord(record, task, context.repoRoot);
   return {
@@ -583,16 +603,16 @@ async function gitCommonDir(root) {
   return fs.realpath(absolute);
 }
 
-function isTaskDeliveryRef(reference, task) {
+function isTaskBranchRef(reference, task) {
   const prefix = `refs/heads/deliver-task/${task.taskId}-r`;
   return reference?.startsWith(prefix)
     && /^\d+-[0-9a-f]{12}$/.test(reference.slice(prefix.length));
 }
 
-function taskDeliveryRefs(root, task) {
+function taskBranchRefs(root, task) {
   return git(root, ['for-each-ref', '--format=%(refname)', 'refs/heads'])
     .split(/\r?\n/)
-    .filter((reference) => isTaskDeliveryRef(reference, task));
+    .filter((reference) => isTaskBranchRef(reference, task));
 }
 
 function outputForStart(record) {
@@ -609,9 +629,9 @@ function outputForStart(record) {
 async function readCompleteTaskState(workspaceRoot, task) {
   const taskDir = path.join(workspaceRoot, '.dev-task');
   const state = await optionalLstat(taskDir);
-  if (state === null) throw gateError('task proof state is missing from existing workspace');
+  if (state === null) throw gateError('task state is missing from existing workspace');
   if (!state.isDirectory() || state.isSymbolicLink()) {
-    throw gateError('task proof state is incomplete: .dev-task must be a real directory');
+    throw gateError('task state is incomplete: .dev-task must be a real directory');
   }
 
   let context;
@@ -620,24 +640,22 @@ async function readCompleteTaskState(workspaceRoot, task) {
     context = await resolveContext(taskDir);
     existingTask = await readTask(context);
   } catch (error) {
-    throw gateError(`task proof state is incomplete: ${error.message}`);
+    throw gateError(`task state is incomplete: ${error.message}`);
   }
   if (canonicalJson(existingTask) !== canonicalJson(task)) {
-    throw gateError('task proof state has a different task identity');
+    throw gateError('task state has a different task identity');
   }
 
   try {
-    const claims = await readJson(path.join(taskDir, 'claims.json'), 'claims.json');
-    validateClaims(claims, task);
-    const audits = await readJsonOrText(path.join(taskDir, 'audits.md'), 'audits.md');
+    const audits = await readText(path.join(taskDir, 'audits.md'), 'audits.md');
     if (!audits.trim()) throw gateError('audits.md must not be empty');
-    const ignore = await readJsonOrText(path.join(taskDir, '.gitignore'), '.gitignore');
+    const ignore = await readText(path.join(taskDir, '.gitignore'), '.gitignore');
     if (ignore !== '*\n') throw gateError('.gitignore must contain exactly *');
     const record = await readJson(workspaceRecordPath(context), 'artifacts/workspace.json');
     await validateWorkspaceRecord(record, task, workspaceRoot);
     return outputForStart(record);
   } catch (error) {
-    throw gateError(`task proof state is incomplete: ${error.message}`);
+    throw gateError(`task state is incomplete: ${error.message}`);
   }
 }
 
@@ -657,22 +675,22 @@ async function findTaskWorkspace(repoRoot, task) {
     } catch (error) {
       if (
         error.code === 'ENOENT'
-        && !isTaskDeliveryRef(worktree.branch, task)
+        && !isTaskBranchRef(worktree.branch, task)
       ) {
         continue;
       }
       if (error.code === 'ENOENT') {
-        throw gateError('task delivery branch exists but its live task proof state is missing');
+        throw gateError('task branch exists but its live task state is missing');
       }
-      throw gateError(`cannot inspect live task proof state: ${error.message}`);
+      throw gateError(`cannot inspect live task state: ${error.message}`);
     }
 
     let candidate;
     try {
       candidate = JSON.parse(source);
     } catch {
-      if (isTaskDeliveryRef(worktree.branch, task)) {
-        throw gateError('task proof state is incomplete: task.json must contain valid JSON');
+      if (isTaskBranchRef(worktree.branch, task)) {
+        throw gateError('task state is incomplete: task.json must contain valid JSON');
       }
       continue;
     }
@@ -680,8 +698,8 @@ async function findTaskWorkspace(repoRoot, task) {
       !isPlainObject(candidate) ||
       candidate.taskId !== task.taskId
     ) {
-      if (isTaskDeliveryRef(worktree.branch, task)) {
-        throw gateError('task proof state is incomplete: task branch does not match task.json');
+      if (isTaskBranchRef(worktree.branch, task)) {
+        throw gateError('task state is incomplete: task branch does not match task.json');
       }
       continue;
     }
@@ -690,7 +708,7 @@ async function findTaskWorkspace(repoRoot, task) {
     try {
       existingTask = validateTask(candidate, workspaceRoot);
     } catch (error) {
-      throw gateError(`task proof state is incomplete: ${error.message}`);
+      throw gateError(`task state is incomplete: ${error.message}`);
     }
     if (existingTask.revision === task.revision) {
       if (canonicalJson(existingTask) !== canonicalJson(task)) {
@@ -701,13 +719,13 @@ async function findTaskWorkspace(repoRoot, task) {
     }
     if (existingTask.baseCommit !== task.baseCommit) continue;
     if (existingTask.revision > task.revision) {
-      throw gateError('task revision is older than the live delivery revision');
+      throw gateError('task revision is older than the live task revision');
     }
     matches.push({ workspaceRoot, task: existingTask });
   }
 
   if (matches.length > 1) {
-    throw gateError('multiple live workspaces contain the same task delivery');
+    throw gateError('multiple live workspaces contain the same task lineage');
   }
   if (matches.length === 1) return matches[0];
 
@@ -715,18 +733,18 @@ async function findTaskWorkspace(repoRoot, task) {
   if (gitRefExists(repoRoot, branch)) {
     const registeredPath = worktreePathForBranch(repoRoot, branch);
     if (!registeredPath) {
-      throw gateError('task branch exists but its live task proof workspace is missing');
+      throw gateError('task branch exists but its live task workspace is missing');
     }
     const workspaceRoot = await fs.realpath(registeredPath);
     if (workspaceRoot === repoRoot) {
-      throw gateError('task branch is checked out in the source workspace without isolated proof state');
+      throw gateError('task branch is checked out in the source workspace without isolated task state');
     }
     return { workspaceRoot, task };
   }
 
-  for (const deliveryRef of taskDeliveryRefs(repoRoot, task)) {
-    if (!worktreePathForBranch(repoRoot, deliveryRef)) {
-      throw gateError('task delivery branch exists but its live task proof workspace is missing');
+  for (const taskRef of taskBranchRefs(repoRoot, task)) {
+    if (!worktreePathForBranch(repoRoot, taskRef)) {
+      throw gateError('task branch exists but its live task workspace is missing');
     }
   }
   return null;
@@ -734,7 +752,7 @@ async function findTaskWorkspace(repoRoot, task) {
 
 async function reviseTaskState(workspaceRoot, existingTask, task) {
   if (existingTask.taskId !== task.taskId || existingTask.baseCommit !== task.baseCommit) {
-    throw gateError('contract revision must stay in the current task delivery');
+    throw gateError('contract revision must stay in the current task lineage');
   }
   if (task.revision <= existingTask.revision) {
     throw gateError('contract revision must increase task.revision');
@@ -746,14 +764,8 @@ async function reviseTaskState(workspaceRoot, existingTask, task) {
   const record = await readJson(workspaceRecordPath(context), 'artifacts/workspace.json');
   const revisedRecord = { ...record, task: bindingForTask(task) };
   await validateWorkspaceRecord(revisedRecord, task, workspaceRoot);
-  const revisedClaims = {
-    schemaVersion: CLAIMS_SCHEMA,
-    task: bindingForTask(task),
-    claims: [],
-  };
   const transactionDir = await stageRevisionTransaction(taskDir);
   try {
-    await writeJson(path.join(taskDir, 'claims.json'), revisedClaims);
     await writeJson(workspaceRecordPath(context), revisedRecord);
     await writeJson(path.join(taskDir, 'task.json'), task);
     await fs.rm(transactionDir, { recursive: true });
@@ -780,17 +792,12 @@ async function continueTaskState(binding, task) {
 async function writeInitialTaskState(workspaceRoot, task, record) {
   const taskDir = path.join(workspaceRoot, '.dev-task');
   if (await optionalLstat(taskDir)) {
-    throw gateError('.dev-task already exists and cannot be initialized as new proof state');
+    throw gateError('.dev-task already exists and cannot be initialized as new task state');
   }
   const stagingDir = await fs.mkdtemp(path.join(workspaceRoot, '.dev-task.tmp-'));
   let installed = false;
   try {
     await writeJson(path.join(stagingDir, 'task.json'), task);
-    await writeJson(path.join(stagingDir, 'claims.json'), {
-      schemaVersion: CLAIMS_SCHEMA,
-      task: bindingForTask(task),
-      claims: [],
-    });
     await fs.writeFile(
       path.join(stagingDir, 'audits.md'),
       `# 交付审计\n\n- taskId：${task.taskId}\n- revision：${task.revision}\n- taskHash：${taskHash(task)}\n`,
@@ -804,7 +811,7 @@ async function writeInitialTaskState(workspaceRoot, task, record) {
   } catch (error) {
     await fs.rm(installed ? taskDir : stagingDir, { recursive: true, force: true }).catch(() => {});
     if (error instanceof GateError) throw error;
-    throw gateError(`cannot initialize task proof state: ${error.message}`);
+    throw gateError(`cannot initialize task state: ${error.message}`);
   }
 }
 
@@ -847,7 +854,7 @@ async function startWithProvidedWorkspace(repoRoot, task, providedPath) {
   const existingState = await optionalLstat(taskDir);
   if (existingState !== null) {
     if (!existingState.isDirectory() || existingState.isSymbolicLink()) {
-      throw gateError('provided workspace contains incomplete task proof state');
+      throw gateError('provided workspace contains incomplete task state');
     }
     let existingTask;
     try {
@@ -856,7 +863,7 @@ async function startWithProvidedWorkspace(repoRoot, task, providedPath) {
         workspaceRoot,
       );
     } catch (error) {
-      throw gateError(`provided workspace contains incomplete task proof state: ${error.message}`);
+      throw gateError(`provided workspace contains incomplete task state: ${error.message}`);
     }
     if (canonicalJson(existingTask) !== canonicalJson(task)) {
       throw gateError('provided workspace already contains an existing task identity');
@@ -1094,761 +1101,10 @@ async function snapshotTarget(context, task, execution) {
   };
 }
 
-function validateTargetIdentity(target, label) {
-  if (!isPlainObject(target)) throw gateError(`${label} must be an object`);
-  if (target.kind === 'commit-range') {
-    assertExactObject(target, ['kind', 'baseCommit', 'headCommit', 'executionHash'], [], label);
-    if (!GIT_OID_RE.test(target.headCommit || '')) {
-      throw gateError(`${label}.headCommit must be a full Git commit OID`);
-    }
-  } else if (target.kind === 'worktree') {
-    assertExactObject(target, ['kind', 'baseCommit', 'snapshotHash', 'executionHash'], [], label);
-    if (!SHA256_RE.test(target.snapshotHash || '')) throw gateError(`${label}.snapshotHash must be sha256`);
-  } else if (target.kind === 'no-change') {
-    assertExactObject(target, ['kind', 'baseCommit', 'executionHash'], [], label);
-  } else {
-    throw gateError(`${label}.kind must be commit-range, worktree, or no-change`);
-  }
-  if (!GIT_OID_RE.test(target.baseCommit || '')) {
-    throw gateError(`${label}.baseCommit must be a full Git commit OID`);
-  }
-  if (!SHA256_RE.test(target.executionHash || '')) {
-    throw gateError(`${label}.executionHash must be sha256`);
-  }
-}
-
-function validateTargetForTask(target, task, label) {
-  validateTargetIdentity(target, label);
-  if (target.kind === 'commit-range' && task.commitPolicy === 'forbidden') {
-    throw gateError(`${label} cannot use a commit-range target with commitPolicy forbidden`);
-  }
-  if (target.kind === 'worktree' && task.commitPolicy === 'required') {
-    throw gateError(`${label} cannot use a worktree target with commitPolicy required`);
-  }
-  if (target.baseCommit !== task.baseCommit) {
-    throw gateError(`${label} must use task.baseCommit`);
-  }
-}
-
-function validateTarget(target, task, execution, label = 'delivery.target') {
-  validateTargetForTask(target, task, label);
-  if (target.executionHash !== executionHash(execution)) {
-    throw gateError(`${label} has stale execution binding`);
-  }
-}
-
-function validateEvidenceRefs(evidenceRefs, { delivered, rulesReviewPolicy }) {
-  assertExactObject(
-    evidenceRefs,
-    ['claims', 'verification', 'generalReview', 'acceptance', 'rulesReview'],
-    [],
-    'delivery.evidenceRefs',
-  );
-  for (const field of ['claims', 'verification', 'generalReview']) {
-    const value = evidenceRefs[field];
-    if (delivered) assertString(value, `delivery.evidenceRefs.${field}`);
-    else if (value !== null) assertString(value, `delivery.evidenceRefs.${field}`);
-  }
-  if (rulesReviewPolicy === 'not-required') {
-    if (evidenceRefs.rulesReview !== null) {
-      throw gateError(
-        'rulesReviewPolicy not-required requires delivery.evidenceRefs.rulesReview to be null',
-      );
-    }
-  } else if (delivered) {
-    if (typeof evidenceRefs.rulesReview !== 'string' || evidenceRefs.rulesReview.length === 0) {
-      throw gateError(
-        'rulesReviewPolicy required requires delivery.evidenceRefs.rulesReview to be a string',
-      );
-    }
-  } else if (evidenceRefs.rulesReview !== null) {
-    assertString(evidenceRefs.rulesReview, 'delivery.evidenceRefs.rulesReview');
-  }
-  if (evidenceRefs.acceptance !== null) {
-    assertString(evidenceRefs.acceptance, 'delivery.evidenceRefs.acceptance');
-  }
-}
-
-function validateUpstreamRequest(request, result) {
-  if (result === 'delivered') {
-    if (request !== null) throw gateError('delivered requires upstreamRequest to be null');
-    return;
-  }
-  assertExactObject(request, ['kind', 'summary', 'evidenceRefs'], [], 'delivery.upstreamRequest');
-  assertString(request.summary, 'delivery.upstreamRequest.summary');
-  assertStringArray(request.evidenceRefs, 'delivery.upstreamRequest.evidenceRefs', { nonEmpty: true });
-  if (result === 'needs-upstream' && !UPSTREAM_KINDS.has(request.kind)) {
-    throw gateError(`needs-upstream requires one of ${[...UPSTREAM_KINDS].join(', ')}`);
-  }
-  if (result === 'blocked' && request.kind !== 'blocker') {
-    throw gateError('blocked requires upstreamRequest.kind blocker');
-  }
-}
-
-function validateDelivery(delivery, task, execution) {
-  assertExactObject(
-    delivery,
-    [
-      'schemaVersion',
-      'task',
-      'result',
-      'target',
-      'evidenceRefs',
-      'residualRiskRefs',
-      'upstreamRequest',
-    ],
-    [],
-    'delivery.json',
-  );
-  if (delivery.schemaVersion !== DELIVERY_SCHEMA) {
-    throw gateError(`delivery.schemaVersion must be ${DELIVERY_SCHEMA}`);
-  }
-  validateBinding(delivery.task, task, 'delivery.task');
-  if (!RESULT_STATUSES.has(delivery.result)) {
-    throw gateError(`delivery.result must be one of ${[...RESULT_STATUSES].join(', ')}`);
-  }
-  if (delivery.target !== null) {
-    if (!execution) throw gateError('delivery.target requires execution.json');
-    validateTarget(delivery.target, task, execution);
-  }
-  if (delivery.result === 'delivered' && delivery.target === null) {
-    throw gateError('delivered requires a target');
-  }
-  validateEvidenceRefs(delivery.evidenceRefs, {
-    delivered: delivery.result === 'delivered',
-    rulesReviewPolicy: task.rulesReviewPolicy,
-  });
-  assertStringArray(delivery.residualRiskRefs, 'delivery.residualRiskRefs');
-  validateUpstreamRequest(delivery.upstreamRequest, delivery.result);
-  return delivery;
-}
-
-function validateClaims(claims, task, { requireClosed = false } = {}) {
-  assertExactObject(claims, ['schemaVersion', 'task', 'claims'], [], 'claims.json');
-  if (claims.schemaVersion !== CLAIMS_SCHEMA) throw gateError(`claims.schemaVersion must be ${CLAIMS_SCHEMA}`);
-  validateBinding(claims.task, task, 'claims.task');
-  if (!Array.isArray(claims.claims)) throw gateError('claims.claims must be an array');
-  const ids = new Set();
-  for (const [index, claim] of claims.claims.entries()) {
-    const label = `claims.claims[${index}]`;
-    assertExactObject(claim, ['claimId', 'statement', 'status', 'evidenceRefs'], [], label);
-    if (!/^C[1-9][0-9]*$/.test(claim.claimId || '')) throw gateError(`${label}.claimId must match C<positive integer>`);
-    if (ids.has(claim.claimId)) throw gateError(`duplicate claimId ${claim.claimId}`);
-    ids.add(claim.claimId);
-    assertString(claim.statement, `${label}.statement`);
-    if (!CLAIM_STATUSES.has(claim.status)) {
-      throw gateError(`${label}.status must be one of ${[...CLAIM_STATUSES].join(', ')}`);
-    }
-    assertStringArray(claim.evidenceRefs, `${label}.evidenceRefs`);
-    if (new Set(['verified', 'waived']).has(claim.status) && claim.evidenceRefs.length === 0) {
-      throw gateError(`${label} ${claim.status} requires evidenceRefs`);
-    }
-  }
-  if (requireClosed) {
-    if (claims.claims.length === 0) throw gateError('delivered requires at least one claim');
-    const open = claims.claims.filter((claim) => !new Set(['verified', 'waived']).has(claim.status));
-    if (open.length > 0) {
-      throw gateError(`delivered claims must be verified or waived: ${open.map((claim) => claim.claimId).join(', ')}`);
-    }
-  }
-  return claims;
-}
-
-async function resolveEvidenceRef(context, reference, { allowNotApplicable = true } = {}) {
-  if (reference === 'not-applicable') {
-    if (!allowNotApplicable) throw gateError('evidence ref not-applicable is not a task-owned evidence ref');
-    return { source: '', section: '' };
-  }
-  assertString(reference, 'evidence ref');
-  const [relativeFile, anchor, ...extra] = reference.split('#');
-  if (extra.length > 0 || !relativeFile) throw gateError(`invalid evidence ref: ${reference}`);
-  const normalized = normalizeRepoPattern(relativeFile, `evidence ref ${reference}`);
-  const target = path.resolve(context.taskDir, ...normalized.split('/'));
-  const relative = path.relative(context.taskDir, target);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw gateError(`evidence ref escapes task directory: ${reference}`);
-  }
-  let source;
-  try {
-    source = await fs.readFile(target, 'utf8');
-  } catch {
-    throw gateError(`evidence ref missing: ${reference}`);
-  }
-  if (anchor) {
-    const escaped = anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const lines = source.split(/\r?\n/);
-    const heading = new RegExp(`^(#{1,6})\\s+${escaped}(?:[：:].*)?$`);
-    const start = lines.findIndex((line) => heading.test(line));
-    if (start === -1) throw gateError(`evidence ref missing anchor: ${reference}`);
-    const level = heading.exec(lines[start])[1].length;
-    let end = lines.length;
-    for (let index = start + 1; index < lines.length; index += 1) {
-      const nextHeading = /^(#{1,6})\s+/.exec(lines[index]);
-      if (nextHeading && nextHeading[1].length <= level) {
-        end = index;
-        break;
-      }
-    }
-    return { source, section: lines.slice(start + 1, end).join('\n') };
-  }
-  return { source, section: source };
-}
-
-function protocolBlocks(source, blockName, label) {
-  const opening = `\`\`\`${blockName}`;
-  const lines = source.split(/\r?\n/);
-  const blocks = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    if (lines[index].trim() !== opening) continue;
-    const end = lines.findIndex((line, candidate) => candidate > index && line.trim() === '\`\`\`');
-    if (end === -1) throw gateError(`${label} has unterminated ${blockName} block`);
-    const payload = lines.slice(index + 1, end).join('\n').trim();
-    try {
-      blocks.push(JSON.parse(payload));
-    } catch (error) {
-      throw gateError(`${label} ${blockName} block must be valid JSON: ${error.message}`);
-    }
-    index = end;
-  }
-  return blocks;
-}
-
-function singleProtocolBlock(source, blockName, label) {
-  const blocks = protocolBlocks(source, blockName, label);
-  if (blocks.length !== 1) {
-    throw gateError(`${label} must contain exactly one ${blockName} block`);
-  }
-  return blocks[0];
-}
-
-function auditEntries(source) {
-  const lines = source.split(/\r?\n/);
-  const headings = [];
-  const anchors = new Set();
-  for (const [lineIndex, line] of lines.entries()) {
-    const match = /^###\s+(A[1-9][0-9]*)(?:[：:].*)?$/.exec(line);
-    if (!match) continue;
-    const anchor = match[1];
-    if (anchors.has(anchor)) throw gateError(`audits.md has duplicate anchor ${anchor}`);
-    anchors.add(anchor);
-    headings.push({ anchor, lineIndex });
-  }
-  return headings.map((heading, index) => {
-    const end = headings[index + 1]?.lineIndex ?? lines.length;
-    return {
-      index,
-      reference: `audits.md#${heading.anchor}`,
-      section: lines.slice(heading.lineIndex + 1, end).join('\n'),
-    };
-  });
-}
-
-function assertAuditRef(reference, label) {
-  if (!/^audits\.md#A[1-9][0-9]*$/.test(reference || '')) {
-    throw gateError(`${label} must reference an audits.md A entry`);
-  }
-}
-
-function validateBindingShape(binding, label) {
-  assertExactObject(binding, ['taskId', 'revision', 'taskHash'], [], label);
-  assertString(binding.taskId, `${label}.taskId`);
-  if (!Number.isSafeInteger(binding.revision) || binding.revision < 1) {
-    throw gateError(`${label}.revision must be a positive integer`);
-  }
-  if (!SHA256_RE.test(binding.taskHash || '')) throw gateError(`${label}.taskHash must be sha256`);
-}
-
-function sameTaskBinding(binding, task) {
-  return canonicalJson(binding) === canonicalJson(bindingForTask(task));
-}
-
-function validateGeneralBinding(record, task, execution, target, label) {
-  assertExactObject(record, ['task', 'executionHash', 'target'], [], label);
-  validateBinding(record.task, task, `${label}.task`);
-  if (record.executionHash !== executionHash(execution)) {
-    throw gateError(`${label} has stale execution binding`);
-  }
-  if (canonicalJson(record.target) !== canonicalJson(target)) {
-    throw gateError(`${label} has stale target binding`);
-  }
-}
-
-function resolvePriorReviewWaveAuditRef(reviewHistory, reference, currentEntry, label) {
-  assertAuditRef(reference, label);
-  const evidence = reviewHistory.entriesByRef.get(reference);
-  if (!evidence) throw gateError(`evidence ref missing anchor: ${reference}`);
-  if (evidence.index >= currentEntry.index) {
-    throw gateError(`${label} must reference an earlier audits.md A entry`);
-  }
-  return evidence;
-}
-
-function validateReviewResultBinding(
-  record,
-  task,
-  target,
-  executionHashValue,
-  { domain, mode, result, label },
-) {
-  assertExactObject(
-    record,
-    ['task', 'executionHash', 'target', 'domain', 'mode', 'result'],
-    [],
-    `${label} review result`,
-  );
-  validateBinding(record.task, task, `${label} review result.task`);
-  if (record.domain !== domain) {
-    throw gateError(`${label} review result.domain must be ${domain}`);
-  }
-  if (record.mode !== mode) {
-    throw gateError(`${label} review result.mode must be ${mode}`);
-  }
-  if (record.result !== result) {
-    throw gateError(`${label} review result.result must be ${result}`);
-  }
-  if (record.executionHash !== executionHashValue) {
-    throw gateError(`${label} review result has stale execution binding`);
-  }
-  if (canonicalJson(record.target) !== canonicalJson(target)) {
-    throw gateError(`${label} review result has stale target binding`);
-  }
-}
-
-function validateReviewResultRef(
-  reviewHistory,
-  reference,
-  currentEntry,
-  task,
-  target,
-  executionHashValue,
-  expected,
-) {
-  const evidence = resolvePriorReviewWaveAuditRef(
-    reviewHistory,
-    reference,
-    currentEntry,
-    expected.label,
-  );
-  const binding = singleProtocolBlock(
-    evidence.section,
-    'deliver-task-review-result',
-    expected.label,
-  );
-  validateReviewResultBinding(binding, task, target, executionHashValue, expected);
-}
-
-function validateReviewDomain(
-  record,
-  reviewHistory,
-  currentEntry,
-  task,
-  target,
-  executionHashValue,
-  domain,
-  label,
-) {
-  assertExactObject(
-    record,
-    ['scopedRef', 'scopedResult', 'fullRef', 'fullResult'],
-    [],
-    label,
-  );
-  if (!SCOPED_REVIEW_RESULTS.has(record.scopedResult)) {
-    throw gateError(`${label}.scopedResult must be clean, findings, or cannot-bound`);
-  }
-  validateReviewResultRef(
-    reviewHistory,
-    record.scopedRef,
-    currentEntry,
-    task,
-    target,
-    executionHashValue,
-    {
-      domain,
-      mode: 'scoped',
-      result: record.scopedResult,
-      label: `${label}.scopedRef`,
-    },
-  );
-  if (record.scopedResult === 'cannot-bound') {
-    if (record.fullRef === null || record.fullResult === null) {
-      throw gateError(`${label} scoped cannot-bound requires fullRef and fullResult`);
-    }
-    if (!FULL_REVIEW_RESULTS.has(record.fullResult)) {
-      throw gateError(`${label}.fullResult must be clean or findings after scoped cannot-bound`);
-    }
-    validateReviewResultRef(
-      reviewHistory,
-      record.fullRef,
-      currentEntry,
-      task,
-      target,
-      executionHashValue,
-      {
-        domain,
-        mode: 'full',
-        result: record.fullResult,
-        label: `${label}.fullRef`,
-      },
-    );
-    return record.fullResult;
-  }
-  if (record.fullRef !== null || record.fullResult !== null) {
-    throw gateError(`${label} Full Review is only allowed after scoped cannot-bound`);
-  }
-  return record.scopedResult;
-}
-
-function validateReviewWave(
-  record,
-  task,
-  reviewHistory,
-  currentEntry,
-  expectedWave,
-  priorFailedWaveCount,
-  previousWaveTarget,
-) {
-  const label = `Review Wave ${expectedWave}`;
-  assertExactObject(
-    record,
-    [
-      'task',
-      'executionHash',
-      'wave',
-      'failedWaveCount',
-      'previousTarget',
-      'target',
-      'repairInputRefs',
-      'repairDiffRef',
-      'validationRefs',
-      'general',
-      'rules',
-      'mergedFindingRefs',
-      'result',
-    ],
-    [],
-    label,
-  );
-  if (priorFailedWaveCount >= 4) {
-    throw gateError(`4 failed Review Waves require controller adjudication/escalation; stop automatic repair before wave ${expectedWave}`);
-  }
-  validateBinding(record.task, task, `${label}.task`);
-  if (record.executionHash !== record.target?.executionHash) {
-    throw gateError(`${label}.executionHash must equal ${label}.target.executionHash`);
-  }
-  if (record.wave !== expectedWave) {
-    throw gateError(`${label}.wave must equal ${expectedWave}`);
-  }
-  if (!Number.isSafeInteger(record.failedWaveCount) || record.failedWaveCount < 0) {
-    throw gateError(`${label}.failedWaveCount must be a non-negative integer`);
-  }
-  validateTargetForTask(record.previousTarget, task, `${label}.previousTarget`);
-  validateTargetForTask(record.target, task, `${label}.target`);
-  if (canonicalJson(record.previousTarget) === canonicalJson(record.target)) {
-    throw gateError(`${label} requires a changed target`);
-  }
-  if (
-    previousWaveTarget !== null
-    && canonicalJson(record.previousTarget) !== canonicalJson(previousWaveTarget)
-  ) {
-    throw gateError(`${label}.previousTarget must equal the preceding Review Wave target`);
-  }
-  assertStringArray(record.repairInputRefs, `${label}.repairInputRefs`, { nonEmpty: true });
-  assertString(record.repairDiffRef, `${label}.repairDiffRef`);
-  assertStringArray(record.validationRefs, `${label}.validationRefs`, { nonEmpty: true });
-  assertStringArray(record.mergedFindingRefs, `${label}.mergedFindingRefs`);
-  const references = [
-    ...record.repairInputRefs.map((reference, index) => [reference, `${label}.repairInputRefs[${index}]`]),
-    [record.repairDiffRef, `${label}.repairDiffRef`],
-    ...record.validationRefs.map((reference, index) => [
-      reference,
-      `${label}.validationRefs[${index}]`,
-    ]),
-    ...record.mergedFindingRefs.map((reference, index) => [
-      reference,
-      `${label}.mergedFindingRefs[${index}]`,
-    ]),
-  ];
-  for (const [reference, referenceLabel] of references) {
-    resolvePriorReviewWaveAuditRef(reviewHistory, reference, currentEntry, referenceLabel);
-  }
-
-  const generalResult = validateReviewDomain(
-    record.general,
-    reviewHistory,
-    currentEntry,
-    task,
-    record.target,
-    record.executionHash,
-    'general',
-    `${label}.General`,
-  );
-  let rulesResult = 'clean';
-  if (task.rulesReviewPolicy === 'not-required') {
-    if (record.rules !== 'not-required') {
-      throw gateError(
-        `${label}.rules must be not-required when task.rulesReviewPolicy is not-required`,
-      );
-    }
-  } else {
-    if (record.rules === 'not-required') {
-      throw gateError(
-        `${label}.rules cannot be not-required when task.rulesReviewPolicy is required`,
-      );
-    }
-    if (record.rules !== 'not-applicable') {
-      rulesResult = validateReviewDomain(
-        record.rules,
-        reviewHistory,
-        currentEntry,
-        task,
-        record.target,
-        record.executionHash,
-        'rules',
-        `${label}.Rules`,
-      );
-    }
-  }
-  if (!REVIEW_WAVE_RESULTS.has(record.result)) {
-    throw gateError(`${label}.result must be clean or failed`);
-  }
-  if (record.result === 'clean' && record.mergedFindingRefs.length !== 0) {
-    throw gateError(`${label} clean requires mergedFindingRefs to be empty`);
-  }
-  if (record.result === 'failed' && record.mergedFindingRefs.length === 0) {
-    throw gateError(`${label} failed requires mergedFindingRefs to not be empty`);
-  }
-  const expectedResult = generalResult === 'findings' || rulesResult === 'findings' ? 'failed' : 'clean';
-  if (record.result !== expectedResult) {
-    throw gateError(`${label}.result must match the merged General and Rules outcomes: ${expectedResult}`);
-  }
-  const expectedFailedWaveCount = priorFailedWaveCount + (record.result === 'failed' ? 1 : 0);
-  if (record.failedWaveCount !== expectedFailedWaveCount) {
-    throw gateError(
-      `${label}.failedWaveCount must equal cumulative failed Review Wave count ${expectedFailedWaveCount}`,
-    );
-  }
-  return { record, failedWaveCount: expectedFailedWaveCount };
-}
-
-async function validateReviewWaveHistory(context, task, execution) {
-  const audits = await readJsonOrText(path.join(context.taskDir, 'audits.md'), 'audits.md');
-  if (protocolBlocks(audits, 'deliver-task-repair-closure', 'audits.md').length > 0) {
-    throw gateError('deliver-task-repair-closure is no longer supported; use deliver-task-review-wave');
-  }
-  const entries = auditEntries(audits);
-  const entriesByRef = new Map(entries.map((entry) => [entry.reference, entry]));
-  const records = [];
-  for (const entry of entries) {
-    const blocks = protocolBlocks(entry.section, 'deliver-task-review-wave', entry.reference);
-    if (blocks.length > 1) {
-      throw gateError(`${entry.reference} must contain at most one deliver-task-review-wave block`);
-    }
-    if (blocks.length === 1) records.push({ record: blocks[0], entry });
-  }
-  const allBlocks = protocolBlocks(audits, 'deliver-task-review-wave', 'audits.md');
-  if (allBlocks.length !== records.length) {
-    throw gateError('each deliver-task-review-wave block must be inside one audits.md A entry');
-  }
-  const currentRecords = records.filter(({ record, entry }) => {
-    validateBindingShape(record?.task, `${entry.reference} Review Wave.task`);
-    if (record.task.taskId !== task.taskId) {
-      throw gateError(`${entry.reference} Review Wave belongs to a different taskId`);
-    }
-    if (record.task.revision > task.revision) {
-      throw gateError(`${entry.reference} Review Wave belongs to a future task revision`);
-    }
-    return record.task.revision === task.revision;
-  });
-  if (currentRecords.length > 0 && execution === null) {
-    throw gateError('Review Wave history requires delivery.target and execution.json binding');
-  }
-  const reviewHistory = { entriesByRef };
-  const validated = [];
-  let failedWaveCount = 0;
-  let previousWaveTarget = null;
-  for (const [index, { record, entry }] of currentRecords.entries()) {
-    const result = validateReviewWave(
-      record,
-      task,
-      reviewHistory,
-      entry,
-      index + 1,
-      failedWaveCount,
-      previousWaveTarget,
-    );
-    validated.push(result.record);
-    failedWaveCount = result.failedWaveCount;
-    previousWaveTarget = result.record.target;
-  }
-  if (validated.length > 0) {
-    const currentExecutionHash = executionHash(execution);
-    const finalWave = validated.at(-1);
-    if (
-      finalWave.executionHash !== currentExecutionHash
-      || finalWave.target.executionHash !== currentExecutionHash
-    ) {
-      throw gateError('final Review Wave must bind the current execution.json');
-    }
-  }
-  return { records: validated, failedWaveCount };
-}
-
-function validateAcceptanceShape(record, label) {
-  assertExactObject(record, ['task', 'target', 'status', 'evidenceRefs'], [], label);
-  validateBindingShape(record.task, `${label}.task`);
-  validateTargetIdentity(record.target, `${label}.target`);
-  if (!ACCEPTANCE_RESULTS.has(record.status)) {
-    throw gateError(`${label}.status must be one of ${[...ACCEPTANCE_RESULTS].join(', ')}`);
-  }
-  assertStringArray(record.evidenceRefs, `${label}.evidenceRefs`, { nonEmpty: true });
-  return record;
-}
-
-async function validateDeliveredBindings(context, task, execution, delivery, reviewWaveHistory) {
-  const generalRef = delivery.evidenceRefs.generalReview;
-  assertAuditRef(generalRef, 'delivery.evidenceRefs.generalReview');
-  const generalEvidence = await resolveEvidenceRef(context, generalRef, { allowNotApplicable: false });
-  const generalBinding = singleProtocolBlock(
-    generalEvidence.section,
-    'deliver-task-binding',
-    'General Review evidence',
-  );
-  validateGeneralBinding(generalBinding, task, execution, delivery.target, 'General Review binding');
-
-  const evidenceWaves = protocolBlocks(
-    generalEvidence.section,
-    'deliver-task-review-wave',
-    'General Review evidence',
-  );
-  if (reviewWaveHistory.records.length > 0) {
-    if (evidenceWaves.length !== 1) {
-      throw gateError('final Review Wave evidence must contain exactly one deliver-task-review-wave block');
-    }
-    const finalWave = reviewWaveHistory.records.at(-1);
-    if (canonicalJson(evidenceWaves[0]) !== canonicalJson(finalWave)) {
-      throw gateError('delivery.evidenceRefs.generalReview must reference the final Review Wave');
-    }
-    if (finalWave.result !== 'clean') {
-      throw gateError('delivered requires the final Review Wave to be clean');
-    }
-    if (canonicalJson(finalWave.target) !== canonicalJson(delivery.target)) {
-      throw gateError('final Review Wave has stale target binding');
-    }
-    if (!finalWave.validationRefs.includes(delivery.evidenceRefs.verification)) {
-      throw gateError('delivery.evidenceRefs.verification must reference final Review Wave validationRefs');
-    }
-    if (finalWave.rules === 'not-required') {
-      if (delivery.evidenceRefs.rulesReview !== null) {
-        throw gateError('Rules not-required Review Wave requires delivery rulesReview null');
-      }
-    } else if (finalWave.rules === 'not-applicable') {
-      if (delivery.evidenceRefs.rulesReview !== 'not-applicable') {
-        throw gateError('Rules not-applicable Review Wave requires delivery rulesReview not-applicable');
-      }
-    } else if (delivery.evidenceRefs.rulesReview !== generalRef) {
-      throw gateError('applicable Rules scoped verification requires the merged Review Wave evidence ref');
-    }
-  } else {
-    if (evidenceWaves.length !== 0) {
-      throw gateError('delivery General evidence contains an untracked Review Wave');
-    }
-  }
-
-  const acceptanceRef = delivery.evidenceRefs.acceptance;
-  if (task.acceptancePolicy === 'not-required') {
-    if (acceptanceRef !== null) {
-      throw gateError('acceptancePolicy not-required requires delivery.evidenceRefs.acceptance to be null');
-    }
-    return;
-  }
-  if (acceptanceRef === null) {
-    throw gateError('acceptancePolicy required requires passed/skipped acceptance evidence');
-  }
-  assertAuditRef(acceptanceRef, 'delivery.evidenceRefs.acceptance');
-  const acceptanceEvidence = await resolveEvidenceRef(context, acceptanceRef, { allowNotApplicable: false });
-  const acceptance = validateAcceptanceShape(
-    singleProtocolBlock(
-      acceptanceEvidence.section,
-      'deliver-task-acceptance',
-      'acceptance evidence',
-    ),
-    'acceptance evidence',
-  );
-  validateBinding(acceptance.task, task, 'acceptance evidence.task');
-  if (canonicalJson(acceptance.target) !== canonicalJson(delivery.target)) {
-    throw gateError('acceptance evidence has stale target binding');
-  }
-  if (!new Set(['passed', 'skipped']).has(acceptance.status)) {
-    throw gateError(`acceptancePolicy required cannot deliver with acceptance ${acceptance.status}`);
-  }
-  for (const reference of acceptance.evidenceRefs) {
-    await resolveEvidenceRef(context, reference, { allowNotApplicable: false });
-  }
-
-  const audits = await readJsonOrText(path.join(context.taskDir, 'audits.md'), 'audits.md');
-  const records = protocolBlocks(audits, 'deliver-task-acceptance', 'audits.md')
-    .map((record, index) => validateAcceptanceShape(record, `audits.md acceptance[${index}]`));
-  for (const record of records) {
-    if (!sameTaskBinding(record.task, task)) continue;
-    for (const reference of record.evidenceRefs) {
-      await resolveEvidenceRef(context, reference, { allowNotApplicable: false });
-    }
-    if (record.status === 'rejected' && canonicalJson(record.target) === canonicalJson(delivery.target)) {
-      throw gateError('target has rejected acceptance and cannot be delivered');
-    }
-  }
-}
-
-async function readJsonOrText(file, label) {
-  try {
-    return await fs.readFile(file, 'utf8');
-  } catch (error) {
-    throw gateError(`${label} missing or unreadable: ${error.message}`);
-  }
-}
-
-async function readDelivery(context, task) {
-  const raw = await readJson(path.join(context.taskDir, 'delivery.json'), 'delivery.json');
-  const execution = raw?.target != null ? await readExecution(context, task) : null;
-  const delivery = validateDelivery(raw, task, execution);
-  const reviewWaveHistory = await validateReviewWaveHistory(context, task, execution);
-  if (delivery.result === 'delivered') {
-    await validateDeliveredBindings(context, task, execution, delivery, reviewWaveHistory);
-  } else {
-    for (const reference of delivery.upstreamRequest.evidenceRefs) {
-      await resolveEvidenceRef(context, reference, { allowNotApplicable: false });
-    }
-  }
-  return { delivery, execution };
-}
-
-async function closeCheck(context, task, execution, delivery) {
-  if (delivery.result !== 'delivered') throw gateError(`close-check requires delivered, got ${delivery.result}`);
-  const claims = validateClaims(
-    await readJson(path.join(context.taskDir, 'claims.json'), 'claims.json'),
-    task,
-    { requireClosed: true },
-  );
-  const references = new Set([
-    ...Object.values(delivery.evidenceRefs).filter((reference) => reference !== null),
-    ...delivery.residualRiskRefs,
-    ...claims.claims.flatMap((claim) => claim.evidenceRefs),
-  ]);
-  for (const reference of references) await resolveEvidenceRef(context, reference);
-
-  const currentTarget = await snapshotTarget(context, task, execution);
-  if (canonicalJson(currentTarget) !== canonicalJson(delivery.target)) {
-    throw gateError(
-      `delivery target is stale; current ${currentTarget.kind} target changed or snapshotHash no longer matches`,
-    );
-  }
-}
-
 function printUsage() {
   process.stderr.write(
     '用法：deliver-task.mjs start <repo> - [--workspace <path>]\n'
-      + '      deliver-task.mjs <task-hash|validate-execution|snapshot-target|validate-result|close-check> <task-worktree>/.dev-task\n',
+      + '      deliver-task.mjs <task-hash|validate-execution|snapshot-target> <task-worktree>/.dev-task\n',
   );
 }
 
@@ -1871,13 +1127,7 @@ async function main() {
     return;
   }
 
-  const taskCommands = new Set([
-    'task-hash',
-    'validate-execution',
-    'snapshot-target',
-    'validate-result',
-    'close-check',
-  ]);
+  const taskCommands = new Set(['task-hash', 'validate-execution', 'snapshot-target']);
   if (!taskCommands.has(command)) {
     throw usageError(`unknown command: ${command}`);
   }
@@ -1899,17 +1149,6 @@ async function main() {
   if (command === 'snapshot-target') {
     const execution = await readExecution(context, task);
     process.stdout.write(`${JSON.stringify(await snapshotTarget(context, task, execution), null, 2)}\n`);
-    return;
-  }
-  if (command === 'validate-result') {
-    await readDelivery(context, task);
-    process.stdout.write('delivery.json: passed\n');
-    return;
-  }
-  if (command === 'close-check') {
-    const { delivery, execution } = await readDelivery(context, task);
-    await closeCheck(context, task, execution, delivery);
-    process.stdout.write('deliver-task close-check: passed\n');
     return;
   }
 }

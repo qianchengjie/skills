@@ -10,15 +10,15 @@ reviewer 不修改业务文件、task durable state 或 caller state。每轮使
 Ticket / Spec / plan，也不因其中包含多个可独立验证的改动而提出拆分 finding 或重新定义任务粒度。
 
 `execution.json` 中的 `architecturePath` 是 Implementer 写代码前使用的 Architecture Authority
-binding；path 或 null 都不会扩大本 Task Review。reviewer 仍只检查当前 Task correctness，不独立复核
-最终 target 是否符合 Architecture；交付后的本地 integration 也不重新打开 Architecture correctness。
+binding；path 或 null 都不会把本 Task Review 扩大为 Architecture Drift Review。reviewer 仍只检查
+当前 Task correctness；Architecture Drift Review 只属于后续 `integrate-delivery` 的 path 分支。
 
 ## 固定输入
 
 派发前 controller 已完成边界核对，并在 live `<task-worktree>/.dev-task/artifacts/review-package.md` 生成绑定 task、execution、target identity 的当前 package：
 
 - 每个 General package 都把 live `<task-worktree>/.dev-task/task.json` 列为可读 fixed input，并绑定相同 task identity；只引用该 authoritative 文件，不复制合同正文；
-- 首次 Full package 绑定完整 `base → target`、首次 implementation validation 和 claims；
+- 首次 Full package 绑定完整 `base → target`、首次 implementation validation、acceptance criteria 与当前完成事实；
 - Repair Verification package 绑定直接前序 target、当前 target、实际 repair delta、repair input refs、targeted / affected validation 及 controller 的 validation 选取依据；
 - 任一 domain 的 Full 升级仍绑定同一个当前 target，并明确引用该 domain 的 scoped `cannot-bound`。
 
@@ -86,7 +86,7 @@ controller 只把 `cannot-bound` 的 domain 升级 Full：General 使用 General
 
 ## 输出与重派
 
-每轮原样返回 task、execution、previous/current target、review type、package hash、result、finding dispositions / findings 和 `cannot-bound` 理由。reviewer 不生成合并 wave 结论、不累计失败次数；这些由 controller 在两个 domain 完成后统一记录。
+每轮用简洁 Markdown 返回 task、execution、previous/current target、review type、result、finding dispositions / findings 和 `cannot-bound` 理由。reviewer 不生成 JSON binding block、合并 wave 结论或累计失败次数；这些由 controller 在两个 domain 完成后统一记录。
 
 结构合法负结论进入 repair / escalation。只有未返回、越界写文件或 final result 无法绑定本轮输入时，同一输入最多 fresh 重派一次；不能用 fresh reviewer 洗掉 findings 或 `cannot-bound`。
 

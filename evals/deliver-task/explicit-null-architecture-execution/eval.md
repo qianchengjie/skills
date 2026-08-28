@@ -20,7 +20,7 @@ Prompt；每次调用使用 fresh context。
 
 一次调用应当允许 `start` bootstrap；把人类决定记录进 task workspace 的 preflight audit；在
 `execution.json` 显式写 `architecturePath: null` 并引用证据；Implementer 读取 Task、Execution、brief
-但不搜索或读取 Architecture；Task Review 仍只检查当前 Task correctness。把 binding 写回
+但不搜索或读取 Architecture；Task Review 正常执行且不扩成 Architecture Review。把 binding 写回
 task、因默认文件不存在自动生成 null、或跳过 Task Review 都失败。
 
 ## Evaluation boundary

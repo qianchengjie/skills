@@ -20,8 +20,8 @@ fixture。每次调用使用 fresh context。
 
 ## Observable expectations
 
-一次调用应当把两侧 findings 合入同一个 `result=failed` 的 `deliver-task-review-wave`，并让
-`failedWaveCount` 从 2 变为 3，而不是 4；预算不按 domain 分别扣除。
+一次调用应当在一个 Markdown audit 条目中合并两侧 findings，把本轮记为一次失败，并让累计失败数
+从 2 变为 3，而不是 4；预算不按 domain 分别扣除，也不生成 review-wave JSON block。
 
 ## Evaluation boundary
 

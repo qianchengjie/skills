@@ -2,9 +2,9 @@
 
 ## Evaluation goal
 
-验证当前 target 的 upstream acceptance 通过且 task、execution、Git target 都未变化时，
-`deliver-task` 只追加 target-bound acceptance evidence，不重建 task identity，也不使
-已有当前 target 的 Review evidence stale。
+验证当前 target 的 upstream acceptance 通过且 task、execution、Git source 都未变化时，
+`deliver-task` 只追加 Markdown acceptance 记录，不重建 task identity 或重跑已有 Review，并在
+final fresh verification 后形成 live handoff。
 
 本用例不判断用户是否真的作出确认、验收内容是否充分，也不判断 Review 结论。
 
@@ -15,7 +15,7 @@ Subject 使用待测版本的 `skills/deliver-task/` package。Harness 只替换
 
 ```text
 你是 fresh-context 行为评测 subject。只读，不修改任何文件，不询问用户。请完整读取
-被测 skills/deliver-task/SKILL.md 及其为验收/收口要求的引用，并只依据该 package
+被测 skills/deliver-task/SKILL.md 及其为验收/完成要求的引用，并只依据该 package
 回答。
 
 一个 direct deliver-task 已按被测 package 的合法 schema 建立 task identity，调用
@@ -25,9 +25,9 @@ Rules concern 已通过首次 discovery 或最终 clean Review Wave 闭合。con
 目标、验收标准及其它任务合同内容都没有变化。现在同一用户明确回复“验收通过”，没有
 提出修改或拒收理由。
 
-只输出：应更新的 durable evidence/state；既有 task revision/hash 是否变化；是否
+只输出：应更新的记录；既有 task revision/hash 是否变化；是否
 需要重建 task identity、重新 snapshot target 或重跑 Review；原 Review evidence
-是否仍可用于交付；随后能否继续 validate-result/close-check。不要提出协议改进建议，
+是否仍可用于当前 source；随后如何完成 final verification 与 handoff。不要提出协议改进建议，
 不要讨论评测标准。
 ```
 
@@ -35,26 +35,25 @@ Rules concern 已通过首次 discovery 或最终 clean Review Wave 闭合。con
 
 一次调用应当：
 
-- 只在 `audits.md` 追加绑定当前 task/target、`status=passed` 且 evidence refs 非空的
-  acceptance A 条目；
+- 只在 `audits.md` 追加针对当前 task/target 的 Markdown acceptance 记录，写明用户已验收通过；
 - 明确 task revision/hash 和 execution identity 不变；
 - 不重建 task identity，不重新 `snapshot-target`，不重跑 General 或 Rules；
 - 明确原 Review evidence 仍绑定同一 task/execution/target，可继续使用；
-- 不因 acceptance 通过额外启动 Full Review；更新薄 `delivery.json`，运行 `validate-result`
-  和 `close-check`。
+- 不因 acceptance 通过额外启动 Full Review；在 live source 上运行最后的完整测试套件，确认 Git
+  状态未再变化，然后返回自然语言 handoff；不创建 delivery.json，也不运行 validate-result / close-check。
 
 以下任一公开可观察行为使本次调用失败：
 
 - 把实际验收结果写回 `task.json`；
-- 递增 task revision、重算 task hash 或要求 claims/Review 跨新 identity 重绑定；
+- 递增 task revision、重算 task hash 或要求 Review 跨新 identity 重绑定；
 - 在 target 未变化时重新 snapshot 或重跑 General / Rules；
 - 宣称已有 Review evidence 因 acceptance 状态变化而 stale；
 - 验收通过后仍返回 `needs-upstream / user-acceptance`。
 
 ## Evaluation boundary
 
-本用例只验证验收结果的 owner、task identity 稳定性和 Review binding 生命周期。它不
+本用例只验证验收结果的 owner、task identity 稳定性和 Review 可复用边界。它不
 判断 acceptance evidence 的真实性或强度、Rules 是否适用、其结果是否 clean，
-也不代表最终 delivery 已通过。Evaluator 只依据 subject 的公开回复和公开工具动作
+也不预判 final fresh verification 会通过。Evaluator 只依据 subject 的公开回复和公开工具动作
 判定，不要求、推断或保存隐藏思考过程。本文件定义一次独立调用，不定义 repetitions、
 RED/GREEN 编排、重试、聚合或结果文件格式。

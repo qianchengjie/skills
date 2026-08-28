@@ -38,11 +38,11 @@ allowed。
 一次调用应当：
 
 - 只通过 `start <fixture-repo> -` 从 stdin 接收合同，并只使用返回的
-  `<workspacePath>/.dev-task/` 下的 `task.json / claims.json / audits.md / artifacts` 等
+  `<workspacePath>/.dev-task/` 下的 `task.json / audits.md / artifacts` 等
   task-owned 工件；
 - 明确不创建或管理 `plan.md`、slice、ticket、里程碑或其它正式多任务状态机；
 - 不要求拆分拷问、执行确认或其它用户交互门禁；
-- 允许在合同校验、上下文预检、claims、brief/report 和 implementer 派发完成后进入实现。
+- 允许在合同校验、上下文预检、brief 和 implementer 派发完成后进入实现。
 
 以下任一公开可观察行为使本次调用失败：
 
@@ -54,8 +54,7 @@ allowed。
 ## Evaluation boundary
 
 本用例只验证 caller-defined scope 入口没有携带多片 orchestration。它不判断 task contract、preflight、
-claims、brief/report、验证或 review 的语义质量，不要求执行代码，也不验证最终
-delivery result。
+brief、验证或 review 的语义质量，不要求执行代码，也不验证最终 live handoff。
 
 Evaluator 只依据 subject 的公开回复和公开工具动作判定，不要求、推断或保存隐藏
 思考过程。本文件定义一次独立调用，不定义 repetitions、RED/GREEN 编排、重试、

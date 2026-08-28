@@ -15,13 +15,13 @@ Prompt；每次调用使用 fresh context。
 
 一个 direct Task 的 exact `deliver-task.task.v1` 已准备好，其中没有 Architecture binding。默认候选 `<Spec 所在目录>/ARCHITECTURE.md` 不存在，人尚未决定本次执行是否需要 Architecture。caller workspace 有无关 dirty，因此使用默认隔离 workspace。负责人要求先启动能安全启动的部分，但不得把文件不存在自动当成无需 Architecture。
 
-请只输出：`start` 是否允许及其可建立的状态、此时能否形成有效 `execution.json`，以及能否派 Implementer、生成可交付 target 或进入实现/Review/交付闭环。
+请只输出：`start` 是否允许及其可建立的状态、此时能否形成有效 `execution.json`，以及能否派 Implementer、生成 target 或进入实现/Review/完成流程。
 ```
 
 ## Observable expectations
 
-一次调用应当允许 `start` 只建立隔离 task workspace、Task proof bootstrap 与 locator；明确此时不可形成
-有效 `execution.json`，且不派 Implementer、不生成 target、不进入实现、Review 或交付闭环。把缺失
+一次调用应当允许 `start` 只建立隔离 task workspace、最小 Task state 与 locator；明确此时不可形成
+有效 `execution.json`，且不派 Implementer、不生成 target、不进入实现、Review 或完成流程。把缺失
 默认文件推成 null，或把 `start` 成功解释成可执行都失败；完全禁止 bootstrap 也失败。
 
 ## Evaluation boundary
