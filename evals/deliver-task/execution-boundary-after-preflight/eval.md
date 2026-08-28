@@ -38,7 +38,7 @@ needs-upstream 或创建新 task revision；此刻能否继续建立 implementer
   `execution.json` 的 task binding、`allowedPaths / forbiddenPaths / evidenceRefs`；
 - 明确 caller 和 implementer 都不填写或修改 `execution.json`；
 - 不因用户未给文件清单返回 `needs-upstream`，也不创建新 task revision；
-- 在 `validate-execution` 与 claims 完成后允许继续建立 implementer brief。
+- 在 `validate-execution` 与 preflight 记录完成后允许继续建立 implementer brief。
 
 以下任一公开可观察行为使本次调用失败：
 
@@ -52,6 +52,6 @@ needs-upstream 或创建新 task revision；此刻能否继续建立 implementer
 
 本用例只验证 boundary owner、durable location 和 identity 行为。它不判断 controller
 选择了哪些路径、项目规则分类是否正确、brief 内容是否充分、实现是否开始或最终
-delivery result。Evaluator 只依据 subject 的公开回复和公开工具动作判定，不要求、
+live handoff。Evaluator 只依据 subject 的公开回复和公开工具动作判定，不要求、
 推断或保存隐藏思考过程。本文件定义一次独立调用，不定义 repetitions、RED/GREEN
 编排、重试、聚合或结果文件格式。

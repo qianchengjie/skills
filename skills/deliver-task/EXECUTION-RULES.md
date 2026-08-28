@@ -1,4 +1,4 @@
-# 交付执行与保证规则
+# 开发执行规则
 
 ## Workspace 建立
 
@@ -11,14 +11,14 @@ isolated workspace、满足 base/clean/task-owned 条件的当前 harness linked
 `start <repo> - [--workspace <workspacePath>]` bootstrap，不调用其它入口。`start` 先校验 exact
 schema、完整 `baseCommit`、repo 和 provided workspace，再原子初始化
 `<task-worktree>/.dev-task/`。只有命令返回的 `workspacePath` 是本任务的业务执行根目录，返回的
-`taskDir` 是后续证明状态入口。不得绕过可用的 harness 原生机制；没有可绑定的宿主 workspace
+`taskDir` 是后续 task context 入口。不得绕过可用的 harness 原生机制；没有可绑定的宿主 workspace
 时，默认模式才从 base 在 `<repo>/.worktrees/` 下创建 worktree。创建前要求 `.worktrees/` 已被
 Git ignore；脚本不修改 ignore 配置，未命中时 fail closed。
 
-exact identity 且 `.dev-task/` 完整时幂等返回，不重写证据。同 revision 合同漂移、已有
-branch/worktree 但证明缺失或不完整时 fail closed；不能从 commits、branch、聊天摘要或外部
-registry 恢复证明。同一 delivery 的 higher revision 原位更新当前合同，继续使用当前 worktree、
-branch 与固定 `baseCommit`；只有 delivery lineage 真正变化时才建立新 worktree。
+exact identity 且 `.dev-task/` 必要 state 完整时幂等返回，不重写记录。同 revision 合同漂移、已有
+branch/worktree 但 task state 缺失或不完整时 fail closed；不能从 commits、branch 或聊天摘要重建
+Task / Execution context。同一 task lineage 的 higher revision 原位更新当前合同，继续使用当前
+worktree、branch 与固定 `baseCommit`；只有 base lineage 真正变化时才建立新 worktree。
 
 task workspace 建立后使用 snapshot-at-start 语义：caller workspace 后续出现 dirty、修改
 同一逻辑文件、产生新 commit 或切换分支，都不改变当前 base、execution、target 或已有
@@ -26,12 +26,12 @@ evidence。不得在执行中自动 refresh base、同步文件、rebase、merge
 读取“更新版本”。upstream 明确要求吸收新基线时，按 immutable task contract change 回流，
 不能偷偷更新当前任务。
 
-`start` 只建立 task workspace 与 task proof bootstrap；它成功不表示 execution 已有效、项目 setup
+`start` 只建立 task workspace 与最小 task state；它成功不表示 execution 已有效、项目 setup
 已完成或任何验证已经通过。Architecture 决定未闭合时，不得形成有效 execution、派 implementer、
 生成 target 或进入实现闭环。
 
 Controller owns task workspace preparation and environment recovery。Task / Execution validity、
-Architecture closure / compatibility、rule applicability 与 claims bootstrap 闭合后、首次业务 writer
+Architecture closure / compatibility、rule applicability 与 preflight 记录闭合后、首次业务 writer
 派发前，controller 负责完成当前 workspace 必要的正常项目准备。需要准备或恢复环境且项目明确提供
 canonical setup 时，优先在 task workspace 使用该 setup；没有明确 setup 时不推断 npm / pnpm /
 gradle 等通用命令，也不把已知环境缺口留给 Implementer。controller 执行 setup 后检查 task workspace
@@ -80,10 +80,10 @@ Architecture；冲突闭合后 fresh 重做 preflight。null 分支不搜索 Arc
 - 当前 `task.json` 整体是 caller 定义的交付边界，以及该边界在当前执行条件下能否完成的证据。
 
 交付边界不由 `deliver-task` 重新裁决。范围内包含多个可独立验证、独立发布或失败互不阻塞的改动时，
-仍按同一 `task.json` 安排实现、验证、review 与 delivery；Ticket、Spec、plan、conversation 或其它
+仍按同一 `task.json` 安排实现、验证与 review；Ticket、Spec、plan、conversation 或其它
 upstream artifact 的数量和结构都不是拆分信号。
 
-路径和文件名只产生候选规则分类。读完必读代码并针对触发条件 focused search 后，才能闭合 execution-time 分类；无法用代码证据排除的候选归入 selected。selected rules 的可执行义务必须先进入现有验证、claims / evidence 要求和 task brief，冲突解决后才可结束 preflight；不能把 implementer 后续读取规则当作替代。不要为此新建平行义务状态机，也不要在 task 工件中复制规则正文。`rulesReviewPolicy=required` 时 execution-time selected rules 不替代 Rules Full discovery 的独立分类；`not-required` 只跳过独立 review，不跳过本段分类与落实。
+路径和文件名只产生候选规则分类。读完必读代码并针对触发条件 focused search 后，才能闭合 execution-time 分类；无法用代码证据排除的候选归入 selected。selected rules 的可执行义务必须先进入现有验证、task brief 与必要 audit 记录，冲突解决后才可结束 preflight；不能把 implementer 后续读取规则当作替代。不要为此新建平行义务状态机，也不要在 task 工件中复制规则正文。`rulesReviewPolicy=required` 时 execution-time selected rules 不替代 Rules Full discovery 的独立分类；`not-required` 只跳过独立 review，不跳过本段分类与落实。
 
 preflight 依据写入 `audits.md` 后，由 controller 创建当前 `execution.json`；caller 和 implementer 都不填写。用户没有提供文件清单时，controller 仍应根据真实代码、直接消费者、相邻测试和项目规则建立最小完整 allowlist。`execution.evidenceRefs` 引用本次判断依据，并运行 `validate-execution` 后才生成 brief。
 
@@ -91,17 +91,17 @@ controller 同时直接阅读 `task.json` 的完整语义，判断它是否以�
 
 ## 实现派发
 
-controller 在 `artifacts/task-brief.md` 只收束当前 task/execution identity、preflight、已解析路径、claims、验证、selected rules、本轮修复依据与 task-owned evidence 引用，并引用 authoritative `task.json` 与 `execution.json`；不复制 Architecture 正文，不把目标、验收或约束重新摘要成可独立执行的合同副本。随后创建默认 blocked 的 task report 并派发 implementer。
+controller 在 `artifacts/task-brief.md` 只收束当前 task/execution identity、preflight、已解析路径、验收与验证要点、selected rules、本轮修复依据与必要 audit 引用，并引用 authoritative `task.json` 与 `execution.json`；不复制 Architecture 正文，不把目标、验收或约束重新摘要成可独立执行的合同副本。随后派发 implementer。
 
-Task / Execution validity、Architecture closure / compatibility、claims bootstrap、rule applicability
-classification 与 audit evidence 都由 controller 负责。Implementer 负责
+Task / Execution validity、Architecture closure / compatibility、rule applicability classification 与
+preflight 记录都由 controller 负责。Implementer 负责
 实现理解、TDD、代码修改、范围内验证，以及直接输入冲突、实现中新 authority 缺口和路径越界的 writer-side
 fail-safe；不能用该 fail-safe 替代 controller preflight，也不能“先派发、再判断”。
 
 fresh 派发提供绝对 `taskDir` 与 `workspacePath`，要求 implementer 完整读取当前 `task.json`、
 `execution.json`、`artifacts/task-brief.md`、适用 Architecture、项目 rules、相关源码与测试，但不要求其
-展开 brief 中 controller-owned proof / evidence refs 来重建 identity、claims、Architecture
-closure / compatibility 或 rule applicability。proof refs 默认只用于 provenance；
+展开 brief 中 controller-owned audit refs 来重建 identity、Architecture closure / compatibility 或
+rule applicability。audit refs 默认只用于 provenance；
 只有 controller 明确指出某个 ref 包含实现所需事实时才读取。
 
 resume 原 Implementer 时，controller 先更新职责相符的 durable input 与 brief，再在
@@ -119,7 +119,7 @@ execution.json + applicable Architecture > task-brief.md`；brief 冲突或本�
 确认时，显式要求完整 implementation-input reread。binding 或本 Task 相关 Architecture 语义实质变化时，
 完成 `$architecture-steward` 闭环并重新校验 execution 后同样完整重读；Task authority 未变化时可复用
 原 Implementer。当前 Architecture 不可读、未闭合或不兼容时停止，不派发 full reread 让 Implementer
-代替 controller 重建 closure / compatibility proof。
+代替 controller 重建 closure / compatibility 判断。
 
 Implementer freshness 跟随 Task authority 的实质变化，不跟随 revision number。projection /
 serialization correction 应优先修正派生载体而不产生 contract revision；即使 revision / metadata 已变化，
@@ -128,7 +128,7 @@ serialization correction 应优先修正派生载体而不产生 contract revisi
 preflight 并派发 fresh implementer。revision / hash 变化仍按既有 binding 规则由 controller 重新判定
 旧 review / validation evidence；旧 evidence 不自动证明新合同，也不自动全量作废。经重新判断仍成立的
 测试输出、日志与事实材料可以带 provenance 作为当前输入，只对其中缺口补证或重跑；旧 General / Rules
-verdict 及其 task/execution/target closure binding 不能替代当前 revision 自己的 Initial Discovery。
+verdict 及其旧 task/execution/target identity 不能替代当前 revision 自己的 Initial Discovery。
 controller 在当前 `audits.md` 记录引用与判断依据。
 
 仅 brief 投影错误时，controller 在同一 task identity 下修正并按上述 resume 规则重新派发；若可见
@@ -136,18 +136,18 @@ upstream authority 表明 `task.json` 已被弱化，则停止当前执行，按
 回流。Architecture 未闭合或当前 Task 必须改变 Architecture 时，不修改业务文件，只路由
 `$architecture-steward`；人确认后在同一 task/worktree 更新并重新校验 execution。
 
-需要新增业务取舍或返修约束时，先写回现有 task / execution / claims / audits 中职责相符的真源并重新生成 brief。`followup_task.message` 只携带 resume 定位、完整 `Reread / Unchanged` 声明和新增 durable input 的定位，不携带新的 requirement、acceptance、business ruling、implementation decision、repair interpretation 或第二份返修说明。
+需要新增业务取舍或返修约束时，先写回现有 task / execution / audits 中职责相符的真源并重新生成 brief。`followup_task.message` 只携带 resume 定位、完整 `Reread / Unchanged` 声明和新增 durable input 的定位，不携带新的 requirement、acceptance、business ruling、implementation decision、repair interpretation 或第二份返修说明。
 
 ### Source-authoritative 条件分支
 
 命中具名源码强约束时，controller 必须建立真实阶段边界：
 
 1. 固定 source identity 和完整 `source → destination` mapping，并把它们作为 Dispatch A 输入。
-2. Dispatch A 只建立 source-equivalent baseline，完成即停止；不得 adaptation，也不得把 task report 标为 `ready-for-review`。controller 等唯一业务 writer 停止后，才独立复验 live source、destination、mapping 与 baseline snapshot。
+2. Dispatch A 只建立 source-equivalent baseline，完成即停止；不得 adaptation。controller 等唯一业务 writer 停止后，才独立复验 live source、destination、mapping 与 baseline snapshot。
 3. controller 在 `audits.md` 追加 baseline A，记录当前 task/execution identity、固定 source identity、mapping、baseline snapshot identity、复验事实与 `accepted / cannot-verify`。implementer 的报告或“曾经比较一致”自述不能替代 live 复验。
 4. 只有 baseline A 为 `accepted` 且 live snapshot 仍匹配时，controller 才另行追加 adaptation authorization A，绑定当前 task/execution、baseline A 及其 snapshot，并明确允许 Dispatch B 开始适配。该 A 条目是 task-owned 审计证据，不是 lifecycle state。
 5. controller 刷新 brief，使其明确引用 authorization A；Dispatch B 也必须引用该 authorization，并要求 implementer 重读 Task / execution / brief 与适用 Architecture。缺少 baseline A、缺少 authorization A 或 Dispatch B 未引用 authorization 时，都不得开始 adaptation。
-6. controller 接收 Dispatch B 结果时，在既有实现接收或验证 A 条目中引用同一 authorization；task report 的现有验证 handoff 也引用它。由此持久化 `baseline accepted → adaptation authorized → Dispatch B → implementation/validation` 的顺序，不依赖聊天消息或会被覆盖的旧 brief。
+6. controller 接收 Dispatch B 结果时，在既有实现接收或验证 A 条目中引用同一 authorization；Implementer final handoff 也引用它。由此记录 `baseline accepted → adaptation authorized → Dispatch B → implementation/validation` 的顺序。
 
 baseline snapshot identity 使用与 `commitPolicy` 相容的既有 commit/tree 或 worktree/content snapshot；不得为了 provenance 创建 commit。若 baseline snapshot identity、固定 source identity、mapping 或 execution binding 被替换、重建或失配，旧 authorization 失效，必须先重新建立 accepted baseline 与 authorization。授权后的正常 destination adaptation 不视为 baseline 变化；相同绑定下的适配和返修继续引用原 authorization。
 
@@ -158,8 +158,7 @@ baseline `cannot-verify` 时不创建 authorization，也不派发 Dispatch B。
 - changed files 与真实 staged/unstaged/untracked 路径一致；
 - 全部业务变化属于 `execution.allowedPaths`，且不命中 `task.forbiddenPaths ∪ execution.forbiddenPaths`；
 - 不修改 `.dev-task/` durable state、caller state 或 task workspace 之外的文件；
-- task report 的验证结果可复验；
-- claims 只按当前证据推进，不提前写下游通过。
+- Implementer final handoff 的验证结果可复验。
 
 接收门禁失败时先记录依据。实际 diff 已越界时不得事后回填 allowlist 使该轮通过。若所需扩边仍在 immutable task contract 内，controller 先记录原因、更新 `execution.json`、重新校验并重新派发；不创建新 task revision。命中 task 用户禁止范围或要求改变 immutable task contract 时才 `needs-upstream`。
 
@@ -176,7 +175,7 @@ TDD 的 RED 必须是测试已经真实运行，并因目标行为尚未实现�
 
 按 commitPolicy 固定 target：
 
-- `required`：controller 只在 task workspace stage 与 task report 精确对应的真实业务路径，确认无未暂存残余、额外 staged 或 rename 逃逸后，创建普通业务 commit；返修追加 commit，不重写旧提交。
+- `required`：controller 只在 task workspace stage 与真实 diff 和 Implementer handoff 精确对应的业务路径，确认无未暂存残余、额外 staged 或 rename 逃逸后，创建普通业务 commit；返修追加 commit，不重写旧提交。
 - `allowed`：选择 commit 时执行同一边界；不提交时保留完整 worktree snapshot。
 - `forbidden`：保持 `HEAD == baseCommit`，不创建 commit。
 - 无业务变化不创建空 commit，使用 `no-change`。
@@ -192,7 +191,7 @@ workspace 的 HEAD 和 dirty 不参与 snapshot 或 freshness。task workspace �
 
 ## Review concerns 与 Initial Discovery JOIN
 
-reviewer 独立于 implementer，只消费当前 review package、package 列为 fixed input 的 authoritative `task.json` 和其中具名的 fixed target。所有 General package 都必须把 live `<taskDir>/task.json` 作为可读 fixed input，并绑定与 package 相同的 task identity；只引用 authoritative 文件，不复制合同正文。source-authoritative 分支在此基础上额外纳入 baseline A、adaptation authorization A、固定 source/mapping/snapshot 证据、Dispatch B 与实现/验证证据中的 authorization ref，以及最终 adaptation diff。不增加 `delivery.json` 顶层字段，也不把这些内容改造成独立 artifact 类型。
+reviewer 独立于 implementer，只消费当前 review package、package 列为 fixed input 的 authoritative `task.json` 和其中具名的 fixed target。所有 General package 都必须把 live `<taskDir>/task.json` 作为可读 fixed input，并说明相同 task/execution identity；只引用 authoritative 文件，不复制合同正文。source-authoritative 分支在此基础上额外纳入 baseline A、adaptation authorization A、固定 source/mapping/snapshot 证据、Dispatch B 与实现/验证记录中的 authorization ref，以及最终 adaptation diff。不把这些内容改造成独立 schema。
 
 Review 分成两个 concern：
 
@@ -221,7 +220,7 @@ Wave，不进入 failed-wave budget。
 
 JOIN 完成后先合并所有适用 concern 的完整 findings：
 
-- 没有 findings：直接进入 Review closure；`initialRepairPolicy` 不制造暂停。
+- 没有 findings：直接进入最终完成检查；`initialRepairPolicy` 不制造暂停。
 - 有 findings 且 `initialRepairPolicy=approval-required`：停止自动 repair，把完整 merged findings 返回
   upstream，等待其明确要求修哪些 finding。这个 Gate 不新增 disposition schema、reject / accept-risk
   状态机、finding ledger、triage artifact 或新的 result；决定到达后只追加到现有 `audits.md`，并作为
@@ -244,22 +243,22 @@ immutable authority 变化时，立即走现有 `needs-upstream / contract-chang
 brief、不派发 implementer，也不创建该 finding 的 Repair Review Wave。reviewer 的推荐、测试 expected、
 fixture、并发场景与绿灯结果都不能替代这次分流。
 
-General Full A 在 `audits.md` 记录 review type、task / execution / target identity、package identity、verdict 和完整 findings，并写 [TASK-CONTRACT.md](TASK-CONTRACT.md) 的 `deliver-task-binding`。Rules Full 继续沿用 `rules-review` v8 自己的 TARGET/run identity；当某个 Full 结果被 Review Wave 引用时，对应 task-owned A 只增加 `deliver-task-review-result` 结构绑定，不复制或重锚 v8 proof。机器不判断 reviewer 结论是否正确。execution hash 变化后旧 General binding 不能作为当前 delivery proof，必须为新 execution 重新 discovery；已追加的历史 Review Wave 仍保留并校验自身 execution identity。
+General Full A 在 `audits.md` 直接记录 review type、task / execution / target identity、package identity、verdict 和完整 findings。Rules Full 继续引用 `rules-review` v8 自己的 TARGET/run identity；不增加 binding JSON 或重锚其结果。execution semantic boundary 变化后，旧 General verdict 不能作为当前完成依据，必须为新 execution 重新 discovery；历史只作为上下文保留。
 
 ## Upstream acceptance
 
 Initial Discovery JOIN 或最终 Review Wave 已整体 clean 后读取 `task.acceptancePolicy`：
 
-- `not-required`：不创建验收状态文件，`delivery.evidenceRefs.acceptance = null`，按合同继续；
-- `required`：读取 `audits.md` 中绑定当前 task/target 的验收 A 条目；`passed / skipped` 继续，缺失时写 `needs-upstream / user-acceptance` 并停止。
+- `not-required`：不创建验收状态文件，按合同继续；
+- `required`：读取 `audits.md` 中针对当前 task/target 的验收记录；明确通过或跳过时继续，缺失时返回需要用户验收并停止。
 
-验收 A 条目按 [TASK-CONTRACT.md](TASK-CONTRACT.md) 记录 task identity、当前 target identity、`passed / skipped / rejected` 和非空 evidence refs。验收状态不进入 task hash；同一 target 验收通过后不重建 task identity、不重新 snapshot，也不使已有 Review evidence stale。
+验收记录用 Markdown 写明 task、当前 target、通过/跳过/拒绝、理由与证据位置。验收不进入 task hash；同一 target 验收通过后不重建 task identity 或重新 snapshot。
 
 直接用户拒收但不改变 immutable task contract 时，写 `rejected` A 条目，在同一 task identity 内返修；新 target 自动使旧验收证据失效，并按普通 repair 流程执行 targeted / affected validation 与 policy 要求的 scoped verification。反馈改变 immutable task contract 时返回对应 `needs-upstream`，不能直接修。
 
 ## Repair Review Wave
 
-Full Review 用于 discovery；Repair Verification 用于 closure。Initial Discovery JOIN 合并出 open
+Full Review 用于 discovery；Repair Verification 检查返修结果。Initial Discovery JOIN 合并出 open
 findings 且 Initial Repair Policy 已允许进入 repair 后，按以下顺序处理每个 repair target：
 
 1. 只把已经通过 Initial Repair Policy 与上述 authority 分流、可在现有合同内执行的 General findings
@@ -272,14 +271,13 @@ findings 且 Initial Repair Policy 已允许进入 repair 后，按以下顺序�
 3. General Scoped Repair Verification 始终派发。`rulesReviewPolicy=required` 时，active catalog 真实为空则 Rules 明确为 `not-applicable`，否则并行派发 Rules Scoped，不因 finding 来自 General 或 Rules 而省略另一边；`not-required` 时不派发 Rules reviewer，wave 的 `rules` 固定为 `not-required`。
 4. 每个 scoped reviewer 只返回 `clean / findings / cannot-bound`。`cannot-bound` 表示该 domain 无法在 repair causal boundary 内可靠闭合；controller 只把这个 domain 升级 Full，不重跑已经 clean 的另一个 domain。两个 domain 都 `cannot-bound` 时才各自执行 Full；可以并行。
 5. General Full 升级使用完整 General target review。只有 `rulesReviewPolicy=required` 才允许 Rules Full 升级，并继续使用 `rules-review` v8 的完整 discovery 语义：不创建 incremental / repair run，不继承旧 run，不排除完整 TARGET 中的文件。`ready_for_merge` 视为 clean；现有 finding、cannot-verify 和 blocked 语义保持不变。Full 无法形成 clean / findings 终态时不伪造已完成 wave，按现有 blocker / escalation 路径停止。
-6. controller 先为每个实际执行的 scoped / 必要 Full 结果追加包含 `deliver-task-review-result` 的 task-owned A，再按 policy 合并最终结果，最后写一个 `deliver-task-review-wave` A。wave 的所有 evidence refs 必须指向它之前的 A，不能引用自己或未来 A。任一适用 domain 有 findings，整个 wave 为 `failed`，无论调用几个 reviewer 都只让累计 `failedWaveCount + 1`；所有适用 domain clean 才是 wave `clean`。scoped 发现由本次 repair 引入的新相关 finding，也进入同一个 merged finding set 和下一轮 repair。
+6. controller 用一个 Markdown A 条目汇总本轮 previous/current target、repair input、actual delta、验证命令、General/Rules 结论与 merged findings。任一适用 domain 有 findings，整轮只计一次失败；所有适用 domain clean 才完成该轮。不要写 review-result / review-wave JSON block，也不要让当前条目引用未来事实。
 7. 达到 4 个 failed Review Waves 且仍有 findings 时，停止自动 repair，进入 controller adjudication /
    escalation；不能把次数耗尽解释为 `delivered`。首次实际执行的 Full discovery 不写 Review Wave，也
    不消耗该预算。`initialRepairPolicy` 只作用一次，不给后续 Repair Wave 增加人工暂停。
 
-Review Wave chain 只在同一 task revision 内连续。contract revision 后，旧 wave 保留在 `audits.md`
-作为历史，但不参与新 revision 的 wave 编号、`failedWaveCount`、target chain 或 closure；新 revision 的
-第一条 Review Wave 从 `wave=1` 开始。
+Review Wave 只在同一 task revision 内计数。contract revision 后，旧记录保留为历史，但不参与新
+revision 的四轮预算；新 revision 从第一轮重新计数。编号帮助阅读，不是机器生命周期状态。
 
 ### General Scoped Repair Verification
 
@@ -291,47 +289,40 @@ Review Wave chain 只在同一 task revision 内连续。contract revision 后�
 
 `rules-review` v8 当前只接受 commit TARGET。`rulesReviewPolicy=required` 且首次或升级的 Rules Full 必须运行时，若 `allowed` 选择未提交或 `forbidden` 使其无法运行，返回 `needs-upstream / authorization-change`；不擅自提交、不把 Rules 标为 `not-applicable`。`not-required` 不触发这项能力冲突，因为独立 Rules Full 已由人关闭。
 
-执行中改变 `rulesReviewPolicy` 属于 immutable contract revision，不能原地更新 `execution.json` 或
-当前 wave。旧 revision 已产生 Rules finding 时，人可在新 revision 明确选择 `not-required` 并接受已知
-风险；controller 在新 task 的 `audits.md` 记录人类 authority、旧 finding 的稳定定位和风险接受，
-`delivery.residualRiskRefs` 引用该 A。旧 finding 仍是 finding，不删除、不改写为 clean 或
-`not-applicable`。
+执行中改变 rulesReviewPolicy 属于 immutable contract revision，不能原地更新 execution.json 或当前 wave。旧 revision 已产生 Rules finding 时，人可以在新 revision 明确选择 not-required 并接受已知风险；controller 在新 task 的 audits.md 记录人类 authority、旧 finding 的稳定定位和风险接受。旧 finding 仍是 finding，不删除、不改写为 clean 或 not-applicable。
 
-执行中改变 `initialRepairPolicy` 同样属于 immutable contract revision。`approval-required` 下 upstream
-对本次 merged findings 给出具体 repair 决定，只追加现有 `audits.md` / repair evidence，不改变 policy
-或 task identity。
+执行中改变 initialRepairPolicy 同样属于 immutable contract revision。approval-required 下 upstream 对本次 merged findings 给出具体 repair 决定，只追加现有 audits.md，不改变 policy 或 task identity。
 
 ## 返修与阻塞
 
-首次 repair 先满足 Initial Discovery JOIN 与 Initial Repair Policy；进入 repair 后，每轮都先把
-validation、General、upstream feedback 或 Rules finding 的依据写入 audits，再刷新 brief/report，
-不重复 Initial Repair Approval Gate。source-authoritative 分支在 baseline snapshot identity、固定
-source identity、mapping 和 execution binding 均未被替换、重建或失配时，返修继续引用原
-authorization；任一绑定失配则先重建 baseline 与 authorization，不能以返修名义绕过。以下情况停止：
+首次 repair 先满足 Initial Discovery JOIN 与 Initial Repair Policy。进入 repair 后，每轮都先把 validation、General、upstream feedback 或 Rules finding 的依据写入 audits，再刷新 brief；不重复 Initial Repair Approval Gate。source-authoritative 分支只有在 baseline、source、mapping 与 execution 仍匹配时才能继续引用原 authorization。
 
-- immutable task contract、授权或用户判断变化：`needs-upstream`；
-- 现有合同内持续环境/工具失败，或 4 个 failed Review Waves 后仍未 closure：controller adjudication 后使用 `blocked`；确需改变合同、授权或用户判断时使用 `needs-upstream`。
+以下情况停止：
 
-停止不是丢弃证据。写薄 delivery result，target 可为当前已固定 target 或 `null`，evidence refs 指向现有 claims/audits/run。
+- immutable Task、授权或用户判断需要变化：直接返回需要 upstream 决定的具体分叉和依据；
+- 当前合同内持续环境/工具失败，或四个 failed Review Waves 后仍有 findings：返回 blocker、当前 live workspace 与已经确认的事实。
 
-## 收口门禁
+停止时不生成 delivery result。audits.md 保留当前执行记录，final message 直接说明未闭合原因、现场路径和下一步所需决定。
 
-`delivered` 必须同时满足：
+## 完成与 live handoff
 
-- delivery 与当前 task revision/hash 绑定；
-- `execution.architecturePath` 已显式为 path 或 null；非 null 时 Architecture 仍可读、至少有一个
-  `[x]` 且没有 `[ ]`；
-- target 与当前 execution hash 绑定、符合 commitPolicy，且当前 Git 状态仍与 target 一致；
-- 至少一个 claim，全部 `verified / waived` 且有 evidence refs；
-- validation、绑定当前 task/execution/target 的首次 discovery clean 或最终 clean Review Wave、适用
-  acceptance，以及与 `rulesReviewPolicy` 一致的 Rules 终态和引用都有明确记录；
-- residual risks 只用 refs，不在 delivery 内复制正文；
-- 没有 caller lifecycle 写入。
+只有以下事实在当前 live task workspace 上同时成立，才报告实现完成：
 
-`validate-result` 与 `close-check` 都必须在 live `.dev-task/` 上执行；证明目录丢失时立即 fail
-closed，不能根据 commits、branch 或摘要推断 `delivered`。`close-check` 只检查机器可判定的
-闭包，不判断 claim 真实性、测试充分性、finding 正确性、规则适用性或用户确认真实性。
+- 当前 task.json 与 execution.json 有效，Architecture path/null 已明确；path 分支仍可读、至少一个 [x] 且没有 [ ]；
+- snapshot-target 对当前 Git 状态和允许/禁止路径检查通过；
+- Task validation、Initial Discovery 或最终 Repair Review、policy 要求的 Rules concern 与 acceptance 已在当前 target 上闭合；
+- 最后一次业务或 repair 修改之后，按项目指令重新运行完整测试套件并通过；
+- final verification 后 source HEAD 与 dirty 状态没有再次变化；
+- 没有写 caller lifecycle，也没有执行 integration 或 cleanup。
 
-收口只返回稳定 target、`taskDir`、task workspace/branch identity 和证据引用。worktree 清理以及把
-`baseCommit..headCommit` 集成到 caller branch，属于用户或上层 caller 的后续动作；deliver-task
-不自动 merge、cherry-pick、rebase、push 或 publish。
+完成后不写 claims.json、delivery.json、result schema 或 closure block，也不运行 validate-result / close-check。用自然语言返回：
+
+- live workspace 与 taskDir；
+- branch 或 detached HEAD、完整 base/HEAD OID；
+- committed clean、uncommitted 或 no-change；
+- final fresh verification 的命令与结果；
+- architecturePath/path-null；
+- 仍需 upstream 注意的风险；
+- 下一步交给 integrate-delivery 的明确提示。
+
+这份 handoff 只描述当前现场。integrate-delivery 必须重新读取 live Git state、再次运行完整测试，并在人选择后执行 merge、PR/MR 或 keep；source 与 handoff 不一致时以当前现场为准、让旧结论失效，只有必要信息无法现场确定时才回到 deliver-task，不从 commits、旧 audits 或聊天摘要恢复“已交付”结论。

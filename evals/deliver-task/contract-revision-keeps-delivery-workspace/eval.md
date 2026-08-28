@@ -2,7 +2,7 @@
 
 ## Evaluation goal
 
-验证普通 contract revision 只改变当前合同 authority，不改变同一 delivery 的 workspace identity：
+验证普通 contract revision 只改变当前合同 authority，不改变同一 task lineage 的 workspace identity：
 controller 复用既有 worktree 与 `baseCommit`，派发 fresh implementer，并按新合同重新判定旧
 review / validation evidence。
 
@@ -26,13 +26,13 @@ Subject 使用待测版本的 `skills/deliver-task/` package。Harness 只替换
 
 一次调用应当：
 
-- 把 revision 2 作为同一 delivery 的当前合同，继续使用 `/tmp/acme-task`、当前 branch、已有 3 个
+- 把 revision 2 作为同一 task lineage 的当前合同，继续使用 `/tmp/acme-task`、当前 branch、已有 3 个
   业务提交和原 `baseCommit`，不创建或切换 worktree；
 - 停止旧 revision 的 writer，在新合同 preflight 闭合后派发 fresh implementer，不对旧 implementer
   使用 follow-up；
 - 保留旧 review / validation evidence，由 controller 按 45 秒的新合同逐项重新判定：仍成立的测试
   输出、日志与事实材料可以带 provenance 作为当前输入，受影响或不足的事实部分才补证或重跑；
-- 旧 General / Rules verdict 及其旧 task/execution/target binding 不能满足 revision 2 的 closure；
+- 旧 General / Rules verdict 及其旧 task/execution/target identity 不能满足 revision 2 的当前完成检查；
   revision 2 仍按固定闭环运行自己的 General Full 与 policy 要求的 Rules branch；
 - 明确旧 evidence 不能自动证明 revision 2，也不能因为 revision 变化而机械全量作废。
 
@@ -45,8 +45,8 @@ Subject 使用待测版本的 `skills/deliver-task/` package。Harness 只替换
 
 ## Evaluation boundary
 
-本用例只判断普通 revision 的 delivery/workspace identity、implementer context 与 evidence 重新判定。
+本用例只判断普通 revision 的 task/workspace identity、implementer context 与 evidence 重新判定。
 它不判断 30 秒到 45 秒的具体实现、验证充分性、reviewer 结论、规则适用性、`start` 的文件更新顺序、
-lineage 变化的其它识别方式或最终 delivery 是否可关闭。Evaluator 只依据 subject 的公开回复和公开
+lineage 变化的其它识别方式或最终 live handoff。Evaluator 只依据 subject 的公开回复和公开
 工具动作判定，不要求、推断或保存隐藏思考过程。本文件定义一次独立调用，不定义 repetitions、
 RED/GREEN 编排、重试、聚合或结果文件格式。

@@ -1,4 +1,4 @@
 interface:
-  display_name: "本地集成交付"
-  short_description: "将 deliver-task 的固定交付结果安全集成到本地目标分支"
-  default_prompt: "使用 $integrate-delivery 在本地集成这个已交付任务并完成经授权的 workspace 收尾。"
+  display_name: "开发分支收尾"
+  short_description: "重验 live Git source，并按人工选择完成集成或保留"
+  default_prompt: "使用 $integrate-delivery 收尾这个 live task branch/worktree。"

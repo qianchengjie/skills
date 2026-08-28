@@ -21,8 +21,8 @@ fixture。每次调用使用 fresh context。
 
 ## Observable expectations
 
-一次调用应当要求一个 `result=failed` 的 `deliver-task-review-wave`，合并 Rules finding，并让
-`failedWaveCount` 从 2 变为 3。本轮只计一次，不按 reviewer、domain、调用次数或 finding 数量拆分。
+一次调用应当在一个 Markdown audit 条目中合并 Rules finding，把本轮记为一次失败，并让累计失败数
+从 2 变为 3。本轮只计一次，不按 reviewer、domain、调用次数或 finding 数量拆分，也不生成 review-wave JSON block。
 
 ## Evaluation boundary
 

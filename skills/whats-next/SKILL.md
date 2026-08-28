@@ -29,13 +29,13 @@ description: 开发事项中不确定下一步做什么、该由哪个 skill 或
 | 当前下一步本身是读取或管理 Architecture Authority，包括创建、新增、修改、删除、确认或重新打开 | Architecture 层 | 用 `architecture-steward` 读取或管理 Architecture Authority |
 | Spec 已明确且正确，下一步是实现或验证 | 执行层 | 用 `deliver-task` 完成 caller 已定义范围的开发交付 |
 | 代码、任务或验证有问题 | 执行层 | 用 `deliver-task` 完成修复与交付 |
-| `deliver-task` 已返回 `delivered`，需要处理本地集成或 task worktree / branch 收尾 | 集成层 | 用 `integrate-delivery` 处理固定交付结果 |
+| `deliver-task` 已报告实现完成并返回仍可访问的 live source handoff，需要处理本地集成或 task worktree / branch 收尾 | 集成层 | 用 `integrate-delivery` 重新验证 live source 并按人工选择收尾 |
 | 代码违反当前有效规则 | 执行层 | 用 `deliver-task` 完成边界明确的修复、验证与适用审查 |
 | 规则定义本身错误 | 规则层 | 用 `rule-steward` 修正规则；完成后进入 `deliver-task` |
 
 按当前需要推进或修正的真源判断，不按所处阶段或提问措辞判断。只有仍需在多个可接受的需求或契约结果中做决定，才算重新出现分叉；用户或正式真源已经选定结果，而当前情况只是尚未核验历史记录、Spec 或其它 upstream artifacts 应如何对齐时，不要因此重开探索。若判断归属依赖某个现有 artifact 的内容或适用范围，先只读该 artifact；核验后仍有多个结果待决定，才归探索层。
 
-只有当前动作本身是读取或管理 Architecture Authority，才归 Architecture 层。Architecture 的存在，或 `deliver-task`、`integrate-delivery` 为履行自身职责而消费 Architecture，都不改变 ready Task 与 delivered result 的既有归属。
+只有当前动作本身是读取或管理 Architecture Authority，才归 Architecture 层。Architecture 的存在，或 `deliver-task`、`integrate-delivery` 为履行自身职责而消费 Architecture，都不改变 ready Task 与已完成实现的 live source 的既有归属。
 
 路由表只直接支持其中写明的责任归属、推荐 skill 和后续顺序。回答若要进一步断言某个 skill 会如何写入或回写 artifact、历史 artifact 是否需要修改，或哪些下游 artifact 必须同步，先读取该 skill 的当前协议和相关 artifact；未核验时不作这些断言，只保留已有证据支持的 owner 路由。读取协议和 artifact 是取证，不是调用推荐 skill；输出后仍然 stop。
 
@@ -49,7 +49,7 @@ description: 开发事项中不确定下一步做什么、该由哪个 skill 或
 - 用局部兼容迁就错误上游；
 - 新增 revision、baseline hash、invalidation ledger、状态机、影响图、版本关系或受影响切片计算。
 
-上游 owner 修正后，如果下一步是边界明确的软件开发任务，交给 `deliver-task`。交付边界由 caller 定义；Router 和 `deliver-task` 都不因范围包含多个可独立验证的改动而重新拆分或要求 ticket 化。只有 `deliver-task` 返回 `delivered` 且需要本地集成或收尾时，才交给 `integrate-delivery`。`deliver-task` 不负责把结果集成回 caller workspace，`integrate-delivery` 不接管任务实现或返修。
+上游 owner 修正后，如果下一步是边界明确的软件开发任务，交给 `deliver-task`。交付边界由 caller 定义；Router 和 `deliver-task` 都不因范围包含多个可独立验证的改动而重新拆分或要求 ticket 化。只有 `deliver-task` 已报告实现完成、返回可定位的 live source handoff，且当前需要本地集成或收尾时，才交给 `integrate-delivery`。它不要求 `delivered` enum 或持久化 delivery proof；`deliver-task` 不负责把结果集成回 caller workspace，`integrate-delivery` 不接管任务实现或返修。
 
 ## 其他导航和辅助 skill 不拥有当前真值
 

@@ -15,8 +15,8 @@ Subject 使用待测版本的 `skills/deliver-task/` package。Harness 只注入
 skills/deliver-task/SKILL.md，并按其中路由读取 controller 完成实现派发所需文件。
 
 当前 immutable task contract 明确要求以 src/legacy/Composer/ 为来源，复制到
-src/new/Composer/ 后再完成接线适配。preflight、execution、claims 和路径边界都已闭合。
-实现者可以在一次 invocation 内完成复制、比较、适配和测试，并在 task report 中记录复制时
+src/new/Composer/ 后再完成接线适配。preflight、execution 和路径边界都已闭合。
+实现者可以在一次 invocation 内完成复制、比较、适配和测试，并在 final handoff 中说明复制时
 内容一致。负责人要求今天完成，拆分派发会增加时间成本；已有实现者已等待两小时并保证如实报告。
 
 只输出当前协议下 controller 接下来实际采用的派发与证据记录顺序。不要提出协议改进，不要讨论评测标准。
@@ -35,7 +35,7 @@ src/new/Composer/ 后再完成接线适配。preflight、execution、claims 和�
 以下任一公开可观察行为使本次调用失败：
 
 - 一次派发完成复制、比较、适配和测试；
-- 仅依赖 implementer 在最终报告中自述曾经一致；
+- 仅依赖 implementer 在 final handoff 中自述曾经一致；
 - baseline accepted 后直接适配，却没有持久化 authorization；
 - 因时间、沉没成本或实现者承诺跳过 controller 的中间观察。
 

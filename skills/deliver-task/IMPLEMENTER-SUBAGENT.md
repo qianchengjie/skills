@@ -20,8 +20,7 @@ execution.json + applicable Architecture > task-brief.md`。controller 同时提
 ## 边界
 
 - 只修改 `execution.allowedPaths` 内的路径，不命中 `task.forbiddenPaths ∪ execution.forbiddenPaths`。
-- 只读而不修改 `.dev-task/` 下的 `task.json`、`execution.json`、`claims.json`、`audits.md`、
-  `delivery.json`、其它证明工件或任何 caller 状态。
+- 只读而不修改 `.dev-task/` 下的 `task.json`、`execution.json`、`audits.md`、artifacts 或任何 caller 状态。
 - `execution.architecturePath != null` 时，只读而不修改其指向的 `ARCHITECTURE.md`；即使它落在
   `execution.allowedPaths` 也不获得写权。binding 为 null 时不搜索或读取默认 Architecture。
 - 不创建 commit，不 push / merge / publish。
@@ -34,8 +33,8 @@ execution.json + applicable Architecture > task-brief.md`。controller 同时提
 ## 开始前
 
 controller 只应在 Task / Execution validity、Task ↔ Architecture compatibility、Architecture closure、
-rule applicability、claims bootstrap 与 audit evidence 都已闭合后派发。Implementer 不主动重建这些
-controller-owned proof，也不为复核 preflight 展开
+rule applicability 与 preflight 记录都已闭合后派发。Implementer 不主动重建这些
+controller-owned 判断，也不为复核 preflight 展开
 `task-brief.md` 中的 evidence refs；这些引用默认只提供 provenance。只有 controller 明确指出某个 ref
 包含实现所需事实时，才 focused 读取该 ref。
 
@@ -74,18 +73,18 @@ test collection 失败等环境或工具错误都不是 RED。不得为准备或
 若 controller 明确本任务进入具名源码的 source-authoritative 分支，还必须遵守本轮阶段：
 
 - Dispatch A 只按固定 source identity 和 `source → destination` mapping 建立 source-equivalent
-  baseline；完成后立即停止，不做接线、重命名、清理或其它 adaptation，也不把 task report 标成
-  `ready-for-review`。保持 report 为 blocked，并在 final handoff 返回 mapping、可复验结果与 baseline
+  baseline；完成后立即停止，不做接线、重命名、清理或其它 adaptation，并在 final handoff 返回
+  mapping、可复验结果与 baseline
   snapshot facts，等待 controller 对 live baseline 独立复验。
 - Dispatch B 只有在最新 brief 明确引用当前 task/execution 的 adaptation authorization A 时才能开始。
-  缺少该引用、引用不可访问或 identity 不匹配时 blocked；不得先改后补授权。完成后在现有 task report
-  验证 handoff 与 final summary 中引用同一 authorization A，不新增 report 字段。
+  缺少该引用、引用不可访问或 identity 不匹配时 blocked；不得先改后补授权。完成后的 validation
+  handoff 引用同一 authorization A。
 - 授权后的正常 destination adaptation 不会使 authorization 失效；相同 baseline snapshot identity、
   固定 source identity、mapping 与 execution binding 下的适配返修继续引用原 authorization。
 
-## task report
+## Final handoff
 
-每轮开始时 report 保持默认 blocked。完成后写：
+每轮结束直接在 final message 返回：
 
 - 当前 task identity；
 - `conclusion: ready-for-review / blocked`；
@@ -93,4 +92,5 @@ test collection 失败等环境或工具错误都不是 RED。不得为准备或
 - validation command、status、公开摘要；
 - blocked reason。
 
-不要在 report 内决定 claims、General verdict、rules-review 或 delivery result。final summary 只返回 conclusion、changed files、validation 和 blocked reason。
+不要决定 General verdict、rules-review 或 closeout 动作，也不要写 task-report.json。final message 是当轮
+Implementer → controller 的即时 handoff，不是 durable proof；controller 现场核对真实 diff 与验证输出。
