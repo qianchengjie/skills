@@ -6,12 +6,13 @@
 - 当前仓库使用 `skills/<skill-name>/` 管理个人 Codex skills。
 - skill 的 `description` 使用简体中文。
 - 使用 `writing-skills` 通过 subagent 运行 RED/GREEN 行为测试时，必须使用项目 custom agent `skill_eval`；其余测试协议仍由 `writing-skills` 定义。
+- 行为 eval 应通过包含真实取舍或对抗条件的场景，验证模型是否在边界内作出符合目标函数的决策和可观察动作，不把复述全部规则、字段、步骤或说明作为主要通过条件；若 subject 仅靠堆叠内容即可通过，应重写场景与判定标准，而不是继续增加要求。
 - 不要在 skill 目录内新增 README、安装指南、变更日志等辅助文档；只保留 `SKILL.md` 和执行该 skill 必需的资源。
 - 新增或修改 skill 后，运行 `./scripts/validate-all.sh`，并在最终说明中记录验证结果；如无法运行，说明阻塞原因、未覆盖风险和已做的替代检查。
 - 全局安装 skills 时使用 `npx skills@1.5.20 add qianchengjie/skills --global`。
 - 不要新增依赖；脚本优先使用系统自带工具或仓库已有运行时。涉及结构化数据、状态机或测试时，优先使用已有解析 / 测试能力，避免脆弱字符串匹配。
 - 默认实现最小必要机制：机制复杂度必须由当前需求证明，而不是由仓库既有复杂度推导。优先用行为或方法变化满足需求，不足时复用现有机制；仍无法可靠承载时，应主动说明缺口并提出最小必要机制。只有需求明确要求或该缺口有当前证据支持时，才新增协议、状态或持久化产物，不要为假设性的未来失败提前设计闭环。
-- 设计 skill 的协议、handoff 或 agent 通信载体时，先识别实际 consumer，并优先保持决策相关信息密度。主要供 AI 或人阅读、判断和继续执行的内容，默认使用直接的 Markdown 或自然语言；只有存在明确的程序消费、稳定解析或强校验需求时，才引入 JSON / schema。不得因已经采用 schema 就自动扩展 version、enum、lifecycle、authority、validation、recovery；每项结构都必须由当前 consumer 或可复现门禁证明。
+- 设计或修改 skill、协议、handoff 或 agent 通信时，应优先提高决策相关信息密度，直接写清会改变下一步动作、责任归属、默认行为、停止条件或 handoff 的关键语义，而不是让 AI 从流程、状态、工件或字段中自行推导；主要供 AI 或人阅读和判断的内容默认使用直接的 Markdown 或自然语言，只有需要由程序确定性解析或强校验时才引入 JSON / schema。
 
 ## Skill 校验与门禁边界
 
