@@ -1031,24 +1031,20 @@ test('snapshot-target 读取 execution allowlist 并合并 task/execution 两层
 });
 
 
-test('executionHash 只绑定执行边界，不受 evidenceRefs provenance 变化影响', async () => {
+test('evidenceRefs provenance 变化不改变 snapshot-target identity', async () => {
   const fixture = await createFixture();
   await initTask(fixture);
   await writeExecution(fixture, { evidenceRefs: ['audits.md#A1'] });
-
-  let result = run(fixture.root, ['validate-execution', fixture.taskDir]);
-  assert.equal(result.status, 0, result.stderr);
-  const initialHash = result.stdout.trim();
+  const initialTarget = await snapshotTarget(fixture);
 
   await appendFile(
     path.join(fixture.taskDir, 'audits.md'),
     '\n### A2：补充 provenance\n\n执行边界未变化，仅补充判断来源。\n',
   );
   await writeExecution(fixture, { evidenceRefs: ['audits.md#A2'] });
+  const currentTarget = await snapshotTarget(fixture);
 
-  result = run(fixture.root, ['validate-execution', fixture.taskDir]);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), initialHash);
+  assert.deepEqual(currentTarget, initialTarget);
 });
 
 test('持久化 delivery closure 命令已移除', async () => {
