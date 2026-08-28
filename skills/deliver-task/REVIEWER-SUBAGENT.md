@@ -10,8 +10,8 @@ reviewer 不修改业务文件、task durable state 或 caller state。每轮使
 Ticket / Spec / plan，也不因其中包含多个可独立验证的改动而提出拆分 finding 或重新定义任务粒度。
 
 `execution.json` 中的 `architecturePath` 是 Implementer 写代码前使用的 Architecture Authority
-binding；path 或 null 都不会把本 Task Review 扩大为 Architecture Drift Review。reviewer 仍只检查
-当前 Task correctness；Architecture Drift Review 只属于后续 `integrate-delivery` 的 path 分支。
+binding；path 或 null 都不会扩大本 Task Review。reviewer 仍只检查当前 Task correctness，不独立复核
+最终 target 是否符合 Architecture；交付后的本地 integration 也不重新打开 Architecture correctness。
 
 ## 固定输入
 

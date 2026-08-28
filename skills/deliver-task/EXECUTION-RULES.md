@@ -200,8 +200,8 @@ Review 分成两个 concern：
 - **Rules Review**：审查 active rules 与项目代码规范。Full discovery 继续使用 `rules-review` v8；execution-time selected rules 不替代其独立分类。
 
 `execution.json` 携带 Architecture binding 不会把 General Review 扩大为宽视角 Architecture Review。
-Task Reviewer 仍只在当前 Task correctness 和固定 package 边界内工作；Architecture Drift Review 只属于
-后续 `$integrate-delivery` 的非 null 分支。
+Task Reviewer 仍只在当前 Task correctness 和固定 package 边界内工作，不独立复核最终 target 是否符合
+Architecture；`delivered` 之后的本地 integration 也不重新打开 Architecture correctness。
 
 首次 implementation 与 validation 完成并固定 target 后，把 General 与 Rules 作为同一个 Initial
 Discovery group：

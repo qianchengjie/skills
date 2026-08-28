@@ -16,8 +16,9 @@ description: Use when `deliver-task` 已返回 `delivered`，用户或上游需�
 | destination safety | 冻结并复核 destination OID，阻止 drift 上推进 |
 | workspace safety | 隔离试合并，保留 dirty / failed 状态，只做安全 cleanup |
 
-Task validation、General / Rules / Architecture Review、Acceptance、Repair 和 `delivered` closure 都已由
-`deliver-task` 完成，本 skill 不重跑、不解释，也不创建第二套 lifecycle。若 integration 暴露必须新增或修改 Architecture、需求或公共契约的判断，停止并把事实返回 upstream；不在本 skill 内决定或修复。
+Task validation、General / Rules Review、Acceptance、Repair 和 `delivered` closure 都已由
+`deliver-task` 完成，本 skill 不重跑、不解释，也不创建第二套 lifecycle。本 skill 只消费上述 closed
+source，不读取或判断 Architecture，也不派 Architecture reviewer。
 
 本 skill 只处理本地 Git 状态，不 push，不执行远端 side effect，也不回写 `delivery.json`。
 
@@ -37,8 +38,8 @@ Task validation、General / Rules / Architecture Review、Acceptance、Repair �
 3. 对 `commit-range` 确认 `baseCommit`、`headCommit` objects 存在，且 `baseCommit` 是 `headCommit` 的祖先。
 4. 集成时确认 source 与 destination 属于同一 Git 历史，并读取 destination 的项目指令。
 
-预检不运行 `close-check`，不重读 Review、Acceptance、Rules、General 或 Architecture 历史；
-`validate-result` 通过就是本 skill 对 delivery closure 的输入门禁。
+预检不运行 `close-check`，不重读 Review、Acceptance、Rules 或 General 历史，也不读取或判断
+Architecture；`validate-result` 通过就是本 skill 对 delivery closure 的输入门禁。
 
 | target | 主动作 |
 | --- | --- |
@@ -60,7 +61,9 @@ Task validation、General / Rules / Architecture Review、Acceptance、Repair �
 
 从 `D` 建立本轮专用的 isolated candidate branch/workspace；优先使用运行环境提供的 native workspace，否则使用独立 `git worktree`。在 candidate 中 merge 固定 `headCommit`，不依赖可移动的 source branch 名，也不在用户 caller workspace 中试合并。
 
-若 Git conflict 的解决会引入新的业务语义，或需要新增/修改 Architecture、需求或公共契约，停止并保留 source 与 isolated 状态，将冲突事实返回 upstream。不得猜测解决、改写 source 或在 destination 中重试。
+Git conflict 只有在当前代码、destination 项目指令和既有 Git 事实能唯一推出解法时，才可在 candidate
+中机械解决并继续；否则立即停止并保留 source 与 isolated 状态，返回冲突路径、固定 source range 和
+destination OID，不猜测解决、不分类所需决定，也不改写 source 或在 destination 中重试。
 
 ### 3. integration validation
 
@@ -70,7 +73,9 @@ Task validation、General / Rules / Architecture Review、Acceptance、Repair �
 delivery 与当前 destination 组合后是否仍然正常？
 ```
 
-不重新判断 Task 是否完整，不重跑 Task acceptance，不派 Task、General、Rules 或 Architecture reviewer。若验证失败，记录失败命令与结果，保留 candidate 和 source，不推进 destination，不 cleanup；若失败暴露新的语义或契约决定，原样返回 upstream。
+不重新判断 Task 是否完整，不重跑 Task acceptance，不派 Task、General、Rules 或 Architecture reviewer。
+若验证失败，记录失败命令与结果，保留 candidate 和 source，不推进 destination，不 cleanup；只返回失败
+事实，不分类其属于 Architecture、需求、公共契约或普通业务问题。
 
 ### 4. 复核并推进 destination
 

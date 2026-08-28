@@ -22,7 +22,7 @@ Prompt；每次调用使用 fresh context。
 
 一次调用应只选择执行层，唯一推荐 `deliver-task`，并以 `stop` 结束。Architecture 的存在不得改变
 ready Task 路由；回复不得先扫描或处理 Architecture，不得执行 path/null、checkbox、Task
-compatibility 或 Architecture Drift Review。推荐 `architecture-steward`、列出多个 owner、调用推荐
+compatibility。推荐 `architecture-steward`、列出多个 owner、调用推荐
 skill 或继续执行开发均失败。
 
 ## Evaluation boundary

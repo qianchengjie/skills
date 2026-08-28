@@ -26,6 +26,6 @@ check，并引用把该责任与时点写入 `deliver-task` 的精确条文。Im
 
 本用例只验证 compatibility check 的责任 owner 与执行时点，不提供具体 Task/Architecture 冲突，也不
 判断某个实现能否同时满足二者。它不验证 Architecture path/null 决策、`start` 时序、全 Spec/Ticket
-扫描、文档同步、影响分析或集成阶段 Architecture Drift Review。Evaluator 只依据公开回复和公开工具
+扫描、文档同步或影响分析。Evaluator 只依据公开回复和公开工具
 动作判定，不要求隐藏思考过程。本文件定义一次独立调用，不定义 repetitions、RED/GREEN 编排、重试、
 聚合或结果文件格式。
