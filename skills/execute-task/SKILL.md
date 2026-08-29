@@ -16,39 +16,31 @@ description: 当一个软件开发任务的目标、范围与验收已经明确�
 - **Caller**：提供已经明确的任务，并接收执行结果或需要进一步决定的问题。
 - **Controller**：组织任务执行，协调 Implementer、Reviewer、复审者与返修循环。
 - **Implementer**：唯一的业务代码修改者，负责实现任务和处理返修。
-- **Reviewer**：独立于 Implementer，默认读取原始任务和当前代码变更，判断任务是否正确、完整地实现，以及是否引入与本次变更相关的问题；存在具体未决疑点时，自行运行 focused validation，仍无法解决时向 Controller 报告无法判断。
-- **复审者**：只复审 Reviewer 提出的问题，确定修改项，并说明不修改项及原因。
+- **Reviewer**：判断任务是否正确、完整地实现，以及是否引入与本次变更相关的问题；存在具体未决疑点时，自行运行 focused validation，仍无法解决时向 Controller 报告无法判断。
+- **复审者**：仅判断 Reviewer 提出的 findings 中哪些需要修改。
 
-当前执行 `execute-task` 的 agent 承担 Controller。Controller 分别派发 Implementer subagent 和 Reviewer subagent；返修继续交给原 Implementer，Reviewer 不参与业务代码修改。
+当前执行 `execute-task` 的 agent 承担 Controller。Controller 分别派发 Implementer subagent 和 Reviewer subagent；返修继续交给原 Implementer。
 
-Implementer 的实现或返修验证未通过时，继续由原 Implementer 修正并重新验证；验证通过后才进入 Reviewer，无法继续时将原因返回 Controller。
-
-Reviewer 每轮提出问题后，Controller 都将本轮所有 findings 交给一个独立于 Implementer 和 Reviewer 的 Fresh 复审者 Subagent。
-
-## 协作上下文
-
-- Controller 向 Implementer 提供原始任务和完成实现所需的相关上下文。
-- Controller 向 Reviewer 提供原始任务和当前代码变更；返修后的审查还提供复审确定的不修改项及原因。
-- Implementer、Reviewer 与复审者都将结果返回 Controller，由 Controller 统一与 Caller 沟通。
+只有实现或返修完成并通过验证后，才进入 Reviewer 审查；Implementer 无法继续时将原因返回 Controller。
 
 ## 主流程
 
 1. Caller 将已经明确的任务交给 Controller。
-2. Controller 理解任务与相关上下文，并将任务交给 Implementer。
+2. Controller 将原始任务和完成实现所需的相关上下文交给 Implementer。
 3. Implementer 完成实现和验证，将结果返回 Controller。
-4. Controller 将当前代码变更交给 Reviewer 独立审查。
-5. Reviewer 没有发现问题时，Controller 将执行结果返回 Caller；发现问题时进入问题复审与返修循环；无法判断时，Controller 将未决疑点和当前结果返回 Caller，本次 `execute-task` 停止自动推进。Caller 补充决定后恢复本次 `execute-task` 时，原 Reviewer 继续处理原未决疑点。
+4. Controller 将原始任务和当前代码变更交给 Reviewer 审查。
+5. Reviewer 没有发现问题时，Controller 将执行结果返回 Caller；发现问题时进入问题复审与返修循环；无法判断时，Controller 将未决疑点和当前结果返回 Caller。恢复后，原 Reviewer 继续处理原未决疑点。
 
 ## 问题复审与返修循环
 
 1. Reviewer 将发现的问题及原因返回 Controller；再次提出复审确定的不修改项时，还说明此前不修改原因错误在哪里。
-2. Controller 将原始任务、当前代码变更和 Reviewer 提出的问题及原因交给复审者；同一个 finding 被再次提出时，还提供此前的不修改原因，以及原 Reviewer 对该原因错误之处的说明。
-3. 复审者确定修改项，并说明不修改项及原因；对于再次提出且仍判定不修改的 finding，还需要回应原 Reviewer 指出的错误之处。复审者将判断结果返回 Controller。复审者无法判断某个 finding 是否需要修改时，Controller 将该 finding 和当前结果返回 Caller，本次 `execute-task` 停止自动推进；Caller 补充决定后恢复本次 `execute-task` 时，Controller 继续处理本轮已有复审结果，不重新派发复审者。
+2. Controller 将原始任务、当前代码变更和 Reviewer 本轮提出的所有问题及原因交给一个 Fresh 复审者 Subagent；同一个 finding 被再次提出时，还提供此前的不修改原因，以及原 Reviewer 对该原因错误之处的说明。
+3. 复审者确定修改项，并说明不修改项及原因；对于再次提出且仍判定不修改的 finding，还需要回应原 Reviewer 指出的错误之处。复审者将判断结果返回 Controller。复审者无法判断某个 finding 是否需要修改时，Controller 将该 finding 和当前结果返回 Caller；恢复后，Controller 继续处理本轮已有复审结果，不重新派发复审者。
 4. 有修改项时，Controller 将修改项及其 finding 原因交给 Implementer 处理；没有修改项时跳过 Implementer。
 5. 有修改项时，Implementer 完成返修和相关验证，将新结果返回 Controller。
-6. Controller 再次将当前代码变更、复审确定的不修改项及原因交给原 Reviewer 审查。
-7. 初次 Reviewer 审查不计数。复审者完成判断后，Controller 根据复审结果继续自动推进至 Implementer 或原 Reviewer 时，计为启动 1 次自动处理轮次，本轮所有 findings 合计 1 次；Reviewer 或复审者无法判断并停止自动推进时不计数。最多启动 3 次自动处理轮次；第 3 次结束后 Reviewer 仍有 findings 时，Controller 将未收敛的问题和当前结果返回 Caller，本次 `execute-task` 停止自动推进，不启动第 4 次。
-8. 重复以上过程，直到 Reviewer 不再发现问题；如果当前任务无法继续完成，Controller 将原因和当前结果返回 Caller。
+6. Controller 再次将原始任务、当前代码变更、复审确定的不修改项及原因交给原 Reviewer 审查。
+7. 初次 Reviewer 审查不计数。复审者完成判断后，Controller 根据复审结果继续自动推进至 Implementer 或原 Reviewer 时，计为启动 1 次自动处理轮次，本轮所有 findings 合计 1 次；Reviewer 或复审者无法判断并停止自动推进时不计数。最多启动 3 次自动处理轮次；第 3 次结束后 Reviewer 仍有 findings 时，Controller 将未收敛的问题和当前结果返回 Caller。
+8. 重复以上过程，直到 Reviewer 不再发现问题。
 
 ## 返回 Caller
 
