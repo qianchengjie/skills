@@ -1,6 +1,7 @@
 ---
 name: execute-task
 description: 当一个软件开发任务的目标、范围与验收已经明确，需要组织该任务的执行时使用。
+disable-model-invocation: true
 ---
 
 # 任务执行
