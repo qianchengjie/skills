@@ -29,6 +29,8 @@ disable-model-invocation: true
 
 主流程中的三项 Review 对当时的累计代码变更执行 Full Review；scoped re-review 只覆盖 repair diff，其中 finding 所属 Reviewer 还需验证该 finding 是否已解决。
 
+参与复审的 Reviewer 指当前任务中已经完成过审查的 Reviewer。
+
 ## 主流程
 
 1. Caller 将已经明确的任务交给 Controller。
