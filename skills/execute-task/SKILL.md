@@ -18,12 +18,11 @@ disable-model-invocation: true
 - **Controller**：组织任务执行，协调 Implementer、Reviewer、复审者与返修循环。
 - **Implementer**：唯一的业务代码修改者，负责实现任务和处理返修。
 - **Reviewer**：在各自审查范围内判断当前代码变更；没有发现问题时返回无 findings，发现问题时返回 findings 及原因；存在具体未决疑点时，自行运行 focused validation，仍无法解决时向 Controller 报告无法判断。
-  - **需求 Reviewer**：判断任务要求的结果是否正确、完整地实现，以及本次变更是否造成需求层面的回归。
-  - **实现设计 Reviewer**：判断本次变更形成的实现方案是否合理。
+  - **General Reviewer**：分别审查需求正确性和实现设计：判断任务要求的结果是否正确、完整地实现以及本次变更是否造成需求层面的回归；判断本次变更形成的实现方案是否合理。
   - **Rules Reviewer**：判断当前代码变更是否违反适用的项目 Rules；finding 必须引用具体 Rule。
 - **复审者**：仅判断 Reviewer 提出的 findings 中哪些需要修改。
 
-当前执行 `execute-task` 的 agent 承担 Controller。Controller 分别派发 Implementer subagent，以及相互独立的需求 Reviewer、实现设计 Reviewer 和 Rules Reviewer subagent；返修继续交给原 Implementer。
+当前执行 `execute-task` 的 agent 承担 Controller。Controller 分别派发 Implementer subagent，以及相互独立的 General Reviewer 和 Rules Reviewer subagent；返修继续交给原 Implementer。
 
 Implementer 不得将本任务范围外的既有修改纳入本任务提交。
 
@@ -36,8 +35,8 @@ Reviewer 的代码审查对象只包含已提交范围。Implementer 完成实�
 1. Caller 将已经明确的任务交给 Controller。
 2. Controller 记录当前 HEAD 为 BASE，将原始任务和相关上下文交给 Implementer。
 3. Implementer 完成实现，将结果返回 Controller。
-4. Controller 以原始任务和 BASE..HEAD 为输入，按需求 Reviewer、实现设计 Reviewer、Rules Reviewer 的顺序启动 Full Review。
-5. 当前 Reviewer 没有发现问题时进入下一项审查；发现问题时进入问题复审与返修循环；无法判断时，Controller 将未决疑点和当前结果返回 Caller。恢复后，原 Reviewer 继续处理原未决疑点。三项审查均无 findings 后，Controller 将执行结果返回 Caller。
+4. Controller 以原始任务和 BASE..HEAD 为输入，按 General Reviewer、Rules Reviewer 的顺序启动 Full Review。
+5. 当前 Reviewer 没有发现问题时进入下一项审查；发现问题时进入问题复审与返修循环；无法判断时，Controller 将未决疑点和当前结果返回 Caller。恢复后，原 Reviewer 继续处理原未决疑点。两项审查均无 findings 后，Controller 将执行结果返回 Caller。
 
 ## 问题复审与返修循环
 
