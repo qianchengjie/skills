@@ -42,9 +42,9 @@ disable-model-invocation: true
 1. Reviewer 将发现的问题及原因返回 Controller；再次提出复审确定的不修改项时，还说明此前不修改原因错误在哪里。
 2. Controller 将原始任务、当前代码变更和 Reviewer 本轮提出的所有问题及原因交给一个 Fresh 复审者 Subagent；同一个 finding 被再次提出时，还提供此前的不修改原因，以及原 Reviewer 对该原因错误之处的说明。
 3. 复审者确定修改项，并说明不修改项及原因；对于再次提出且仍判定不修改的 finding，还需要回应原 Reviewer 指出的错误之处。复审者将判断结果返回 Controller。复审者无法判断某个 finding 是否需要修改时，Controller 将该 finding 和当前结果返回 Caller；恢复后，Controller 继续处理本轮已有复审结果，不重新派发复审者。
-4. Controller 将复审确定的修改项及其 finding 原因交给 Implementer。
-5. Implementer 完成返修和相关验证，将处理结果返回 Controller。
-6. Controller 根据返修前后的代码状态确定 repair diff，将其交给参与复审的 Reviewer，并将各 finding 的复审结论及处理结果交给所属 Reviewer；仍有 findings 时继续本循环。
+4. 复审确定需要修改的 findings 由 Controller 连同原因交给 Implementer。
+5. Implementer 完成返修和相关验证后，将处理结果返回 Controller；Controller 根据返修前后的代码状态确定 repair diff。
+6. Controller 发起本轮复审：存在 repair diff 时将其交给参与复审的 Reviewer，并将各 finding 的复审结论及处理结果交给所属 Reviewer；仍有 findings 时继续本循环。
 7. 主流程中的 Full Review 不计数。复审者完成判断后，Controller 根据复审结论继续自动推进本轮 findings 的处理与复审时，计为启动 1 次自动处理轮次，本轮所有 findings 合计 1 次；Reviewer 或复审者无法判断并停止自动推进时不计数。最多启动 3 次自动处理轮次；第 3 次结束后仍有 findings 时，Controller 将未收敛的问题和当前结果返回 Caller。
 
 ## 返回 Caller
