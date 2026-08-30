@@ -19,7 +19,7 @@ disable-model-invocation: true
 - **Implementer**：唯一的业务代码修改者，负责实现任务和处理返修。
 - **Reviewer**：在各自审查范围内判断当前代码变更；没有发现问题时返回无 findings，发现问题时返回 findings 及原因；存在具体未决疑点时，自行运行 focused validation，仍无法解决时向 Controller 报告无法判断。
   - **General Reviewer**：分别审查需求正确性和实现设计：判断任务要求的结果是否正确、完整地实现以及本次变更是否造成需求层面的回归；判断本次变更形成的实现方案是否合理。
-  - **Rules Reviewer**：判断当前代码变更是否违反适用的项目 Rules；finding 必须引用具体 Rule。
+  - **Rules Reviewer**：通过 `rules-review` 审查分配的代码范围是否违反适用的项目 Rules；finding 必须引用具体 Rule。
 - **复审者**：仅判断 Reviewer 提出的 findings 中哪些需要修改。
 
 当前执行 `execute-task` 的 agent 承担 Controller。Controller 分别派发 Implementer subagent，以及相互独立的 General Reviewer 和 Rules Reviewer subagent；返修继续交给原 Implementer。
