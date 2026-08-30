@@ -24,6 +24,8 @@ disable-model-invocation: true
 
 当前执行 `execute-task` 的 agent 承担 Controller。Controller 分别派发 Implementer subagent，以及相互独立的 General Reviewer 和 Rules Reviewer subagent；返修继续交给原 Implementer。
 
+## 执行约束
+
 Implementer 不得将本任务范围外的既有修改纳入本任务提交。
 
 Reviewer 的代码审查对象只包含已提交范围。Implementer 完成实现或返修并通过验证后提交本轮变更；一轮可包含多个 commits。无法继续时将原因返回 Controller。
