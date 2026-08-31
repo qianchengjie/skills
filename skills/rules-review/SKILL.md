@@ -1,12 +1,12 @@
 ---
 name: rules-review
-description: 当需要依据项目 active Rules 审查 caller 指定代码范围内的 Rule applicability 与 violation 时使用。不要用于通用代码质量审查或 Rule 仓维护。
+description: 当需要依据项目 active Rules 审查 caller 指定代码范围内的 Rule applicability 与 violation 时使用。
 disable-model-invocation: true
 ---
 
 # Rules Review
 
-`rules-review` 只读判断 caller 指定范围内的代码是否违反适用 Rule。它返回 Rule 判断事实；后续行动由 caller 决定。
+`rules-review` 只读判断 caller 指定范围内的代码是否违反适用 Rule。
 
 ## 判断边界
 
@@ -19,12 +19,19 @@ Caller 提供可定位的 code scope 及其被审状态。文件、符号、模�
 
 ## 发现 Rules
 
-默认从当前 workspace 读取 Rules；caller 指定 Rule commit 时固定该来源。完整 active catalog 与 Rule 正文均通过同级 `rule-steward/scripts/get-rules.mjs` 从同一来源读取。
+默认从当前 workspace 读取 Rules；caller 指定 Rule commit 时固定该来源。通过同级 `rule-steward/scripts/get-rules.mjs` 读取 catalog 与 Rule 正文；Catalog 与后续 Rule 正文必须来自同一 source。
+
+```text
+node <rules-review-skill-dir>/../rule-steward/scripts/get-rules.mjs --root <repository> --catalog --optional-source
+node <rules-review-skill-dir>/../rule-steward/scripts/get-rules.mjs --root <repository> --catalog --commit <FULL-OID>
+```
 
 先读取完整 active catalog，再判断其中每条 Rule：
 
-- Workspace 中不存在 `.agents/rules/` 时，active catalog 为空。
-- Catalog 不完整、冲突或不可读时，返回 discovery `cannot_verify`。
+- 只有 reader 成功返回 catalog，才以其 `rules` 作为完整 active catalog。
+- `source.kind = absent` 仅表示项目不存在 Rule source；目录缺失本身不能证明 absent。
+- 合法 workspace 或 commit source 也允许返回 `rules: []`。
+- reader 失败形成 discovery `cannot_verify`。
 - Catalog 已提供完整且具有约束力的 applicability 条件，并且证据确定该条件不成立时，可以直接判 `not_applicable`。
 - 其余 Rule 从同一来源读取完整正文后再判断；标题、标签、摘要或既有印象不能替代正文。
 
@@ -57,11 +64,10 @@ Scope 内任何已确认 violation 都是 finding，其行动价值或产生时�
 
 ## Cannot verify
 
-每项 `cannot_verify` 包含：
+每项 `cannot_verify` 只写：
 
-1. 未决对象：scope、Rule discovery 或具体 Rule；
-2. 未决判断：applicability 或 compliance；
-3. 缺失或冲突的决定性事实，以及它阻止的结论。
+1. 未决环节及对象：`scope`、`discovery`、`<RULE-ID> applicability` 或 `<RULE-ID> compliance`；
+2. 缺失或冲突的决定性事实，以及它阻止的结论。
 
 `cannot_verify` 保留尚未确定的判断；它不表示不适用、通过或违反。
 
