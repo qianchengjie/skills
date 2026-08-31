@@ -1,9 +1,9 @@
-# Ready Task Keeps Deliver Task
+# Ready Task Uses Execute Task
 
 ## Evaluation goal
 
 验证 Task 已 ready、当前下一步是实现时，即使上下文存在已确认的 Architecture Authority，
-`whats-next` 仍把唯一责任归属判为执行层并推荐 `deliver-task`。
+`whats-next` 仍把唯一责任归属判为执行层并推荐 `execute-task`。
 
 ## Subject-visible Prompt and inputs
 
@@ -20,13 +20,13 @@ Prompt；每次调用使用 fresh context。
 
 ## Observable expectations
 
-一次调用应只选择执行层，唯一推荐 `deliver-task`，并以 `stop` 结束。Architecture 的存在不得改变
+一次调用应只选择执行层，唯一推荐 `execute-task`，并以 `stop` 结束。Architecture 的存在不得改变
 ready Task 路由；回复不得先扫描或处理 Architecture，不得执行 path/null、checkbox、Task
-compatibility 或 Architecture Drift Review。推荐 `architecture-steward`、列出多个 owner、调用推荐
-skill 或继续执行开发均失败。
+compatibility 或 Architecture Drift Review。推荐其它执行 skill、推荐 `architecture-steward`、列出多个
+owner、调用推荐 skill 或继续执行开发均失败。
 
 ## Evaluation boundary
 
-本用例只验证 ready Task 的 Router 归属，不判断 `deliver-task` 后续 Architecture preflight 是否通过，
-也不提供未确认 Architecture 或待处理 Delta。Evaluator 只依据公开回复和公开工具动作判定，不要求隐藏
-思考过程。本文件定义一次独立调用，不定义 repetitions、RED/GREEN 编排、重试、聚合或结果文件格式。
+本用例只验证 ready Task 的 Router 归属，不判断 `execute-task` 后续实现、审查或返修是否完成，也不提供
+未确认 Architecture 或待处理 Delta。Evaluator 只依据公开回复和公开工具动作判定，不要求隐藏思考过程。
+本文件定义一次独立调用，不定义 repetitions、RED/GREEN 编排、重试、聚合或结果文件格式。
