@@ -71,6 +71,10 @@ description: 审查用户写的 skill、AGENTS.md、rules、workflow、prompt �
 
 重点保持约束、范围、非目标、已确认决定、finding、evidence、unknown / cannot-verify、风险、状态以及“必须 / 可以 / 不要”等强弱语义。允许 AI 忠实改写和压缩；不要求逐字复制，也不因存在 summary 就默认要求保存原文、固定 source 字段或新增 provenance 机制。
 
+当材料包含 diff、修订记录、已否定方案或删除内容时，先固定 target / 当前 authority。删除行和已否定方案只说明历史变化，不是当前 contract；不能仅因它们在材料中显眼、曾被写成规则或“看起来有用”，就列为缺口或建议恢复。这是修订材料中的反向显著性（ironic rebound）检查。
+
+只有 target 当前权威文本之间的直接矛盾、真实 consumer 调用链、可复现的当前行为或 fresh 行为失败表明删除会丢失可观察的边界、决策、证据、风险、审计或触发行为时，才列 finding；必须指出 target 当前缺少什么，以及哪个 consumer 的什么判断或动作因此改变。删除行、提交说明、测试 / eval 题面、target 对旧事项的沉默或“可能有用 / 可能误用”的推测都不能单独支持恢复 finding；证据不足时保持 unknown / cannot-verify。当前正向目标、owner 或输出契约已经等价承载时，属于 faithful compression，应保持删除。确有缺口时，补丁只表达当前有效的正向状态、边界或停止条件；删除清单、反例和过程记录保持历史材料身份。
+
 先判断源语义和 source / derived 边界是否可靠，再按风险判断 carrier 是否足够。低风险、同一会话或人工可复核的转换可以使用轻量说明；只有当前载体不足以支持跨任务复用、独立恢复、拒收或高风险放行时，才建议增加 source 引用或 durable artifact。无法验证保真时，必须保留 unknown / cannot-verify，不得把派生内容提升为 source fact。
 
 ### 4. 审查边界和目标函数
@@ -364,7 +368,7 @@ description: 审查用户写的 skill、AGENTS.md、rules、workflow、prompt �
 1. 已声明材料覆盖，覆盖不足时没有给出强结论；
 2. 已区分硬边界、目标函数、启发式、流程、审计格式和 AI 的选择空间；
 3. 已检查 evidence obligation，并且没有把会话说明 + 人 review 能闭环的事项误判成脚本或 durable artifact 缺口；
-4. 材料存在信息转换链时，已记录关键 upstream source、转换、必须保持的语义和 source / derived 边界，并检查 distortion 与 derived-to-source promotion；没有用无 evidence 的状态代替内容检查；
+4. 材料存在信息转换链时，已记录关键 upstream source、转换、必须保持的语义和 source / derived 边界，并检查 distortion 与 derived-to-source promotion；修订材料已固定 target / 当前 authority，恢复删除或已否定内容的 finding 有当前权威直接矛盾、真实 consumer、可复现行为或 fresh 失败证据；没有用无 evidence 的状态代替内容检查；
 5. 已检查风险是否改变行为、审计是否有真值，以及模型 / 工具 / subagent / 重试 / 批处理的明显执行成本；
 6. 已检查影响闭环或使闭环不可信的职责归属、必要 handoff 与跨生命周期错位；稳定独立职责信号成立时，已明确评估独立 skill 是否应列为候选载体；
 7. 已按统一判据识别剪枝候选并输出剪枝判断；
