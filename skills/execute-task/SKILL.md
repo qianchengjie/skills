@@ -35,7 +35,7 @@ Reviewer 的代码审查对象只包含已提交范围。Implementer 完成实�
 ## 主流程
 
 1. Caller 将已经明确的任务交给 Controller。
-2. Controller 记录当前 HEAD 为 BASE，将原始任务和相关上下文交给 Implementer。
+2. Controller 记录当前 HEAD 为 BASE，将原始任务和 Caller 已提供的相关上下文交给 Implementer。
 3. Implementer 完成实现，将结果返回 Controller。
 4. Controller 以原始任务和 BASE..HEAD 为输入，按 General Reviewer、Rules Reviewer 的顺序启动 Full Review；Rules Reviewer 的 judgment scope 是该 BASE..HEAD 代码变更，读取的上下文不扩大 finding scope。
 5. 当前 Reviewer 没有发现问题且没有无法验证项时进入下一项审查；发现问题时进入问题复审与返修循环；存在 `cannot_verify` 时，即使同时已有 findings，Controller 也保留两类事实并将未决疑点和当前结果返回 Caller。恢复后，原 Reviewer 继续处理原未决疑点。两项审查均无 findings 和无法验证项后，Controller 将执行结果返回 Caller。
