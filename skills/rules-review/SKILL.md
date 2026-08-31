@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Rules Review
 
-`rules-review` 只读判断 caller 指定范围内的代码是否违反适用 Rule。
+`rules-review` 判断 caller 指定范围内的代码是否违反适用 Rule，不修改被审代码或 Rules。
 
 ## 判断边界
 
@@ -23,10 +23,8 @@ Caller 提供可定位的 code scope 及其被审状态。文件、符号、模�
 
 先读取完整 active catalog，再判断其中每条 Rule：
 
-- 只有 reader 成功返回 catalog，才以其 `rules` 作为完整 active catalog。
-- `source.kind = absent` 仅表示项目不存在 Rule source；目录缺失本身不能证明 absent。
-- 合法 workspace 或 commit source 也允许返回 `rules: []`。
-- reader 失败形成 discovery `cannot_verify`。
+- 只有正式 reader 明确确认不存在 Rule source，或明确返回合法空 catalog，才按无 active Rules 处理；目录缺失本身不能构成该确认。
+- Reader 失败或无法形成完整 catalog 时，返回 discovery `cannot_verify`。
 - Catalog 已提供完整且具有约束力的 applicability 条件，并且证据确定该条件不成立时，可以直接判 `not_applicable`。
 - 其余 Rule 从同一来源读取完整正文后再判断；标题、标签、摘要或既有印象不能替代正文。
 
@@ -44,7 +42,7 @@ Caller 提供可定位的 code scope 及其被审状态。文件、符号、模�
 - Compliance 的决定性事实缺失或冲突：`cannot_verify`。
 - 必要事实完整且没有违反：pass。
 
-继续判断全部 active Rules。Finding 与 `cannot_verify` 是可并存的事实集合，同一 Rule 也可能同时贡献两者。仅当判断依赖执行事实时，运行对应的 focused test、lint 或 type-check；静态证据足够时直接判断。
+继续判断全部 active Rules。Finding 与 `cannot_verify` 是可并存的事实集合，同一 Rule 也可能同时贡献两者。仅当判断依赖执行事实时，可以运行对应的 focused validation；静态证据足够时直接判断。
 
 ## Finding
 
