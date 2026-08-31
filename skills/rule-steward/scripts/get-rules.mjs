@@ -14,6 +14,18 @@ const RULE_HEADING_RE = /^###\s+([A-Z][A-Z0-9]*-[0-9]{3})\s+(.+?)\s*$/;
 const RULE_LEVELS = new Set(["MUST", "SHOULD", "ADVISORY"]);
 const INDEX_PATH = ".agents/rules/index.md";
 const RETIRED_PATH = ".agents/rules/retired.md";
+const USAGE = [
+  "Usage:",
+  "  Catalog (workspace):",
+  "    get-rules.mjs [--root <path>] --catalog",
+  "    get-rules.mjs [--root <path>] --catalog --optional-source",
+  "  Catalog (commit):",
+  "    get-rules.mjs [--root <path>] --catalog --commit <FULL-OID>",
+  "  Rule ID (workspace):",
+  "    get-rules.mjs [--root <path>] <RULE-ID>...",
+  "  Rule ID (commit):",
+  "    get-rules.mjs [--root <path>] --commit <FULL-OID> <RULE-ID>...",
+].join("\n");
 
 function fail(message) {
   console.error(message);
@@ -67,9 +79,7 @@ function parseArgs(argv) {
   if (catalog && ids.length > 0) fail("--catalog cannot be combined with rule IDs");
   if (optionalSource && !catalog) fail("--optional-source requires --catalog");
   if (optionalSource && commit !== null) fail("--optional-source only supports workspace catalogs");
-  if (!catalog && ids.length === 0) {
-    fail("Usage: get-rules.mjs [--root <path>] [--commit <FULL-OID>] <RULE-ID>...\n       get-rules.mjs [--root <path>] --catalog [--commit <FULL-OID>]\n       get-rules.mjs --root <path> --catalog --optional-source");
-  }
+  if (!catalog && ids.length === 0) fail(USAGE);
 
   return { root, commit, catalog, optionalSource, ids };
 }
@@ -408,7 +418,13 @@ function contentHash(content) {
   return `sha256:${crypto.createHash("sha256").update(content).digest("hex")}`;
 }
 
-const { root, commit, catalog, optionalSource, ids } = parseArgs(process.argv.slice(2));
+const argv = process.argv.slice(2);
+if (argv.length === 1 && argv[0] === "--help") {
+  await writeStdout(`${USAGE}\n`);
+  process.exit(0);
+}
+
+const { root, commit, catalog, optionalSource, ids } = parseArgs(argv);
 const duplicate = ids.find((id, index) => ids.indexOf(id) !== index);
 if (duplicate) fail(`Duplicate requested rule ID: ${duplicate}`);
 

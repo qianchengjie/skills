@@ -37,6 +37,18 @@ async function assertFails(args, pattern) {
   assert.fail(`Expected command to fail: ${args.join(" ")}`);
 }
 
+const helpResult = await runNode([getScript, "--help"]);
+assert.equal(helpResult.stderr, "");
+assert.match(helpResult.stdout, /^Usage:\n/);
+for (const form of [
+  "get-rules.mjs [--root <path>] --catalog --optional-source",
+  "get-rules.mjs [--root <path>] --catalog --commit <FULL-OID>",
+  "get-rules.mjs [--root <path>] <RULE-ID>...",
+  "get-rules.mjs [--root <path>] --commit <FULL-OID> <RULE-ID>...",
+]) {
+  assert.ok(helpResult.stdout.includes(form), `帮助信息缺少读取形式：${form}`);
+}
+
 const root = await mkdtemp(path.join(os.tmpdir(), "rule-steward-"));
 
 const absentRoot = await mkdtemp(path.join(os.tmpdir(), "rule-steward-absent-"));

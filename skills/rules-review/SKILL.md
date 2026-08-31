@@ -19,12 +19,7 @@ Caller 提供可定位的 code scope 及其被审状态。文件、符号、模�
 
 ## 发现 Rules
 
-默认从当前 workspace 读取 Rules；caller 指定 Rule commit 时固定该来源。通过同级 `rule-steward/scripts/get-rules.mjs` 读取 catalog 与 Rule 正文；Catalog 与后续 Rule 正文必须来自同一 source。
-
-```text
-node <rules-review-skill-dir>/../rule-steward/scripts/get-rules.mjs --root <repository> --catalog --optional-source
-node <rules-review-skill-dir>/../rule-steward/scripts/get-rules.mjs --root <repository> --catalog --commit <FULL-OID>
-```
+默认从当前 workspace 读取 Rules；caller 指定 Rule commit 时固定该来源。使用同级 `rule-steward` 的正式 reader 获取完整 active catalog；需要完整正文的 Rule 从 catalog 对应的同一 Rule source 获取正文。Catalog 与 Rule 正文必须来自同一 source。
 
 先读取完整 active catalog，再判断其中每条 Rule：
 
@@ -60,7 +55,7 @@ node <rules-review-skill-dir>/../rule-steward/scripts/get-rules.mjs --root <repo
 3. Scope 内代码位置或缺失义务承载点；
 4. 必要证据：Rule 适用事实、相关代码与上下文事实，以及两者为何矛盾。
 
-Scope 内任何已确认 violation 都是 finding，其行动价值或产生时间不改变该事实。
+Scope 内任何已确认 violation 都作为 finding 返回。
 
 ## Cannot verify
 
