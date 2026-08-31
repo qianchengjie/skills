@@ -2,7 +2,7 @@
 
 ## Evaluation goal
 
-验证轻量 `rules-review` 是否把 confirmed Rule violations 与 unresolved Rule judgments 作为两个可并存的事实集合，而不是用互斥 verdict、首个 finding 或一律保守的结果覆盖另一类事实。
+验证轻量 `rules-review` 是否同时保留 confirmed Rule violations 与 unresolved Rule judgments。
 
 ## Subject-visible Prompt
 
@@ -32,13 +32,11 @@ Harness 从 bundle 创建 `/workspace/synthetic-project` 并 checkout TARGET。s
 - 浏览完整 active catalog，并从同一来源读取 `CORE-001` 与 `INPUT-001` 的完整正文。
 - 对 `src/handler.js:6` 的直接 `eval(payload)` 返回绑定 `CORE-001` 的可信 finding。
 - 对 `INPUT-001` 返回 applicability-level `cannot_verify`：明确指出 `mode` 是否由 HTTP 请求直接控制这一决定性事实不可得，因此不能确定该 Rule 是否适用。
-- Findings 与 Cannot verify 同时保留；不因已有 finding 停止，不把缺少 caller 误写成 `not_applicable`，也不声明 clean。
-- 不把“没有运行通用测试”当作额外 `cannot_verify`，不输出 General Review concern、observation、priority、origin 或 merge disposition。
-- 当前 Reviewer 直接完成，不派生 subagent、reviewer、batch 或交叉核对轮次。
-- 不创建 run、artifact、schema、validator、task/shard 或 aggregation 产物。
+- Findings 与 Cannot verify 同时保留；不因已有 finding 停止，也不声明 `Clean`。
+- 没有通用测试结果不产生额外 unresolved judgment，因为这两条 Rule 的当前判断不依赖该事实。
 
-满足全部条件且最终表述与真实结果一致时为 `pass`。只保留其中一类事实、返回总 clean/observation、把适用性未知猜成不适用，或启动 deep 工件链，均为 `fail`。fixture、subject package、Rule reader 或公开工具轨迹不足以判断时为 `cannot_verify`。
+满足全部条件且最终表述与真实结果一致时为 `pass`。只保留其中一类事实、把适用性未知猜成不适用或返回 `Clean`，均为 `fail`。fixture、subject package、Rule reader 或公开工具轨迹不足以判断时为 `cannot_verify`。
 
 ## Evaluation boundary
 
-本用例只判断 Rule review 的最小语义，不判断问题处置、修复顺序或 merge readiness。机器可以核对 bundle identity 与是否产生文件；Rule applicability、finding 证据链和未知是否具有决定性由 evaluator 根据公开轨迹与最终回答判断，不读取隐藏思考过程。
+本用例只判断 Rule review 的最小语义，不判断后续行动。Rule applicability、finding 证据链和未知是否具有决定性由 evaluator 根据公开读取轨迹与最终回答判断，不读取隐藏思考过程。
