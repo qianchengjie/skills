@@ -3189,7 +3189,7 @@ function renderHandoffMarkdown(finalReview, dispatch) {
   const issueSummary = issueSummaryFromFinalReview(finalReview);
   const recommendation = finalReview.recommendation || deriveRecommendation(finalReview.protocolGate, issueSummary);
   const lines = [
-    '# rules-review 修复交接',
+    '# deep-rules-review 修复交接',
     '',
     '## 审查信息',
     `- runId：${finalReview.runId}`,
@@ -3717,25 +3717,25 @@ function formatRunCommand(runDir) {
 }
 
 function reviewTitle(protocolGate, issueSummary) {
-  if (protocolGate === 'incomplete') return 'rules-review：审查未完成，协议未闭合';
-  if (protocolGate === 'blocked') return 'rules-review：审查阻塞，协议输入或结果不可用';
+  if (protocolGate === 'incomplete') return 'deep-rules-review：审查未完成，协议未闭合';
+  if (protocolGate === 'blocked') return 'deep-rules-review：审查阻塞，协议输入或结果不可用';
   if (issueSummary.findings > 0 && issueSummary.cannotVerify > 0) {
-    return `rules-review：协议通过，发现 ${issueSummary.findings} 项问题，${issueSummary.cannotVerify} 项无法验证`;
+    return `deep-rules-review：协议通过，发现 ${issueSummary.findings} 项问题，${issueSummary.cannotVerify} 项无法验证`;
   }
-  if (issueSummary.findings > 0) return `rules-review：协议通过，发现 ${issueSummary.findings} 项问题`;
-  if (issueSummary.cannotVerify > 0) return `rules-review：协议通过，未发现明确问题，但 ${issueSummary.cannotVerify} 项无法验证`;
-  return 'rules-review：协议通过，未发现问题';
+  if (issueSummary.findings > 0) return `deep-rules-review：协议通过，发现 ${issueSummary.findings} 项问题`;
+  if (issueSummary.cannotVerify > 0) return `deep-rules-review：协议通过，未发现明确问题，但 ${issueSummary.cannotVerify} 项无法验证`;
+  return 'deep-rules-review：协议通过，未发现问题';
 }
 
 function responseTitle(protocolGate, issueSummary) {
-  if (protocolGate === 'incomplete') return 'rules-review：审查未完成';
-  if (protocolGate === 'blocked') return 'rules-review：审查阻塞';
+  if (protocolGate === 'incomplete') return 'deep-rules-review：审查未完成';
+  if (protocolGate === 'blocked') return 'deep-rules-review：审查阻塞';
   if (issueSummary.findings > 0 && issueSummary.cannotVerify > 0) {
-    return `rules-review：发现 ${issueSummary.findings} 项问题，${issueSummary.cannotVerify} 项无法验证`;
+    return `deep-rules-review：发现 ${issueSummary.findings} 项问题，${issueSummary.cannotVerify} 项无法验证`;
   }
-  if (issueSummary.findings > 0) return `rules-review：发现 ${issueSummary.findings} 项问题`;
-  if (issueSummary.cannotVerify > 0) return `rules-review：未发现明确问题，但 ${issueSummary.cannotVerify} 项无法验证`;
-  return 'rules-review：未发现问题';
+  if (issueSummary.findings > 0) return `deep-rules-review：发现 ${issueSummary.findings} 项问题`;
+  if (issueSummary.cannotVerify > 0) return `deep-rules-review：未发现明确问题，但 ${issueSummary.cannotVerify} 项无法验证`;
+  return 'deep-rules-review：未发现问题';
 }
 
 function reviewConclusion(protocolGate, issueSummary) {

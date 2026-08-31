@@ -16,8 +16,8 @@
 
 `taskDir` 固定为 `<task-worktree>/.dev-task`。合同、Markdown 记录、locator 与业务代码共享同一个
 isolated workspace 生命周期；caller workspace 不保存 task state。它们服务当前执行与恢复，不向后续
-closeout 提供 durable delivery certificate。rules-review run 继续由
-`rules-review` 写入自己的协议目录。
+closeout 提供 durable delivery certificate。deep-rules-review run 继续由
+`deep-rules-review` 写入自己的协议目录。
 
 ## task.json
 

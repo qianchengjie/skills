@@ -65,7 +65,7 @@ source-authoritative 分支还要审计 `baseline accepted → adaptation author
 
 ## Rules Scoped Repair Verification
 
-这是 deliver-task 的 scoped reviewer 能力，不是 `rules-review` v8 run。只围绕本次 repair 的规则影响检查：
+这是 deliver-task 的 scoped reviewer 能力，不是 `deep-rules-review` v8 run。只围绕本次 repair 的规则影响检查：
 
 - 对原 Rules findings 给出 disposition；
 - repair 是否引入新的相关规则违规；
@@ -82,7 +82,7 @@ source-authoritative 分支还要审计 `baseline accepted → adaptation author
 - `findings`：返回本 domain 原 finding dispositions 与 repair 引入的新相关 findings；
 - `cannot-bound`：说明无法可靠限定的边界与证据缺口，不猜 clean。
 
-controller 只把 `cannot-bound` 的 domain 升级 Full：General 使用 General Full Review；`rulesReviewPolicy=required` 时 Rules 使用现有 `rules-review` v8 完整审查当前 TARGET。已经 clean 的另一个 domain 不重跑。`not-required` 禁止派发 Rules Full。Full 新发现 finding 时进入下一轮 repair，再执行 policy 要求的 scoped verification。
+controller 只把 `cannot-bound` 的 domain 升级 Full：General 使用 General Full Review；`rulesReviewPolicy=required` 时 Rules 使用现有 `deep-rules-review` v8 完整审查当前 TARGET。已经 clean 的另一个 domain 不重跑。`not-required` 禁止派发 Rules Full。Full 新发现 finding 时进入下一轮 repair，再执行 policy 要求的 scoped verification。
 
 ## 输出与重派
 

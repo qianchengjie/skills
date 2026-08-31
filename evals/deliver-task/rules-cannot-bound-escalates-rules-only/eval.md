@@ -28,4 +28,4 @@ Full finding 使同一个合并 Review Wave 为 failed，`failedWaveCount` 从 0
 ## Evaluation boundary
 
 本用例只验证 domain-local Full 升级和一次 wave 计数，不评审 Rules Full 的内容，也不改变
-rules-review v8 的内部协议。
+`deep-rules-review` v8 的内部协议。

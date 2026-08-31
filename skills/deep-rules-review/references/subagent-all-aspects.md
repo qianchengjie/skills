@@ -1,4 +1,4 @@
-# rules-review reviewer 契约
+# deep-rules-review reviewer 契约
 
 仅在 controller 已生成并校验 v8 task 后使用。每个 reviewer 只处理一个 `reviewBatchId`。
 

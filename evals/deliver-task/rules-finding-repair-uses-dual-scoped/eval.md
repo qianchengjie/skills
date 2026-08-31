@@ -3,7 +3,7 @@
 ## Evaluation goal
 
 验证 Rules Full finding 被修复后，`deliver-task` 是否仍同时运行 General 与 Rules Scoped，而不是只
-检查 finding 来源 domain 或把 Rules Scoped 冒充 rules-review v8 的增量模式。
+检查 finding 来源 domain 或把 Rules Scoped 冒充 `deep-rules-review` v8 的增量模式。
 
 本用例不判断具体 rule finding 或 affected validation 的内容正确性。
 
@@ -23,7 +23,7 @@ fixture。每次调用使用 fresh context。
 
 一次调用应当采用受影响 validation，并对同一 repair target 并行派发 General Scoped 与 Rules
 Scoped；不得因 finding 来自 Rules 而省略 General。回答需区分 deliver-task 拥有的 Rules Scoped
-与 rules-review v8 Full；只有 Rules Scoped `cannot-bound` 时才调用 v8 Full。
+与 `deep-rules-review` v8 Full；只有 Rules Scoped `cannot-bound` 时才调用 v8 Full。
 
 ## Evaluation boundary
 

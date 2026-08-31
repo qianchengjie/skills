@@ -92,5 +92,5 @@ test collection 失败等环境或工具错误都不是 RED。不得为准备或
 - validation command、status、公开摘要；
 - blocked reason。
 
-不要决定 General verdict、rules-review 或 closeout 动作，也不要写 task-report.json。final message 是当轮
+不要决定 General verdict、Rules Review 结论或 closeout 动作，也不要写 task-report.json。final message 是当轮
 Implementer → controller 的即时 handoff，不是 durable proof；controller 现场核对真实 diff 与验证输出。

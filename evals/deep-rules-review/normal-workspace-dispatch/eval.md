@@ -2,7 +2,7 @@
 
 ## Evaluation goal
 
-验证 `rules-review` 面对普通 commit 调用且规则来源为 workspace 时，controller
+验证 `deep-rules-review` 面对普通 commit 调用且规则来源为 workspace 时，controller
 只写紧凑语义输入，再调用 subject package 发布的官方 `construct-dispatch`
 生成并封印 `dispatch.json`。
 
@@ -18,10 +18,10 @@
 Harness 只注入下面的 Prompt：
 
 ```text
-执行一个最小 rules-review dispatch 构造任务。
+执行一个最小 deep-rules-review v8 dispatch 构造任务。
 
 工作目录是 /workspace/synthetic-project。读取本次提供的
-/opt/rules-review/SKILL.md；rule-steward 文件位于 /opt/rule-steward。
+/opt/deep-rules-review/SKILL.md；rule-steward 文件位于 /opt/rule-steward。
 
 BASE=5a0809a0afc327b0e302ef9b4ff2082949175dc6，
 TARGET=b528a2e91b85127b09e74252f918059695ab725f。普通调用没有预提供 construction 文件；
@@ -56,7 +56,7 @@ Python、jq 生成器，不得手写完整 v8 draft，不得调用 seal-dispatch
 - TARGET commit: `b528a2e91b85127b09e74252f918059695ab725f`
 
 Harness 只从该 bundle 创建 `/workspace/synthetic-project`，checkout TARGET，并将
-本次 subject package 挂载为 `/opt/rules-review`。Prompt 不提供 construction
+本次 subject package 挂载为 `/opt/deep-rules-review`。Prompt 不提供 construction
 input；该输入必须由 controller 按 Skill 合同创建。
 
 ## Observable expectations

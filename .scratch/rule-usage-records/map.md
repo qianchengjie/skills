@@ -5,12 +5,12 @@
 
 ## Destination
 
-形成一份可直接交给后续实现的决策规格，使 `rules-review` 能把真实任务中的规则使用事件写成长期保存、来源可验证的本机记录；本地图不实现代码。
+形成一份可直接交给后续实现的决策规格，使 `deep-rules-review` 能把真实任务中的规则使用事件写成长期保存、来源可验证的本机记录；本地图不实现代码。
 
 ## Notes
 
 - 领域：在役规则的真实使用记录。
-- 每次处理 ticket 时使用 `grilling` 与 `domain-modeling`，并核对当前 `rule-steward`、`rules-review` 契约。
+- 每次处理 ticket 时使用 `grilling` 与 `domain-modeling`，并核对当前 `rule-steward`、`deep-rules-review` 契约。
 - 记录只证明 consumer 留下了事件或语义判断，不证明判断正确、规则有效或规则产生了增量价值。
 - 规则来源证明必须同时包含规范化规则仓身份、完整规则仓 commit、规则编号和规则内容 hash。未提交规则不记录；来源后续无法重新验证时记录作废。
 - 不保留目标代码 commit、diff、代码快照或历史案例复现能力。

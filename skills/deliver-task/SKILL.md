@@ -216,7 +216,7 @@ Task Reviewer 只审查当前 Task correctness。Architecture Drift Review 由�
 - scoped reviewer 未返回、越界写文件或无法绑定输入时，同一输入最多 fresh 重派一次；不能靠重派洗掉负结论。
 - repair 超出原 finding 因果范围时，当前 Task/Execution 内可重新界定就升级受影响 domain 的 Full；需要扩张 immutable authority 时停止。
 
-精确的 Task、Execution、Markdown audits 与 artifacts 角色见 [TASK-CONTRACT.md](TASK-CONTRACT.md)。rules-review v8 只负责 Rules Full；Rules Scoped Repair Verification 由 deliver-task reviewer 执行。
+精确的 Task、Execution、Markdown audits 与 artifacts 角色见 [TASK-CONTRACT.md](TASK-CONTRACT.md)。`deep-rules-review` v8 只负责 Rules Full；Rules Scoped Repair Verification 由 deliver-task reviewer 执行。
 
 ## 完成、回流与阻塞
 
