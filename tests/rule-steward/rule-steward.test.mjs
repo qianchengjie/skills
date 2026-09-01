@@ -591,7 +591,6 @@ await writeFile(
   `### CORE-001 先读约束
 
 - 替代：无
-- 原因：测试冲突
 `,
 );
 const conflictFailure = await assertFails(
