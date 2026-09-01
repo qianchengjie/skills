@@ -368,6 +368,23 @@ function normalizeReplacement(value) {
     .filter(Boolean);
 }
 
+async function parseRetiredRuleIds(reader, namespaces) {
+  const retiredIds = new Set();
+  if (!reader.exists(RETIRED_PATH)) return retiredIds;
+  const content = await reader.read(RETIRED_PATH);
+
+  for (const line of content.split(/\r?\n/)) {
+    const match = line.match(RULE_HEADING_RE);
+    if (!match) continue;
+    const id = match[1];
+    const namespace = splitRuleId(id);
+    if (!namespaces.has(namespace)) fail(`Retired rule namespace is not registered: ${id}`);
+    if (retiredIds.has(id)) fail(`Duplicate retired rule ID: ${id}`);
+    retiredIds.add(id);
+  }
+  return retiredIds;
+}
+
 async function parseRetiredRules(reader, namespaces) {
   const retired = new Map();
   if (!reader.exists(RETIRED_PATH)) return retired;
@@ -403,6 +420,12 @@ async function parseRetiredRules(reader, namespaces) {
   return retired;
 }
 
+function assertNoActiveRetiredConflict(active, retiredIds) {
+  for (const id of active.keys()) {
+    if (retiredIds.has(id)) fail(`Rule ID is both active and retired: ${id}`);
+  }
+}
+
 function formatRetired(rule) {
   const replacementText = rule.replacements.length > 0 ? rule.replacements.join(", ") : "无";
   return [
@@ -436,12 +459,10 @@ if (optionalSource && isWorkspaceRuleSourceAbsent(root)) {
 const reader = createReader(root, commit);
 const { content: indexContent, namespaces } = await parseIndex(reader);
 const { active, files } = await parseActiveRules(reader, namespaces);
-const retired = await parseRetiredRules(reader, namespaces);
-for (const id of active.keys()) {
-  if (retired.has(id)) fail(`Rule ID is both active and retired: ${id}`);
-}
 
 if (catalog) {
+  const retiredIds = await parseRetiredRuleIds(reader, namespaces);
+  assertNoActiveRetiredConflict(active, retiredIds);
   const output = {
     source: {
       ...reader.source,
@@ -465,6 +486,8 @@ if (catalog) {
   process.exit(0);
 }
 
+const retired = await parseRetiredRules(reader, namespaces);
+assertNoActiveRetiredConflict(active, retired);
 const outputs = [];
 for (const id of ids) {
   const namespace = splitRuleId(id);

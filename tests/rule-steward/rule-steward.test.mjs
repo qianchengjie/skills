@@ -398,6 +398,29 @@ assert.deepEqual(workspaceCatalog, {
   ],
 });
 
+const catalogRetiredPath = path.join(catalogRoot, ".agents/rules/retired.md");
+await writeFile(
+  catalogRetiredPath,
+  `# Retired Rules
+
+### CORE-003 元数据损坏的历史规则
+
+- 替代：CORE-001
+`,
+);
+const catalogWithDamagedRetiredMetadata = JSON.parse((await runNode([
+  getScript,
+  "--root",
+  catalogRoot,
+  "--catalog",
+])).stdout);
+assert.deepEqual(catalogWithDamagedRetiredMetadata, workspaceCatalog);
+await assertFails(
+  [getScript, "--root", catalogRoot, "CORE-003"],
+  /Missing 原因 field for retired rule: CORE-003/,
+);
+await rm(catalogRetiredPath);
+
 const largeCatalogRoot = await mkdtemp(path.join(os.tmpdir(), "rule-steward-large-catalog-"));
 const largeCatalogRuleCount = 300;
 const largeCatalogRules = Array.from({ length: largeCatalogRuleCount }, (_, index) => `### CORE-${String(index + 1).padStart(3, "0")} ${"大型目录中文标题".repeat(16)}
