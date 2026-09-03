@@ -3,7 +3,7 @@
 ## 仓库约定
 
 - 默认使用简体中文回复。
-- 当前仓库使用 `skills/<skill-name>/` 管理个人 Codex skills。
+- 当前仓库使用 `skills/<skill-name>/` 管理面向软件开发协作的可复用 Codex skills。
 - skill 的 `description` 使用简体中文。
 - 不要在 skill 目录内新增 README、安装指南、变更日志等辅助文档；只保留 `SKILL.md` 和执行该 skill 必需的资源。
 - 全局安装 skills 时使用 `npx skills@1.5.20 add qianchengjie/skills --global`。
