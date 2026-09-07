@@ -289,20 +289,17 @@ function parseField(markdown, fieldName) {
   return match?.[1]?.trim() ?? null;
 }
 
-function parseList(markdown, fieldName, id) {
+function parseRuleBody(markdown) {
   const lines = markdown.split(/\r?\n/);
-  const start = lines.findIndex((line) => line.trim() === `- ${fieldName}：`);
-  if (start === -1) fail(`Missing ${fieldName} field for active rule: ${id}`);
-  const items = [];
+  const prefix = "- 规则：";
+  const start = lines.findIndex((line) => line.startsWith(prefix));
+  if (start === -1) return null;
+  const body = [lines[start].slice(prefix.length)];
   for (let i = start + 1; i < lines.length; i += 1) {
-    const match = lines[i].match(/^\s{2}-\s+(.+?)\s*$/);
-    if (match) {
-      items.push(match[1]);
-      continue;
-    }
-    if (/^-\s/.test(lines[i]) || RULE_HEADING_RE.test(lines[i])) break;
+    if (lines[i].trim() && !/^[ \t]/.test(lines[i])) break;
+    body.push(lines[i]);
   }
-  if (items.length === 0) fail(`Missing ${fieldName} items for active rule: ${id}`);
+  return body.join("\n").trim();
 }
 
 function parseActiveRuleFile(content, registration) {
@@ -323,15 +320,11 @@ function parseActiveRuleFile(content, registration) {
     const markdown = lines.slice(index, end).join("\n").trimEnd();
     const ruleLevel = parseField(markdown, "级别");
     const appliesTo = parseField(markdown, "生效条件");
-    const ruleText = parseField(markdown, "规则");
+    const ruleText = parseRuleBody(markdown);
     if (!ruleLevel) fail(`Missing 级别 field for active rule: ${id}`);
     if (!RULE_LEVELS.has(ruleLevel)) fail(`Invalid rule level for ${id}: ${ruleLevel}`);
     if (!appliesTo) fail(`Missing 生效条件 field for active rule: ${id}`);
     if (!ruleText) fail(`Missing 规则 field for active rule: ${id}`);
-    parseList(markdown, "通过条件", id);
-    parseList(markdown, "证据要求", id);
-    parseList(markdown, "失败条件", id);
-    parseList(markdown, "无法验证条件", id);
     rules.push({
       id,
       title: match[2].trim(),

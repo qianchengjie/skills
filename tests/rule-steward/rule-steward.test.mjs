@@ -88,14 +88,6 @@ assert.match(initResult.stdout, /本脚本不会自动修改 AGENTS\.md/);
 
 const indexPath = path.join(root, ".agents/rules/index.md");
 assert.match(await readFile(indexPath, "utf8"), /\| `CORE` \| active \| `always\/constraints\.md` \|/);
-assert.match(
-  await readFile(path.join(root, ".agents/rules/always/constraints.md"), "utf8"),
-  /载体由消费 workflow 指定/,
-);
-assert.match(
-  await readFile(path.join(root, ".agents/rules/always/constraints.md"), "utf8"),
-  /- 通过条件：/,
-);
 
 const optionalEmptyCatalog = JSON.parse((await runNode([
   getScript,
@@ -206,11 +198,7 @@ await writeFile(
 );
 
 const constraintsPath = path.join(root, ".agents/rules/always/constraints.md");
-await writeFile(
-  constraintsPath,
-  `# Constraints
-
-### CORE-001 不越界修改
+const legacyRule = `### CORE-001 不越界修改
 
 - 级别：MUST
 - 生效条件：每次任务
@@ -223,12 +211,37 @@ await writeFile(
   - 未经授权修改无关文件。
 - 无法验证条件：
   - 当前材料无法判断范围。
-`,
-);
+`;
+await writeFile(constraintsPath, `# Constraints\n\n${legacyRule}`);
 
 const activeResult = await runNode([getScript, "--root", root, "CORE-001"]);
-assert.match(activeResult.stdout, /### CORE-001 不越界修改/);
-assert.match(activeResult.stdout, /- 通过条件：\n  - 实际修改仅包含当前任务范围内的内容。/);
+assert.equal(activeResult.stdout, legacyRule);
+
+await runGit(root, ["init", "-q"]);
+await runGit(root, ["config", "user.email", "test@example.com"]);
+await runGit(root, ["config", "user.name", "Test User"]);
+await runGit(root, ["add", ".agents/rules"]);
+await runGit(root, ["commit", "-qm", "legacy rules"]);
+const legacyCommit = (await runGit(root, ["rev-parse", "HEAD"])).stdout.trim();
+assert.equal((await runNode([
+  getScript, "--root", root, "--commit", legacyCommit, "CORE-001",
+])).stdout, legacyRule);
+
+// The reader preserves supplemental text without requiring it to exist or use a list.
+for (const field of ["通过条件", "证据要求", "失败条件", "无法验证条件"]) {
+  const ruleWithoutProjection = legacyRule.replace(
+    new RegExp(`- ${field}：\\n  - [^\\n]+\\n`),
+    "",
+  );
+  for (const markdown of [ruleWithoutProjection, `${ruleWithoutProjection}- ${field}：\n`]) {
+    await writeFile(constraintsPath, markdown);
+    assert.equal((await runNode([getScript, "--root", root, "CORE-001"])).stdout, markdown);
+    assert.equal(JSON.parse((await runNode([
+      getScript, "--root", root, "--catalog",
+    ])).stdout).rules.length, 1);
+  }
+}
+await writeFile(constraintsPath, legacyRule);
 
 await mkdir(path.join(root, ".agents/rules/concerns"), { recursive: true });
 await writeFile(
@@ -240,14 +253,6 @@ await writeFile(
 - 级别：MUST
 - 生效条件：测试
 - 规则：不应被读取。
-- 通过条件：
-  - 未登记规则不进入 active 规则读取结果。
-- 证据要求：
-  - 无
-- 失败条件：
-  - 无
-- 无法验证条件：
-  - 无
 `,
 );
 await assertFails([getScript, "--root", root, "HID-001"], /Namespace is not registered/);
@@ -301,46 +306,26 @@ const catalogCore = `# Constraints
 
 - 级别：SHOULD
 - 生效条件：修改多个文件时
-- 规则：只修改任务范围内的文件。
-- 通过条件：
-  - 实际改动只包含任务范围内的文件。
-- 证据要求：
-  - 列出修改文件。
-- 失败条件：
-  - 修改无关文件。
-- 无法验证条件：
-  - 缺少 diff。
+- 规则：只修改任务范围内的文件，并在修改说明中列出实际修改文件。
 
 ### CORE-001 先读约束
 
 - 级别：MUST
 - 生效条件：每次任务
-- 规则：先读取项目约束。
-- 通过条件：
-  - 项目约束在执行任务前已读取。
-- 证据要求：
-  - 引用约束。
-- 失败条件：
-  - 未读取约束。
-- 无法验证条件：
-  - 约束不可读。
+- 规则：执行任务前读取项目约束，并引用所使用的约束。
 `;
-const catalogTesting = `# Testing
-
-### TEST-001 修改测试时运行定向测试
+const multilineRule = `### TEST-001 修改测试时运行定向测试
 
 - 级别：ADVISORY
 - 生效条件：修改测试代码时
-- 规则：运行相关定向测试。
-- 通过条件：
-  - 相关定向测试已通过明确入口执行并记录结果。
-- 证据要求：
-  - 记录测试命令。
-- 失败条件：
-  - 未运行相关测试。
-- 无法验证条件：
-  - 测试环境不可用。
+- 规则：
+  通过相关定向测试入口运行测试。
+
+  在验证记录中说明：
+  - 测试命令；
+  - 执行结果。
 `;
+const catalogTesting = `# Testing\n\n${multilineRule}`;
 await mkdir(path.join(catalogRoot, ".agents/rules/always"), { recursive: true });
 await mkdir(path.join(catalogRoot, ".agents/rules/concerns"), { recursive: true });
 await mkdir(path.join(catalogRoot, ".agents/rules/domain"), { recursive: true });
@@ -351,6 +336,9 @@ await writeFile(path.join(catalogRoot, ".agents/rules/domain/empty.md"), "");
 
 const workspaceCatalogResult = await runNode([getScript, "--root", catalogRoot, "--catalog"]);
 const workspaceCatalog = JSON.parse(workspaceCatalogResult.stdout);
+assert.equal((await runNode([
+  getScript, "--root", catalogRoot, "TEST-001",
+])).stdout, multilineRule);
 assert.deepEqual(workspaceCatalog, {
   source: {
     kind: "workspace",
@@ -428,14 +416,6 @@ const largeCatalogRules = Array.from({ length: largeCatalogRuleCount }, (_, inde
 - 级别：MUST
 - 生效条件：读取大型规则目录时
 - 规则：完整输出目录 JSON。
-- 通过条件：
-  - stdout 可被完整解析。
-- 证据要求：
-  - 最后一条规则存在。
-- 失败条件：
-  - stdout 被截断。
-- 无法验证条件：
-  - 无法执行脚本。
 `).join("\n");
 await mkdir(path.join(largeCatalogRoot, ".agents/rules/always"), { recursive: true });
 await writeFile(path.join(largeCatalogRoot, ".agents/rules/index.md"), `# Rules Index
@@ -499,6 +479,9 @@ assert.match((await runNode([
   commit,
   "CORE-001",
 ])).stdout, /### CORE-001 先读约束/);
+assert.equal((await runNode([
+  getScript, "--root", catalogRoot, "--commit", commit, "TEST-001",
+])).stdout, multilineRule);
 
 for (const invalidCommit of [commit.slice(0, 12), tree, blob]) {
   const failure = await assertFails(
@@ -528,31 +511,31 @@ const invalidCatalogCases = [
     pattern: /Invalid rule level/,
   },
   {
-    name: "missing-pass-conditions",
+    name: "missing-rule-body",
     index: catalogIndex,
     core: catalogCore.replace(
-      "- 通过条件：\n  - 项目约束在执行任务前已读取。\n",
+      "- 规则：执行任务前读取项目约束，并引用所使用的约束。\n",
       "",
     ),
-    pattern: /Missing 通过条件 field/,
+    pattern: /Missing 规则 field/,
   },
   {
-    name: "empty-pass-conditions",
+    name: "empty-rule-body-before-next-rule",
     index: catalogIndex,
     core: catalogCore.replace(
-      "- 通过条件：\n  - 项目约束在执行任务前已读取。\n",
-      "- 通过条件：\n",
+      "- 规则：只修改任务范围内的文件，并在修改说明中列出实际修改文件。\n",
+      "- 规则：\n  \n",
     ),
-    pattern: /Missing 通过条件 items/,
+    pattern: /Missing 规则 field/,
   },
   {
-    name: "misindented-pass-conditions",
+    name: "empty-rule-body-with-supplemental-fields",
     index: catalogIndex,
-    core: catalogCore.replace(
-      "  - 项目约束在执行任务前已读取。",
-      "    - 项目约束在执行任务前已读取。",
+    core: legacyRule.replace(
+      "- 规则：不得修改任务范围外的无关代码。\n",
+      "- 规则：\n  \n",
     ),
-    pattern: /Missing 通过条件 items/,
+    pattern: /Missing 规则 field/,
   },
   {
     name: "namespace-mismatch",
@@ -576,6 +559,11 @@ for (const invalid of invalidCatalogCases) {
     invalid.pattern,
   );
   assert.equal(failure.stdout, "");
+  const idFailure = await assertFails(
+    [getScript, "--root", invalidRoot, "CORE-001"],
+    invalid.pattern,
+  );
+  assert.equal(idFailure.stdout, "");
 }
 
 const conflictRoot = await mkdtemp(path.join(os.tmpdir(), "rule-steward-catalog-conflict-"));
