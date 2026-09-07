@@ -1,6 +1,0 @@
-interface:
-  display_name: "开发交付"
-  short_description: "在隔离 workspace 中实现并验证 caller 定义的开发范围"
-  default_prompt: "使用 $deliver-task 在隔离 workspace 中实现并验证这个开发任务。"
-policy:
-  allow_implicit_invocation: false

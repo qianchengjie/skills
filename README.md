@@ -8,9 +8,7 @@
 
 | Skill | 用途 |
 | --- | --- |
-| [`deliver-task`](skills/deliver-task/SKILL.md) | 在隔离 workspace 中完成一个边界明确的开发任务并返回可审计交付结果。 |
 | [`execute-task`](skills/execute-task/SKILL.md) | 组织一个目标、范围与验收已经明确的软件开发任务的实现、审查与必要返修。 |
-| [`integrate-delivery`](skills/integrate-delivery/SKILL.md) | 将 `deliver-task` 的固定交付结果集成到本地目标分支，并完成经授权的 branch/worktree 收尾。 |
 | [`whats-next`](skills/whats-next/SKILL.md) | 在开发中不知道下一步做什么或发现跨层问题时，判断唯一责任归属并停止。 |
 
 ### 架构与规则治理
@@ -25,7 +23,6 @@
 | Skill | 用途 |
 | --- | --- |
 | [`bounded-agency-review`](skills/bounded-agency-review/SKILL.md) | 审查 skill、规则、workflow 或 prompt 的 agent contract，并判断是否需要剪枝。 |
-| [`deep-rules-review`](skills/deep-rules-review/SKILL.md) | 对固定 commit 执行带规则快照、分片、聚合与机器校验的深度 Rule 审计。 |
 | [`rules-review`](skills/rules-review/SKILL.md) | 对 caller 指定的代码范围执行轻量 Rule applicability 与 violation 审查。 |
 
 ### 协作状态与方向控制

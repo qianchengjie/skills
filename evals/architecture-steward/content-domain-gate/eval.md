@@ -33,6 +33,6 @@ Subject 使用待测版本的 `skills/architecture-steward/` package。Harness �
 ## Evaluation boundary
 
 本用例只验证 Architecture 候选的内容合域与混合语义提取，不判断架构设计是否正确，不检查 Task 与
-已确认 Architecture 是否冲突，也不涉及 Architecture path/null 或 `deliver-task start` 时序。
+已确认 Architecture 是否冲突，也不涉及 Architecture path/null。
 Evaluator 只依据公开回复和公开工具动作判定，不要求隐藏思考过程。本文件定义一次独立调用，不定义
 repetitions、RED/GREEN 编排、重试、聚合或结果文件格式。
