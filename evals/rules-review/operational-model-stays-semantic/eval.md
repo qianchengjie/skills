@@ -7,7 +7,7 @@
 ## Subject-visible Prompt and inputs
 
 ```text
-你是 fresh-context 行为评测 subject。只读，不修改任何文件，不读取 git diff、tests、evals、dev-plans 或其它 skill。
+你是 fresh-context 行为评测 subject。只读，不修改任何文件，不读取 git diff、tests、evals 或其它 skill。
 
 完整读取 /opt/rules-review/SKILL.md。随后假设你即将执行一次普通 Rule review。请用不超过 8 个要点写出你认为必须放在工作记忆中的运行模型；只保留会改变 Rule review 判断或输出的内容。不要评价文档，不要提出改进。
 ```
