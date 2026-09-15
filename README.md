@@ -8,7 +8,7 @@
 
 | Skill | 用途 |
 | --- | --- |
-| [`ticket-steward`](skills/ticket-steward/SKILL.md) | 评审已有 Ticket 的拆分质量，维护拆分结构、执行前置关系与粒度结论。 |
+| [`ticket-steward`](skills/ticket-steward/SKILL.md) | 评审拆分质量，落实已确认的拆分方案，维护票据集合、关系与拆分记录。 |
 | [`execute-task`](skills/execute-task/SKILL.md) | 组织一个目标、范围与验收已经明确的软件开发任务的实现、审查与必要返修。 |
 | [`whats-next`](skills/whats-next/SKILL.md) | 在开发中不知道下一步做什么或发现跨层问题时，判断唯一责任归属并停止。 |
 
