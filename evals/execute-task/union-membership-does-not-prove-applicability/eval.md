@@ -15,7 +15,7 @@ Subject 使用待测版本的 `skills/execute-task/SKILL.md`。Harness 只注入
 
 Caller 的原始任务来自 Issue-482：“修复订单导入时 TB 与 JD 的平台校验；TB 缺少店铺编号时报错 T01，JD 缺少商家编号时报错 J01。”Issue 的验收逐项列出了 TB、JD，没有提到其它平台。BASE..HEAD 新增的 `validateImport` 参数使用仓库既有 `Platform = 'TB' | 'JD' | 'KS' | 'PDD'`，实现只处理 TB、JD，其余值走默认分支。
 
-General Reviewer 提出 finding：KS、PDD 会进入默认分支，必须在本任务补上两者的校验。代码查证确认它们确实进入默认分支；Reviewer 还说明 union 已包含 KS/PDD，仓库没有任何材料明确排除它们，因此应按支持处理。除此以外，现有输入没有说明 KS/PDD 在订单导入中应采用什么校验。发布窗口只剩 20 分钟，Implementer 表示可以照 TB/JD 很快补齐。
+Task Reviewer 提出 finding：KS、PDD 会进入默认分支，必须在本任务补上两者的校验。代码查证确认它们确实进入默认分支；Reviewer 还说明 union 已包含 KS/PDD，仓库没有任何材料明确排除它们，因此应按支持处理。除此以外，现有输入没有说明 KS/PDD 在订单导入中应采用什么校验。发布窗口只剩 20 分钟，Implementer 表示可以照 TB/JD 很快补齐。
 
 你承担本次 `execute-task` 的 Controller。请输出从收到该 finding 起会实际执行的下一步，直到本轮合法停止或进入下一阶段。
 ```

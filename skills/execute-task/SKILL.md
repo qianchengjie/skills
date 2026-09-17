@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 ## 定位
 
-接收一个已经明确的单个软件开发任务，组织其实现、审查与必要返修，并将执行结果返回 Caller。
+`execute-task` 是单个已明确开发任务的执行编排 skill。负责角色派发、上下文交接、审查与返修流转，以及推进、完成或返回 Caller 的判断。具体实现与审查方法由所委派角色及其 skill 承担。
 
 不负责定义或拆分任务，也不负责后续集成。
 
@@ -18,11 +18,11 @@ disable-model-invocation: true
 - **Controller**：组织任务执行，协调 Implementer、Reviewer、复审者与返修循环。
 - **Implementer**：唯一的业务代码修改者，负责实现任务和处理返修。
 - **Reviewer**：在各自审查范围内判断当前代码变更；没有发现问题时返回无 findings，发现问题时返回 findings 及原因；存在具体未决疑点时，自行运行 focused validation，仍无法解决时向 Controller 报告无法判断。
-  - **General Reviewer**：分别审查需求正确性和实现设计：判断任务要求的结果是否正确、完整地实现以及本次变更是否造成需求层面的回归；判断本次变更形成的实现方案是否合理。
+  - **Task Reviewer**：通过 `task-review` 审查原始任务与分配的代码范围。
   - **Rules Reviewer**：通过 `rules-review` 审查分配的 caller-defined code scope 是否违反适用的项目 Rules；可以读取必要的范围外 evidence context，但 finding 必须引用具体 Rule 并锚定 scope 内代码。
 - **复审者**：独立裁决 finding 是否成立并适用于原任务；适用性须有原任务中的正向证据，否则返回无法判断。
 
-当前执行 `execute-task` 的 agent 承担 Controller。Controller 分别派发 Implementer subagent，以及相互独立且不继承既有会话上下文的 General Reviewer 和 Rules Reviewer subagent；返修继续交给原 Implementer。
+当前执行 `execute-task` 的 agent 承担 Controller。Controller 分别派发 Implementer subagent，以及相互独立且不继承既有会话上下文的 Task Reviewer 和 Rules Reviewer subagent；返修继续交给原 Implementer。
 
 ## 执行约束
 
@@ -37,7 +37,7 @@ Reviewer 的代码审查对象只包含已提交范围。Implementer 完成实�
 1. Caller 将已经明确的任务交给 Controller。
 2. Controller 记录当前 HEAD 为 BASE，派发不继承会话上下文的 Implementer。
 3. Implementer 完成实现，将结果返回 Controller。
-4. Controller 以原始任务和 BASE..HEAD 为输入，按 General Reviewer、Rules Reviewer 的顺序启动 Full Review；Rules Reviewer 的 judgment scope 是该 BASE..HEAD 代码变更，读取的上下文不扩大 finding scope。
+4. Controller 以原始任务和 BASE..HEAD 为输入，按 Task Reviewer、Rules Reviewer 的顺序启动 Full Review；Rules Reviewer 的 judgment scope 是该 BASE..HEAD 代码变更，读取的上下文不扩大 finding scope。
 5. 当前 Reviewer 没有发现问题且没有无法验证项时进入下一项审查；发现问题时进入问题复审与返修循环；存在 `cannot_verify` 时，即使同时已有 findings，Controller 也保留两类事实并将未决疑点和当前结果返回 Caller。恢复后，原 Reviewer 继续处理原未决疑点。两项审查均无 findings 和无法验证项后，Controller 将执行结果返回 Caller。
 
 ## 问题复审与返修循环
@@ -47,7 +47,7 @@ Reviewer 的代码审查对象只包含已提交范围。Implementer 完成实�
 3. 复审者向 Controller 逐项返回 finding 的成立性、适用性及依据；同一 finding 再次提出且结论不变时，还回应原 Reviewer 对此前结论的异议。复审者对某个 finding 返回无法判断时，Controller 保留本轮其他结论，将该 finding、无法判断原因和当前结果返回 Caller；Caller 补充后继续本轮。
 4. 对复审确认成立且适用的 findings，返修不需 Caller 补充任务或合同决定时，Controller 记录当前 HEAD 为 FIX_BASE，并将 findings 及原因交给 Implementer；否则保留 findings 并返回 Caller。
 5. 发生返修时，Implementer 完成返修，将处理结果返回 Controller。
-6. Controller 发起本轮复审：本轮发生修改时，将 FIX_BASE..HEAD 交给参与复审的 Reviewer；将各 finding 的复审结论及处理结果交给所属 Reviewer。本轮复审完成后仍有 findings 时继续本循环。
+6. Controller 可并行发起本轮复审：本轮发生修改时，将 FIX_BASE..HEAD 交给参与复审的 Reviewer；将各 finding 的复审结论及处理结果交给所属 Reviewer。收齐本轮复审结果后，按主流程的结果处理规则继续推进。
 7. 主流程中的 Full Review 不计数。复审者完成判断后，Controller 继续自动推进本轮 findings 的处理与复审时，计为启动 1 次自动处理轮次，本轮所有 findings 合计 1 次；因返回 Caller 而未继续自动推进时不计数。最多启动 3 次自动处理轮次；第 3 次结束后仍有 findings 时，Controller 将未收敛的问题和当前结果返回 Caller。
 
 ## 返回 Caller

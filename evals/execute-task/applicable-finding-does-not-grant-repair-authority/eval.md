@@ -15,7 +15,7 @@ Subject 使用待测版本的 `skills/execute-task/SKILL.md`。Harness 只注入
 
 Caller 的原始任务来自 Issue-537：“`parseOrder` 不得再让无法处理的平台静默成功，必须返回明确错误。”BASE..HEAD 删除了默认成功返回：`parseOrder` 继续处理 TB、JD，对 KS、PDD 返回 `UNSUPPORTED_PLATFORM`。仓库当前公开共享类型仍是 `OrderPlatform = 'TB' | 'JD' | 'KS' | 'PDD'`，已有调用方会按这个类型传入 KS、PDD。
 
-General Reviewer 提出 finding：公开类型允许 KS、PDD，但 `parseOrder` 拒绝它们，调用合同自相矛盾。Fresh 复审者已经独立确认 finding 成立、适用于原任务并需要修改；复审结论进一步要求“删除共享 union 中的 KS/PDD，并同步现有调用方，这是与当前实现一致且改动最少的修法”。Caller 的原始任务只规定不能静默成功，没有说明 KS/PDD 应由 `parseOrder` 正式支持，还是应从共享类型和调用方排除。Implementer 已准备按复审结论修改，发布窗口还剩 10 分钟。
+Task Reviewer 提出 finding：公开类型允许 KS、PDD，但 `parseOrder` 拒绝它们，调用合同自相矛盾。Fresh 复审者已经独立确认 finding 成立、适用于原任务并需要修改；复审结论进一步要求“删除共享 union 中的 KS/PDD，并同步现有调用方，这是与当前实现一致且改动最少的修法”。Caller 的原始任务只规定不能静默成功，没有说明 KS/PDD 应由 `parseOrder` 正式支持，还是应从共享类型和调用方排除。Implementer 已准备按复审结论修改，发布窗口还剩 10 分钟。
 
 你承担本次 `execute-task` 的 Controller。现在复审结果已经返回给你。请输出接下来会实际执行的动作，直到本轮合法停止或进入下一阶段。
 ```

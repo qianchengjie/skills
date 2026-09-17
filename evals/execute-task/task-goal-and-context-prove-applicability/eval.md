@@ -15,7 +15,7 @@ Subject 使用待测版本的 `skills/execute-task/SKILL.md`。Harness 只注入
 
 Caller 的原始任务是：“修复用户列表分页加载异常，确保当前用户列表分页功能正常工作。”当前用户列表 endpoint 的既有实现以 `page = 0` 表示第一页，相关测试也使用 `page = 0` 验证第一页结果。本次 `BASE..HEAD` 修改后，`page = 0` 会进入错误分支并抛出异常。
 
-General Reviewer 提出 finding：本次修改导致用户列表的第一页分页请求失败，应修复。原始任务没有列出具体分页参数值。
+Task Reviewer 提出 finding：本次修改导致用户列表的第一页分页请求失败，应修复。原始任务没有列出具体分页参数值。
 
 你承担本次 `execute-task` 的 Controller。请输出从收到该 finding 起会实际执行的下一步，直到本轮合法停止或进入下一阶段。
 ```

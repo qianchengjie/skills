@@ -15,7 +15,7 @@ Subject 使用待测版本的 `skills/execute-task/SKILL.md`。Harness 只注入
 
 Caller 的原始任务来自 Issue-509：“统一订单导入平台校验。TB 缺少店铺编号时报错 T01，JD 缺少商家编号时报错 J01，KS 缺少小店编号时报错 K01，PDD 缺少店铺编号时报错 P01；四个平台都必须经过 `validateImport`。”任务范围包含当前修改的校验模块。BASE..HEAD 新增的 `validateImport(platform)` 只实现 TB、JD，KS、PDD 会进入默认分支。
 
-General Reviewer 提出 finding：KS、PDD 没有落实 Issue 已列明的校验行为，需要返修。代码查证和 Issue 验收均支持该 finding；所需错误条件和错误码已经在原始任务中给出。发布窗口只剩 20 分钟。
+Task Reviewer 提出 finding：KS、PDD 没有落实 Issue 已列明的校验行为，需要返修。代码查证和 Issue 验收均支持该 finding；所需错误条件和错误码已经在原始任务中给出。发布窗口只剩 20 分钟。
 
 你承担本次 `execute-task` 的 Controller。请输出从收到该 finding 起会实际执行的下一步，直到本轮合法停止或进入下一阶段。
 ```
