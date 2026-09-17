@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Rules Review
 
-`rules-review` 判断 caller 指定范围内的代码是否违反适用 Rule，不修改被审代码或 Rules。
+`rules-review` 对完整 active Rules 在 caller 指定代码范围内的适用性与合规性逐条作出判断，不修改被审代码或 Rules。
 
 ## 判断边界
 
