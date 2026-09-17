@@ -27,7 +27,7 @@
 | [`task-review`](skills/task-review/SKILL.md) | 只读审查明确任务在指定代码范围内的需求正确性与实现设计，可独立使用或由 execute-task 委派。 |
 | [`rules-review`](skills/rules-review/SKILL.md) | 对 caller 指定的代码范围执行轻量 Rule applicability 与 violation 审查。 |
 
-首轮审查中，`execute-task` 的 Task Reviewer 通过 `task-review` 派发独立 agent，并行审查需求与设计、汇总结果，再进行 Rules Review；独立裁决、修复权限判断和原 Implementer 返修仍由执行流程处理。
+首轮审查中，`execute-task` 的 Task Reviewer 通过 `task-review` 自行审查需求与设计，分别给出结论，再由独立的 Rules Reviewer 逐条审查完整 active Rules；独立裁决、修复权限判断和原 Implementer 返修仍由执行流程处理。
 
 ### 协作状态与方向控制
 
