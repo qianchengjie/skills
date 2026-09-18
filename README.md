@@ -1,52 +1,62 @@
 # Codex Skills
 
-面向 AI 辅助软件开发的可复用 Codex skills 集合。本仓库聚焦架构与规则治理、任务执行与交付、审查以及跨会话协作，使 agent 在明确的范围和授权边界内工作，并留下可验证的决策与交付证据。
+用于 AI 辅助开发的可复用 Codex skills，涵盖任务执行、审查返修、架构与规则维护，以及跨会话协作。
 
-## Skills
+它们帮助 AI 在明确的任务范围内推进工作，让实现、审查和项目决定各有分工；遇到需要补充需求或改变约定的问题时，把问题交回给你。
 
-### 开发任务与交付
+## 如何配合使用
 
-| Skill | 用途 |
+这套开发方式组合了三个来源的 skills：
+
+- **需求与任务准备**：使用 [Matt 的 skills](https://github.com/mattpocock/skills)，通过 `grill-with-docs` 或 `wayfinder` 澄清需求，用 `to-spec` 形成需求说明，按需用 `to-tickets` 拆分开发任务。
+- **实现方法**：采用 [Superpowers](https://github.com/obra/superpowers) 的 `test-driven-development`，先运行失败测试，再完成最小实现，并在测试通过后重构。
+- **执行与协作**：本仓库的 `execute-task` 组织实现、独立审查和返修；其他 skills 负责任务拆分维护、架构与规则管理，以及下一步的责任判断。
+
+目标、范围和验收已经明确时，可以直接交给 `execute-task`。例如：
+
+```text
+使用 execute-task 完成以下任务：<目标、范围和验收条件>。
+实现阶段使用 Superpowers 的 test-driven-development。
+```
+
+各阶段的分工、交接与设计理由见 [项目总览](docs/overview.md)。
+
+## 本仓库的 skills
+
+各 skill 也可以按需单独使用。下表链接到面向读者的说明，每篇说明都提供对应 `SKILL.md` 的执行协议入口。
+
+| Skill | 用来做什么 |
 | --- | --- |
-| [`ticket-steward`](skills/ticket-steward/SKILL.md) | 评审拆分质量，落实已确认的拆分方案，维护票据集合、关系与拆分记录。 |
-| [`execute-task`](skills/execute-task/SKILL.md) | 组织一个目标、范围与验收已经明确的软件开发任务的实现、审查与必要返修。 |
-| [`whats-next`](skills/whats-next/SKILL.md) | 在开发中不知道下一步做什么或发现跨层问题时，判断唯一责任归属并停止。 |
+| [`ticket-steward`](docs/ticket-steward.md) | 检查已有任务拆分，落实确认后的调整。 |
+| [`execute-task`](docs/execute-task.md) | 组织一个明确任务的实现、审查和返修。 |
+| [`task-review`](docs/task-review.md) | 检查实现是否满足任务要求，以及设计中的具体问题。 |
+| [`rules-review`](docs/rules-review.md) | 逐条判断项目有效规则是否适用，并检查代码是否遵守。 |
+| [`architecture-steward`](docs/architecture-steward.md) | 记录、确认和维护项目架构决定。 |
+| [`rule-steward`](docs/rule-steward.md) | 建立和维护项目规则，提供规则查询。 |
+| [`whats-next`](docs/whats-next.md) | 判断当前问题应该交给哪个环节继续。 |
+| [`checkpoint`](docs/checkpoint.md) | 保存讨论进展，方便在另一个会话中接着讨论。 |
+| [`tell-me-first`](docs/tell-me-first.md) | 在动手前简要说明准备做什么，等待你的确认。 |
+| [`way-out`](docs/way-out.md) | 当前路线受阻时，重新寻找和比较可行方向。 |
+| [`bounded-agency-review`](docs/bounded-agency-review.md) | 检查给 AI 的规则和流程是否职责清楚、边界合理，是否有多余机制。 |
 
-### 架构与规则治理
+## 安装
 
-| Skill | 用途 |
-| --- | --- |
-| [`architecture-steward`](skills/architecture-steward/SKILL.md) | 创建、读取和维护 `ARCHITECTURE.md` 架构真源，承载经人工确认的架构决定。 |
-| [`rule-steward`](skills/rule-steward/SKILL.md) | 初始化和维护 `.agents/rules/` 项目规则协议。 |
+安装本仓库提供的 skills：
 
-### 审查与审计
+```bash
+npx skills add qianchengjie/skills --global
+```
 
-| Skill | 用途 |
-| --- | --- |
-| [`bounded-agency-review`](skills/bounded-agency-review/SKILL.md) | 审查 skill、规则、workflow 或 prompt 的 agent contract，并判断是否需要剪枝。 |
-| [`task-review`](skills/task-review/SKILL.md) | 只读审查明确任务在指定代码范围内的需求正确性与实现设计，可独立使用或由 execute-task 委派。 |
-| [`rules-review`](skills/rules-review/SKILL.md) | 对 caller 指定的代码范围执行轻量 Rule applicability 与 violation 审查。 |
+可在 [skills.sh](https://skills.sh/qianchengjie/skills) 查看本仓库 skills。
 
-首轮审查中，`execute-task` 的 Task Reviewer 通过 `task-review` 自行审查需求与设计，分别给出结论，再由独立的 Rules Reviewer 逐条审查完整 active Rules；独立裁决、修复权限判断和原 Implementer 返修仍由执行流程处理。
-
-### 协作状态与方向控制
-
-| Skill | 用途 |
-| --- | --- |
-| [`checkpoint`](skills/checkpoint/SKILL.md) | 显式保存当前讨论状态，供跨会话、工具或智能体继续讨论。 |
-| [`tell-me-first`](skills/tell-me-first/SKILL.md) | 在产生实际变更前简要说明目标并等待确认。 |
-| [`way-out`](skills/way-out/SKILL.md) | 在当前路线可能错误、反复尝试无进展或现有选项均不理想时，寻找结构上不同的可行方向。 |
+Matt 和 Superpowers 的 skills 需按各自项目说明另行安装。
 
 ## 验证
+
+在本仓库运行：
 
 ```bash
 ./scripts/validate-all.sh
 ```
 
-## 安装
-
-```bash
-npx skills@1.5.20 add qianchengjie/skills --global
-```
-
-可在 [skills.sh](https://skills.sh/qianchengjie/skills) 查看本仓库 skills。
+该命令检查 skill 格式、调用设置，并运行仓库现有的脚本测试。
