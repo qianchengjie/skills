@@ -10,7 +10,7 @@
 
 - **需求与任务准备**：使用 [Matt 的 skills](https://github.com/mattpocock/skills)，通过 `grill-with-docs` 或 `wayfinder` 澄清需求，用 `to-spec` 形成需求说明，按需用 `to-tickets` 拆分开发任务。
 - **实现方法**：采用 [Superpowers](https://github.com/obra/superpowers) 的 `test-driven-development`，先运行失败测试，再完成最小实现，并在测试通过后重构。
-- **执行与协作**：本仓库的 `execute-task` 组织实现、独立审查和返修；其他 skills 负责任务拆分维护、架构与规则管理，以及下一步的责任判断。
+- **执行与协作**：本仓库的 `execute-task` 组织实现、独立审查和返修；其他 skills 负责任务拆分维护、架构与规则管理，以及开发工作流导航。
 
 目标、范围和验收已经明确时，可以直接交给 `execute-task`。例如：
 
@@ -33,7 +33,7 @@
 | [`rules-review`](docs/rules-review.md) | 逐条判断项目有效规则是否适用，并检查代码是否遵守。 |
 | [`architecture-steward`](docs/architecture-steward.md) | 记录、确认和维护项目架构决定。 |
 | [`rule-steward`](docs/rule-steward.md) | 建立和维护项目规则，提供规则查询。 |
-| [`whats-next`](docs/whats-next.md) | 判断当前问题应该交给哪个环节继续。 |
+| [`whats-next`](docs/whats-next.md) | 了解下一步有哪些选择、各入口的适用场景和常见工作流。 |
 | [`checkpoint`](docs/checkpoint.md) | 保存讨论进展，方便在另一个会话中接着讨论。 |
 | [`tell-me-first`](docs/tell-me-first.md) | 在动手前简要说明准备做什么，等待你的确认。 |
 | [`way-out`](docs/way-out.md) | 当前路线受阻时，重新寻找和比较可行方向。 |

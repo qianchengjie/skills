@@ -26,4 +26,4 @@
 
 正式 Spec、计划和任务仍由对应流程维护。Checkpoint 可以保留已进入正式材料的决定及其引用，帮助理解讨论来由；实际发现双方冲突时，把相关内容交给你裁决。
 
-需要判断由哪个环节继续时，可以使用 [whats-next](whats-next.md)。整套流程见 [项目总览](overview.md)。
+需要了解接下来有哪些选择及其适用情况时，可以使用 [whats-next](whats-next.md)。整套流程见 [项目总览](overview.md)。
