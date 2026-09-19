@@ -27,13 +27,14 @@ flowchart TB
     end
 
     execution --> resultReview{{"实现 Review"}}
-    resultReview --> acceptance["集成与验收"]
+    resultReview -->|"通过，仍有后续任务"| execution
+    resultReview -->|"各任务均通过"| acceptance["集成与验收"]
 
     classDef human fill:#fff4df,stroke:#b7791f,color:#663c00
     class splitReview,resultReview human
 ```
 
-图中斜杠分隔的入口有各自的适用条件：有工作目录时用 `grill-with-docs`，没有工作目录时用 `grill-me`；探索本身复杂、方向未明且一个会话无法理清时，使用 `wayfinder`。需要跨会话实现的工作按 `to-spec`、`to-tickets` 的顺序准备；目标、范围和验收已经明确且无需拆分的小任务，可以直接使用 `execute-task`。
+图中斜杠分隔的入口有各自的用途：只需要通过访谈澄清计划或设计时，可以使用 `grill-me`；在项目开发中还需要同步维护领域语言、`CONTEXT.md` 和 ADR 时，使用 `grill-with-docs`；探索本身复杂、方向未明且一个会话无法理清时，使用 `wayfinder`。在本组合流程中，需要跨会话实现的工作按 `to-spec`、`to-tickets` 的顺序准备；目标、范围和验收已经明确且无需拆分的小任务，可以直接使用 `execute-task`。
 
 图中的两次 Review 由人完成：拆分结果通过后开始首个任务；每个任务的实现结果通过后，才开始依赖它的下游任务。使用 `execute-task` 时，在交接中指定 `test-driven-development` 作为实现方法；两类独立审查及必要的返修由它组织。集成与整体验收由调用方继续安排。
 
@@ -43,9 +44,9 @@ flowchart TB
 
 开发开始时，最有价值的产出往往是一个明确的决定。预期行为、范围和验收方式越清楚，后续实现与审查就越少依赖猜测。
 
-在工作目录中澄清需求时，使用 Matt 的 `grill-with-docs`。它结合 `grilling` 与 `domain-modeling`，通过讨论统一领域语言，并将术语和决定记录在 `CONTEXT.md` 与 ADR 中。没有工作目录时，使用 `grill-me` 进行访谈。需要外部事实时可以用 `research`，需要观察交互或状态模型才能决定时可以用 `prototype`。这些方法服务于当前未决问题，按需要使用。
+只需要通过访谈澄清计划或设计时，可以使用 Matt 的 `grill-me`，它调用 `grilling`。在项目开发中还需要同步维护领域语言、`CONTEXT.md` 和 ADR 时，使用 `grill-with-docs`，它结合 `grilling` 与 `domain-modeling` 完成这些工作。需要外部事实时可以用 `research`，需要观察交互或状态模型才能决定时可以用 `prototype`。这些方法服务于当前未决问题，按需要使用。
 
-当探索本身很大、方向尚未明确，无法在单个会话中理清时，`wayfinder` 建立决定地图，把未决问题组织成可逐项解决的决定票据。每张票据保存相应问题的结论，地图索引这些决定。探索收敛后，从 `to-spec` 接入后续需求说明与任务准备。
+当探索本身很大、方向尚未明确，无法在单个会话中理清时，`wayfinder` 建立决定地图，把未决问题组织成可逐项解决的决定票据。每张票据保存相应问题的结论，地图索引这些决定。在本组合流程中，探索收敛后需要进入后续开发时，从 `to-spec` 接入需求说明与任务准备。
 
 需要跨会话实现时，先用 `to-spec` 将讨论或决定地图中的结论整理为需求说明（Spec），包含预期行为、范围以及实现和测试方面的决定；再用 `to-tickets` 生成开发任务（Ticket），明确各项交付及前置依赖。它们把讨论中的共同理解带给后续参与者。
 
