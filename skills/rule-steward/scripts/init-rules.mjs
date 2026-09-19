@@ -66,7 +66,7 @@ const files = [
 \`\`\`md
 ### <RULE-ID> <中文短标题>
 
-- 级别：MUST | SHOULD | ADVISORY
+- 级别：MUST | SHOULD
 - 生效条件：<什么时候适用>
 - 规则：
   <完整规范正文，可分段或列点>

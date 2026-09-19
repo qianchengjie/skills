@@ -17,7 +17,7 @@ description: "管理 `.agents/rules/` 下的项目规则协议：初始化规则
 - 定义和维护 `.agents/rules/index.md`；
 - 新增或检查 namespace 和规则文件；
 - 新增、获取或废弃带编号的规则；
-- 解释 `MUST`、`SHOULD`、`ADVISORY` 和 `cannot-verify` 语义。
+- 解释 `MUST`、`SHOULD` 和 `cannot-verify` 语义。
 
 不要使用本 skill 来：
 
@@ -117,7 +117,7 @@ active 规则不得声明必须加载、展开或继承另一个规则 ID。规�
 使用此正文：
 
 ```md
-- 级别：MUST | SHOULD | ADVISORY
+- 级别：MUST | SHOULD
 - 生效条件：<什么时候适用>
 - 规则：
   <完整规范正文，可分段或列点>
@@ -139,13 +139,11 @@ active 规则不得声明必须加载、展开或继承另一个规则 ID。规�
 
 - `MUST`：适用时必须满足；违反时应导致 review 失败；缺少证据时为 `cannot-verify`。
 - `SHOULD`：默认应满足；偏离时需要明确原因和风险。
-- `ADVISORY`：信息性指导；本身不得阻塞 done。
 
 `cannot-verify` 表示当前材料不足以判断是否符合规则。
 
 - 对 `MUST`，它会阻塞 passed / done，直到补充证据；如消费 workflow 支持降级，必须用显式 waiver / accepted-risk 状态记录授权来源、适用范围、原因和剩余风险，且不得把 `cannot-verify` 静默改写为 `passed`。
 - 对 `SHOULD`，把它记录为风险；由消费它的 workflow 或 reviewer 判断是否阻塞。
-- 对 `ADVISORY`，它本身不阻塞。
 
 ## Retired 规则
 

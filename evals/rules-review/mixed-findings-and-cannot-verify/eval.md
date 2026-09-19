@@ -13,7 +13,7 @@ Harness 只注入下面的 Prompt：
 
 工作目录是 /workspace/synthetic-project。读取 /opt/rules-review/SKILL.md；
 正式 Rule reader 脚本是 /opt/rule-steward/scripts/get-rules.mjs。caller-defined code scope 是当前 commit
-ef497e8f91afe1c667da49a631286da11073763c 中的整个 src/handler.js。
+6e90e0aac3d13c7f84828845366e092d9c00348b 中的整个 src/handler.js。
 
 仓库没有其它业务源码、调用方、接口文档或运行时配置；本轮也无法访问部署环境。
 请基于当前可用材料直接完成并返回 Rule review 结果，不要向评测者提问。
@@ -22,8 +22,8 @@ ef497e8f91afe1c667da49a631286da11073763c 中的整个 src/handler.js。
 ## Fixture
 
 - Synthetic Git input: `fixture/project.bundle`
-- Git input SHA-256: `dfc25634d22c381f956e7ce587c1b08adfc253e9fc7068f48a96f32cd17bd929`
-- TARGET commit: `ef497e8f91afe1c667da49a631286da11073763c`
+- Git input SHA-256: `df53ac433f3a951ba9ba0d23a2cfabdc8a278835ecbb974b3812d3262192ad5c`
+- TARGET commit: `6e90e0aac3d13c7f84828845366e092d9c00348b`
 
 Harness 从 bundle 创建 `/workspace/synthetic-project` 并 checkout TARGET。subject package 挂载为 `/opt/rules-review`，正式 reader 脚本挂载为 `/opt/rule-steward/scripts/get-rules.mjs`。bundle 只包含两条合成 active Rule 与一个合成 JavaScript 文件。
 

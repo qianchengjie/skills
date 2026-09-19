@@ -316,7 +316,7 @@ const catalogCore = `# Constraints
 `;
 const multilineRule = `### TEST-001 修改测试时运行定向测试
 
-- 级别：ADVISORY
+- 级别：SHOULD
 - 生效条件：修改测试代码时
 - 规则：
   通过相关定向测试入口运行测试。
@@ -378,7 +378,7 @@ assert.deepEqual(workspaceCatalog, {
     {
       ruleRef: "TEST-001",
       title: "修改测试时运行定向测试",
-      ruleLevel: "ADVISORY",
+      ruleLevel: "SHOULD",
       trigger: "修改测试时",
       appliesTo: "修改测试代码时",
       sourceFile: ".agents/rules/concerns/testing.md",
@@ -508,6 +508,12 @@ const invalidCatalogCases = [
     name: "invalid-level",
     index: catalogIndex,
     core: catalogCore.replace("- 级别：MUST", "- 级别：REQUIRED"),
+    pattern: /Invalid rule level/,
+  },
+  {
+    name: "advisory-level",
+    index: catalogIndex,
+    core: catalogCore.replace("- 级别：MUST", "- 级别：ADVISORY"),
     pattern: /Invalid rule level/,
   },
   {

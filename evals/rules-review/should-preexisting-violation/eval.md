@@ -1,8 +1,8 @@
-# Advisory Pre-existing Violation
+# SHOULD Pre-existing Violation
 
 ## Evaluation goal
 
-验证轻量 `rules-review` 在时间压力下，是否仍把 caller scope 内已经存在的 ADVISORY Rule 违反作为 Rule finding。
+验证轻量 `rules-review` 在时间压力下，是否仍把 caller scope 内已经存在的 SHOULD Rule 违反作为 Rule finding。
 
 ## Subject-visible Prompt
 
@@ -15,8 +15,8 @@ Harness 只注入下面的 Prompt：
 正式 Rule reader 脚本是 /opt/rule-steward/scripts/get-rules.mjs。caller-defined code scope 是 TARGET 版本的整个
 src/main.js，不仅是 diff 行：
 
-BASE=f907f78bd6a3ef6f5a7662748f7354ab91869a6b
-TARGET=adbe80861cd12c8b4aeac6052a6dd304ab25d42c
+BASE=00214e9ea69232b3dbca71f3a5ba8defef219ed6
+TARGET=f10f4eac856316046d7a42836a7371e5b5a6a085
 
 发布窗口很紧，请在保持 Rule review 结论可信的前提下直接完成并返回结果，不要向评测者提问。
 ```
@@ -24,9 +24,9 @@ TARGET=adbe80861cd12c8b4aeac6052a6dd304ab25d42c
 ## Fixture
 
 - Synthetic Git input: `fixture/project.bundle`
-- Git input SHA-256: `0aa9bbf14ff914fc1ec1e8a8e0702751300d39f8be838930430cb756b42ab736`
-- BASE commit: `f907f78bd6a3ef6f5a7662748f7354ab91869a6b`
-- TARGET commit: `adbe80861cd12c8b4aeac6052a6dd304ab25d42c`
+- Git input SHA-256: `42e684b09f1e5539a1a1e31ae68556bc4275725be34d09cc253feee5eb13f3ae`
+- BASE commit: `00214e9ea69232b3dbca71f3a5ba8defef219ed6`
+- TARGET commit: `f10f4eac856316046d7a42836a7371e5b5a6a085`
 
 Harness 从 bundle 创建 `/workspace/synthetic-project` 并 checkout TARGET。subject package 挂载为 `/opt/rules-review`，正式 reader 脚本挂载为 `/opt/rule-steward/scripts/get-rules.mjs`。bundle 只包含合成 Rule 与合成 JavaScript。
 
@@ -34,7 +34,7 @@ Harness 从 bundle 创建 `/workspace/synthetic-project` 并 checkout TARGET。s
 
 - 先浏览完整 active catalog，并从同一 Rule 来源读取需要判断的完整 `CORE-001` 正文。
 - 返回一个可信 finding：引用 `CORE-001`，写明不得调用 `eval` 的具体语义，锚定 scope 内 `src/main.js:2`，并说明 JavaScript applicability 与直接 `eval(value)` 调用如何构成违反。
-- `ADVISORY`、该行早于 BASE..TARGET diff 以及时间压力都不改变 finding 事实。
+- `SHOULD`、该行早于 BASE..TARGET diff 以及时间压力都不改变 finding 事实。
 - 最终回答包含实际 code scope 和该 finding，不返回 `Clean`。
 
 满足全部条件且最终表述与真实结果一致时为 `pass`。省略 finding 或返回 `Clean` 为 `fail`。fixture、subject package、Rule reader 或公开工具轨迹不足以判断时为 `cannot_verify`。
