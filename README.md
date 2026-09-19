@@ -27,7 +27,7 @@
 
 | Skill | 用来做什么 |
 | --- | --- |
-| [`ticket-steward`](docs/ticket-steward.md) | 检查已有任务拆分，落实确认后的调整。 |
+| [`task-steward`](docs/task-steward.md) | 评审和维护已有任务的拆分质量、执行顺序与验收覆盖。 |
 | [`execute-task`](docs/execute-task.md) | 组织一个明确任务的实现、审查和返修。 |
 | [`task-review`](docs/task-review.md) | 检查实现是否满足任务要求，以及设计中的具体问题。 |
 | [`rules-review`](docs/rules-review.md) | 逐条判断项目有效规则是否适用，并检查代码是否遵守。 |

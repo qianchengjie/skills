@@ -27,8 +27,9 @@ description: 开发事项中不确定下一步做什么、该由哪个 skill 或
 | 需求或契约仍有待决定的分叉 | 探索层 | 当前会话可澄清时用 `grill-with-docs`；需要跨会话逐步决策时用 `wayfinder`；决定明确后用 `to-spec`，再进入 `execute-task` |
 | 需求已经明确，但尚未形成可执行 Spec，或当前 Spec 写错 | Spec 层 | 用 `to-spec` 形成或修正 Spec；完成后进入 `execute-task` |
 | 当前下一步本身是读取或管理 Architecture Authority，包括创建、新增、修改、删除、确认或重新打开 | Architecture 层 | 用 `architecture-steward` 读取或管理 Architecture Authority |
+| 已有任务的拆分粒度、执行顺序或覆盖关系有问题 | 规划层 | 用 `task-steward` 评审和维护已有任务的拆分质量 |
 | Spec 已明确且正确，下一步是实现或验证 | 执行层 | 用 `execute-task` 组织这个目标、范围与验收已经明确的软件开发任务 |
-| 代码、任务或验证有问题 | 执行层 | 明确修复任务的目标、范围与验收后，用 `execute-task` 组织执行 |
+| 代码或验证有问题 | 执行层 | 明确修复任务的目标、范围与验收后，用 `execute-task` 组织执行 |
 | 代码违反当前有效规则 | 执行层 | 明确修复任务的目标、范围与验收后，用 `execute-task` 组织执行与审查 |
 | 规则定义本身错误 | 规则层 | 用 `rule-steward` 修正规则；完成后进入 `execute-task` |
 
