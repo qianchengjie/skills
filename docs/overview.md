@@ -6,15 +6,48 @@
 
 本文解释这些部分为什么存在、如何配合。每个 skill 的具体执行要求以它自己的 `SKILL.md` 为准。
 
+先按需要使用准备阶段的 skills，再逐项交付任务。
+
+```mermaid
+flowchart TB
+    subgraph preparation ["任务准备"]
+        direction LR
+        exploration["grill-me / grill-with-docs / wayfinder"] --> spec["to-spec"]
+        spec --> tickets["to-tickets"]
+        tickets --> steward["task-steward"]
+    end
+
+    preparation --> splitReview{{"拆分 Review"}}
+    splitReview --> execution
+
+    subgraph execution ["execute-task"]
+        direction LR
+        implement["test-driven-development"] --> taskReview["task-review"]
+        taskReview --> rulesReview["rules-review"]
+    end
+
+    execution --> resultReview{{"实现 Review"}}
+    resultReview --> acceptance["集成与验收"]
+
+    classDef human fill:#fff4df,stroke:#b7791f,color:#663c00
+    class splitReview,resultReview human
+```
+
+图中斜杠分隔的入口有各自的适用条件：有工作目录时用 `grill-with-docs`，没有工作目录时用 `grill-me`；探索本身复杂、方向未明且一个会话无法理清时，使用 `wayfinder`。需要跨会话实现的工作按 `to-spec`、`to-tickets` 的顺序准备；目标、范围和验收已经明确且无需拆分的小任务，可以直接使用 `execute-task`。
+
+图中的两次 Review 由人完成：拆分结果通过后开始首个任务；每个任务的实现结果通过后，才开始依赖它的下游任务。使用 `execute-task` 时，在交接中指定 `test-driven-development` 作为实现方法；两类独立审查及必要的返修由它组织。集成与整体验收由调用方继续安排。
+
+代码问题回到当前任务返修，拆分问题回到 `task-steward`，需求问题回到需求 / Spec 层澄清；需要补充决定或证据时，由调用方组织处理。
+
 ## 先让任务有共同依据
 
 开发开始时，最有价值的产出往往是一个明确的决定。预期行为、范围和验收方式越清楚，后续实现与审查就越少依赖猜测。
 
-Matt 的 `grill-with-docs` 结合 `grilling` 与 `domain-modeling`，通过讨论澄清需求，并统一领域语言。需要外部事实时可以用 `research`，需要观察交互或状态模型才能决定时可以用 `prototype`。这些方法服务于当前未决问题，按需要使用。
+在工作目录中澄清需求时，使用 Matt 的 `grill-with-docs`。它结合 `grilling` 与 `domain-modeling`，通过讨论统一领域语言，并将术语和决定记录在 `CONTEXT.md` 与 ADR 中。没有工作目录时，使用 `grill-me` 进行访谈。需要外部事实时可以用 `research`，需要观察交互或状态模型才能决定时可以用 `prototype`。这些方法服务于当前未决问题，按需要使用。
 
-当探索跨越多个会话时，`wayfinder` 把问题组织成可逐项解决的决定票据。完成一张决定票据，意味着相应问题已有结论；这份结论随后成为需求或实现的依据。
+当探索本身很大、方向尚未明确，无法在单个会话中理清时，`wayfinder` 建立决定地图，把未决问题组织成可逐项解决的决定票据。每张票据保存相应问题的结论，地图索引这些决定。探索收敛后，从 `to-spec` 接入后续需求说明与任务准备。
 
-决定明确后，`to-spec` 将讨论整理为需求说明（Spec），包含预期行为、范围以及实现和测试方面的决定。工作需要分批交付时，再用 `to-tickets` 生成开发任务（Ticket），明确各项交付及前置依赖。它们把讨论中的共同理解带给后续参与者。
+需要跨会话实现时，先用 `to-spec` 将讨论或决定地图中的结论整理为需求说明（Spec），包含预期行为、范围以及实现和测试方面的决定；再用 `to-tickets` 生成开发任务（Ticket），明确各项交付及前置依赖。它们把讨论中的共同理解带给后续参与者。
 
 本仓库的 [task-steward](task-steward.md) 评审和维护已有任务的拆分质量，不绑定具体上游工具或任务载体。它关注的是交付责任有没有分清：粒度是否合适、执行顺序是否明确、是否完整覆盖上游给定的目标、范围与验收要求，以及局部完成后谁负责组合验证。拆分调整经过确认后，由它维护任务及相关关系。
 
