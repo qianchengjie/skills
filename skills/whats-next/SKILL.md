@@ -24,16 +24,16 @@ whats-next 是开发工作流中的导航 skill，帮助用户根据当前意图
 | 澄清需求或方案 | `grill-with-docs` | 通过当前讨论梳理未决问题，并记录领域语言和决定 |
 | 推进跨会话的复杂探索 | `wayfinder` | 工作超出单个会话，需要将未决问题组织成决定票据并逐项解决 |
 | 将讨论整理成 Spec | `to-spec` | 将已有讨论和决定整理为需求说明 |
-| 形成开发任务 | `to-tickets` | 将 Spec、计划或已有讨论拆成可交付的任务，并明确前置依赖 |
+| 拆分并生成开发票 | `to-tickets` | 需要将 Spec、计划或已有讨论拆成分批交付的开发票，并明确前置依赖 |
 | 检查或调整已有任务拆分 | `task-steward` | 已有任务的粒度、执行顺序或覆盖关系需要评审和维护 |
-| 执行一个已明确的开发任务 | `execute-task` | 单个任务的目标、范围与验收已经明确，需要组织实现、审查和返修 |
+| 开始实现已明确的开发任务 | `execute-task` | Spec 或其他材料已明确单个任务的目标、范围与验收，需要组织实现、审查和返修 |
 | 读取或管理架构决定 | `architecture-steward` | 需要读取、创建、修改或确认项目的长期架构约定 |
 | 维护项目规则 | `rule-steward` | 需要建立、查询或维护项目规则 |
 
 ## 常见 flow
 
-- **从需求到开发**：需要澄清需求时，用 `grill-with-docs`；探索需要跨会话推进时，用 `wayfinder`。讨论需要形成 Spec 时，用 `to-spec`；需要生成分批交付的任务时，用 `to-tickets`。
-- **从任务到执行**：已有任务需要检查或调整拆分时，用 `task-steward`；单个任务的目标、范围与验收已经明确时，可以直接用 `execute-task`。这套组合在实现阶段采用 Superpowers 的 `test-driven-development` 作为方法，由任务交接时指定。
+- **从需求到开发**：需要澄清需求时，用 `grill-with-docs`；探索需要跨会话推进时，用 `wayfinder`。讨论需要形成 Spec 时，用 `to-spec`；需要生成分批交付的开发票时，用 `to-tickets`。
+- **从任务到执行**：已有任务需要检查或调整拆分时，用 `task-steward`；Spec 或其他材料已明确单个任务的目标、范围与验收时，可以直接用 `execute-task`。这套组合在实现阶段采用 Superpowers 的 `test-driven-development` 作为方法，由任务交接时指定。
 - **维护项目约定**：需要处理长期架构决定或项目规则时，分别使用 `architecture-steward` 或 `rule-steward`。约定维护完成后，根据当时的意图和已有上下文选择后续入口。
 
 ## 职责边界
