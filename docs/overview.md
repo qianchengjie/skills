@@ -14,7 +14,8 @@ flowchart TB
         direction LR
         exploration["grill-me / grill-with-docs / wayfinder"] --> spec["to-spec"]
         spec --> tickets["to-tickets"]
-        tickets --> steward["task-steward"]
+        spec -->|"需判断拆分"| steward["task-steward"]
+        tickets -->|"需判断拆分"| steward
     end
 
     preparation --> splitReview{{"拆分 Review"}}
@@ -28,7 +29,7 @@ flowchart TB
 
     execution --> resultReview{{"实现 Review"}}
     resultReview -->|"通过，仍有后续任务"| execution
-    resultReview -->|"各任务均通过"| acceptance["集成与验收"]
+    resultReview -->|"各任务均通过"| acceptance["核对需求整体交付"]
 
     classDef human fill:#fff4df,stroke:#b7791f,color:#663c00
     class splitReview,resultReview human
@@ -36,7 +37,7 @@ flowchart TB
 
 图中斜杠分隔的入口有各自的用途：只需要通过访谈澄清计划或设计时，可以使用 `grill-me`；在项目开发中还需要同步维护领域语言、`CONTEXT.md` 和 ADR 时，使用 `grill-with-docs`；探索本身复杂、方向未明且一个会话无法理清时，使用 `wayfinder`。在本组合流程中，需要跨会话实现的工作按 `to-spec`、`to-tickets` 的顺序准备；目标、范围和验收已经明确且无需拆分的小任务，可以直接使用 `execute-task`。
 
-图中的两次 Review 由人完成：拆分结果通过后开始首个任务；每个任务的实现结果通过后，才开始依赖它的下游任务。使用 `execute-task` 时，在交接中指定 `test-driven-development` 作为实现方法；两类独立审查及必要的返修由它组织。集成与整体验收由调用方继续安排。
+图中的两次 Review 由人完成：拆分结果通过后开始首个任务；每个任务的实现结果通过后，才开始依赖它的下游任务。使用 `execute-task` 时，在交接中指定 `test-driven-development` 作为实现方法；两类独立审查及必要的返修由它组织。必要的集成与整体验收作为平级 task，由调用方按前置依赖安排执行。
 
 代码问题回到当前任务返修，拆分问题回到 `task-steward`，需求问题回到需求 / Spec 层澄清；需要补充决定或证据时，由调用方组织处理。
 
@@ -50,7 +51,7 @@ flowchart TB
 
 需要跨会话实现时，先用 `to-spec` 将讨论或决定地图中的结论整理为需求说明（Spec），包含预期行为、范围以及实现和测试方面的决定；再用 `to-tickets` 生成开发任务（Ticket），明确各项交付及前置依赖。它们把讨论中的共同理解带给后续参与者。
 
-本仓库的 [task-steward](task-steward.md) 评审和维护已有任务的拆分质量，不绑定具体上游工具或任务载体。它关注的是交付责任有没有分清：粒度是否合适、执行顺序是否明确、是否完整覆盖上游给定的目标、范围与验收要求，以及局部完成后谁负责组合验证。拆分调整经过确认后，由它维护任务及相关关系。
+本仓库的 [task-steward](task-steward.md) 判断已有需求是否需要拆分，不限定来源或载体。无需拆分时保留原需求并说明判断；需要时形成多个平级 task，明确范围、前置依赖和验收条件，并核对对原需求的整体覆盖。集成或组合验证按需作为普通 task。已有落实授权时，由它按项目约定写入拆分结果及相关引用。
 
 任务拆分及 AI 拆分评审收敛后，调用方将整体拆分结果交给人 Review。人确认任务边界、需求覆盖、依赖、交付顺序和整体方向符合预期后，再开始首个任务。`task-steward` 的 AI 评审为这次人工 Review 提供依据。
 
@@ -91,7 +92,7 @@ flowchart TB
 
 人工 Review 发现拆分问题时，回到 `task-steward` 调整任务集合；发现当前任务的代码问题时，回到该任务返修；发现需求本身有问题时，回到需求 / Spec 层澄清。拆分调整或代码返修收敛后，再交人 Review。
 
-多个任务之间的集成以及整个功能的验收，还需要由调用方继续组织；它们可能是父任务中尚未完成的工作。
+多个任务之间需要集成或整个功能需要验收时，将这些工作作为平级 task，依赖相应交付，由调用方继续组织执行。
 
 ## 给长期决定一个明确的维护位置
 

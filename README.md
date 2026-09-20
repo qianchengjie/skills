@@ -27,7 +27,7 @@
 
 | Skill | 用来做什么 |
 | --- | --- |
-| [`task-steward`](docs/task-steward.md) | 评审和维护已有任务的拆分质量、执行顺序与验收覆盖。 |
+| [`task-steward`](docs/task-steward.md) | 判断已有需求是否需要拆分，按需落实平级任务、前置依赖与验收覆盖。 |
 | [`execute-task`](docs/execute-task.md) | 组织一个明确任务的实现、审查和返修。 |
 | [`task-review`](docs/task-review.md) | 检查实现是否满足任务要求，以及设计中的具体问题。 |
 | [`rules-review`](docs/rules-review.md) | 逐条判断项目有效规则是否适用，并检查代码是否遵守。 |
