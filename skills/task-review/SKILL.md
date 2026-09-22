@@ -1,6 +1,7 @@
 ---
 name: task-review
 description: 当需要只读审查一个已明确的软件开发任务在指定代码范围内的需求正确性与实现设计时使用。
+disable-model-invocation: true
 ---
 
 # Task Review
