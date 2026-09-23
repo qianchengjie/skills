@@ -16,6 +16,6 @@
 
 本地 tracker 模板可能使用 `.scratch/<feature>/spec.md`、`issues/` 和 `.scratch/<effort>/map.md`。它们是配置示例，是否长期保留取决于内容职责、在用引用和可访问的历史。
 
-项目采用 `architecture-steward` 时，按该协议维护 `ARCHITECTURE.md`。ADR 和 Spec 中的架构决定作为相关来源，新的或改变的决定交给既有维护与确认流程。
+项目采用 `architecture-steward` 时，将 `ARCHITECTURE.md` 的修改交给该入口处理，按其协议完成必要确认。ADR 和 Spec 中的架构决定作为相关来源。
 
 上游职责定义见 Matt 的 [domain-modeling](https://github.com/mattpocock/skills/blob/main/skills/engineering/domain-modeling/SKILL.md)、[to-spec](https://github.com/mattpocock/skills/blob/main/skills/engineering/to-spec/SKILL.md)、[to-tickets](https://github.com/mattpocock/skills/blob/main/skills/engineering/to-tickets/SKILL.md)、[wayfinder](https://github.com/mattpocock/skills/blob/main/skills/engineering/wayfinder/SKILL.md)、[research](https://github.com/mattpocock/skills/blob/main/skills/engineering/research/SKILL.md) 和 [prototype](https://github.com/mattpocock/skills/blob/main/skills/engineering/prototype/SKILL.md)。
