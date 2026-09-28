@@ -31,7 +31,7 @@
 | [`execute-task`](docs/execute-task.md) | 组织一个明确任务的实现、审查和返修。 |
 | [`task-review`](docs/task-review.md) | 检查实现是否满足任务要求，以及设计中的具体问题。 |
 | [`rules-review`](docs/rules-review.md) | 逐条判断项目有效规则是否适用，并检查代码是否遵守。 |
-| [`knowledge-steward`](docs/knowledge-steward.md) | 管理项目知识库，维护内容与引用关系，按实际需要处理材料去留。 |
+| [`knowledge-steward`](docs/knowledge-steward.md) | 维护项目长期知识与引用关系，并在需要时整理知识文档的提交候选。 |
 | [`architecture-steward`](docs/architecture-steward.md) | 记录、确认和维护项目架构决定。 |
 | [`rule-steward`](docs/rule-steward.md) | 建立和维护项目规则，提供规则查询。 |
 | [`whats-next`](docs/whats-next.md) | 了解下一步有哪些选择、各入口的适用场景和常见工作流。 |
