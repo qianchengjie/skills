@@ -6,7 +6,7 @@
 
 | 材料及来源 | 原有职责 | 知识维护时如何处理 |
 | --- | --- | --- |
-| `domain-modeling`、`grill-with-docs` 使用的 `CONTEXT.md`、`CONTEXT-MAP.md` | 领域词汇表，以及多个领域上下文的位置与关系。 | 沿用统一术语和领域边界；领域模型的调整交给领域维护入口。 |
+| `domain-modeling`、`grill-with-docs` 使用的 `GLOSSARY.md`、`GLOSSARY-MAP.md` | 领域词汇表，以及多个领域上下文的位置与关系。 | 沿用统一术语和领域边界；领域模型的调整交给领域维护入口。 |
 | ADR，通常位于 `docs/adr/` | 记录有实际取舍、难以逆转且缺少背景会令人困惑的决定及理由。 | 沿用有效决定及适用范围；变化按项目的决定维护协议处理，保留替代关系。 |
 | `to-spec` 的 Spec | 将讨论和决定整理为目标、用户故事、实现与测试决定、范围等，保存于配置的 tracker。 | 执行期间维护已确认内容；功能完成且 Spec 继续承载知识时，整理有效范围、行为和必要合同，引用当前依据。新的需求取舍交给调用方。 |
 | `to-tickets`、`task-steward` 的任务材料 | 承接可执行范围、拆分、依赖和验收条件。 | 作为阶段性执行材料使用，完成后提炼必要知识、迁移引用；任务拆分、范围和状态变化交给任务维护流程。 |
@@ -21,4 +21,4 @@
 
 项目采用 `architecture-steward` 时，`ARCHITECTURE.md` 的修改交给该入口处理并按其协议确认，ADR 和 Spec 中的架构决定作为相关来源。项目规则的维护交给 `rule-steward`；知识整理中发现的候选做法保留其当前状态，由相应维护入口判断是否成为约定。
 
-上游职责定义见 Matt 的 [domain-modeling](https://github.com/mattpocock/skills/blob/main/skills/engineering/domain-modeling/SKILL.md)、[to-spec](https://github.com/mattpocock/skills/blob/main/skills/engineering/to-spec/SKILL.md)、[to-tickets](https://github.com/mattpocock/skills/blob/main/skills/engineering/to-tickets/SKILL.md)、[wayfinder](https://github.com/mattpocock/skills/blob/main/skills/engineering/wayfinder/SKILL.md)、[research](https://github.com/mattpocock/skills/blob/main/skills/engineering/research/SKILL.md) 和 [prototype](https://github.com/mattpocock/skills/blob/main/skills/engineering/prototype/SKILL.md)。
+上游配置与职责定义见 Matt 的 [setup-matt-pocock-skills](https://github.com/mattpocock/skills/blob/main/skills/engineering/setup-matt-pocock-skills/SKILL.md)、[domain-modeling](https://github.com/mattpocock/skills/blob/main/skills/engineering/domain-modeling/SKILL.md)、[to-spec](https://github.com/mattpocock/skills/blob/main/skills/engineering/to-spec/SKILL.md)、[to-tickets](https://github.com/mattpocock/skills/blob/main/skills/engineering/to-tickets/SKILL.md)、[wayfinder](https://github.com/mattpocock/skills/blob/main/skills/engineering/wayfinder/SKILL.md)、[research](https://github.com/mattpocock/skills/blob/main/skills/engineering/research/SKILL.md) 和 [prototype](https://github.com/mattpocock/skills/blob/main/skills/engineering/prototype/SKILL.md)。
