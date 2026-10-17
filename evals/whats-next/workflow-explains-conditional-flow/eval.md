@@ -23,7 +23,7 @@
 需要生成分批交付的任务时用 `to-tickets`，已有明确任务后进入 `execute-task`。
 
 切换依据是当前工作的需要与已有上下文，不能仅因工期长短规定必经步骤。提及 `task-steward` 时，
-将其用于已有任务的拆分评审和维护；说明 Superpowers 的 `test-driven-development` 是实现阶段的方法，
+将其用于拆分判断和已有划分复核；说明 Superpowers 的 `test-driven-development` 是实现阶段的方法，
 与 `execute-task` 组织任务执行相衔接。
 
 可以用段落、表格或流程箭头表达，流程箭头需有条件说明。只有名称或职责清单而没有入口与切换条件、

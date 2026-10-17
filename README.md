@@ -10,7 +10,7 @@
 
 - **需求与任务准备**：使用 [Matt 的 skills](https://github.com/mattpocock/skills)，通过 `grill-with-docs` 或 `wayfinder` 澄清需求，用 `to-spec` 形成需求说明，按需用 `to-tickets` 拆分开发任务。
 - **实现方法**：采用 [Superpowers](https://github.com/obra/superpowers) 的 `test-driven-development`，先运行失败测试，再完成最小实现，并在测试通过后重构。
-- **执行与协作**：本仓库的 `execute-task` 组织实现、独立审查和返修；其他 skills 负责任务拆分维护、架构与规则管理，以及开发工作流导航。
+- **执行与协作**：本仓库的 `execute-task` 组织实现、独立审查和返修；其他 skills 负责拆分判断、架构与规则管理，以及开发工作流导航。
 
 目标、范围和验收已经明确时，可以直接交给 `execute-task`。例如：
 
@@ -27,7 +27,7 @@
 
 | Skill | 用来做什么 |
 | --- | --- |
-| [`task-steward`](docs/task-steward.md) | 判断已有需求是否需要拆分，按需落实平级任务、前置依赖与验收覆盖。 |
+| [`task-steward`](docs/task-steward.md) | 判断已有需求是否需要拆分，复核已有划分的粒度、前置依赖与需求覆盖。 |
 | [`execute-task`](docs/execute-task.md) | 组织一个明确任务的实现、审查和返修。 |
 | [`task-review`](docs/task-review.md) | 检查实现是否满足任务要求，以及设计中的具体问题。 |
 | [`rules-review`](docs/rules-review.md) | 逐条判断项目有效规则是否适用，并检查代码是否遵守。 |
