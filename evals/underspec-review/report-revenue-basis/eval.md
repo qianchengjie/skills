@@ -9,7 +9,7 @@
 每次使用 fresh-context `skill_eval`。独立输入为同级 `input.md`；`<skill-path>` 和 `<input-path>` 只绑定被测 Skill 与该输入的实际读取路径。仅向 subject 提供下面的 Prompt 和对应文件，不提供本文件的目标、判据或用例名称。
 
 ```text
-你负责处理一项只读审阅请求。完整读取 <skill-path>，并使用 underspec-review 处理 <input-path> 中的请求，直接回复其中的用户。只读取这两个文件，不读取其他文件或 Skill，不调用其他 Agent，不修改任何文件。请实际完成审阅，不评价 Skill 或请求本身。
+你负责处理一项只读审阅请求。完整读取 <skill-path>，并使用 underspec-review 处理 <input-path> 中的请求，直接回复其中的用户。只允许读取这两个文件并以文字回复，不使用会话问答控件，不读取其他文件或 Skill，不调用其他 Agent，不修改任何文件。请实际完成审阅，不评价 Skill 或请求本身。
 ```
 
 ## Observable expectations
