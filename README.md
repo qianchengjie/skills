@@ -28,8 +28,9 @@
 | Skill | 用来做什么 |
 | --- | --- |
 | [`task-steward`](docs/task-steward.md) | 判断已有需求是否需要拆分，复核已有划分的粒度、前置依赖与需求覆盖。 |
+| [`test-analysis`](docs/test-analysis.md) | 为人工审查分析关键测试边界，或审查实际测试的保护能力与保留价值。 |
 | [`execute-task`](docs/execute-task.md) | 组织一个明确任务的实现、审查和返修。 |
-| [`task-review`](docs/task-review.md) | 检查实现是否满足任务要求，以及设计中的具体问题。 |
+| [`task-review`](docs/task-review.md) | 检查任务实现的需求正确性、设计及测试质量。 |
 | [`rules-review`](docs/rules-review.md) | 逐条判断项目有效规则是否适用，并检查代码是否遵守。 |
 | [`knowledge-steward`](docs/knowledge-steward.md) | 维护项目长期知识与引用关系，并在需要时整理知识文档的提交候选。 |
 | [`architecture-steward`](docs/architecture-steward.md) | 记录、确认和维护项目架构决定。 |

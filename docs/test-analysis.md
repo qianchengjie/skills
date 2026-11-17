@@ -1,0 +1,42 @@
+# test-analysis：审查关键测试边界与测试质量
+
+`test-analysis` 为实现前的人工 Review 分析关键测试边界，也为实现后的测试质量审查提供共享方法。当前版本开始试用，具体执行要求见 [SKILL.md](../skills/test-analysis/SKILL.md)。
+
+## 模型能力与审查职责分别判断
+
+模型能够完成测试分析，不代表现有入口已明确承担这项审查。新增方法指导是否有增量价值，与工作流是否交代了应该审查什么，是两个需要分别回答的问题。
+
+已有真实案例的探索性比较中，未使用 Skill 的模型也能作出较好的测试审查，尚未观察到方法指导带来稳定优势。这些比较给所有组都明确布置了测试审查任务，因此只能用于考察方法指导的增量，不能证明现有工作流已覆盖这项职责。静态、单案例的结果也不足以证明跨任务的稳定性。
+
+Skill 保留审查目标、责任边界、关键判断方法和可复核结果，让模型自主完成常规分析。是否需要长期保留独立 Skill，仍取决于实际复用收益。
+
+## 需要承接的两项审查
+
+- **实现前**：需求分析完成、任务生成后，独立识别当前任务应该保护的关键行为与测试边界，判断预期是否明确，为 human 审查提供依据。human 可以据此发现 implementer 可能遗漏的条件；具体用例仍由实现者设计。
+- **实现后**：结合实际测试检查关键边界是否得到保护，测试判断是否可信、能否发现重要错误，以及保留、调整或精简会改变什么保护。human 已审边界是重点，后续仍可提出有依据的新发现。
+
+两阶段共享契约依据、保护价值和证据要求。实现前分析保护目标及预期的明确程度；实现后才能结合实际测试判断覆盖、判定可信度、检错能力和维护负担。
+
+## 如何使用与承接结果
+
+| 位置 | 承接方式 |
+| --- | --- |
+| 既有任务人工 Review | 由调用方使用 `test-analysis` 准备关键边界、预期依据与未决事项，交 human 审查；确认结论沿用已有任务材料承接。 |
+| `task-steward` | 按需复用测试分析，判断拆分后的验证责任与组合验证如何承接。通用的实现前审查由调用方安排，避免依赖是否需要拆分任务。 |
+| `task-review` | 由同一位 Task Reviewer 调用实现后方法，承担任务关联的测试质量审查；问题仍落在指定审查范围内，范围外测试可作为保护证据。继续使用已有需求正确性、实现设计结论及 findings、cannot_verify。 |
+| `rules-review` | 按项目 active Rules 检查测试相关约定，问题须有具体规则依据。 |
+| `execute-task` | 继续组织实现、既有审查与返修，由 `task-review` 承接测试审查职责。 |
+
+这项安排复用现有人工 Review、审查角色和任务材料，不增加独立 Reviewer、第三类 verdict、门禁或状态协议。
+
+独立调用时，提供任务目标、范围和契约来源；实现后再提供可定位的代码与测试范围、被审状态，以及已有的人工边界审查结论（如有）。自然语言和已有任务材料即可，不要求额外文件或固定表单。
+
+实现前返回有来源和关注理由的边界清单、预期依据与未决事项；实现后返回分项判断、证据和统计，说明重要缺口与精简候选。经 `task-review` 使用时，已有保护、增强建议与待确认的精简候选保留在审查依据中；有证据支持的具体问题进入 findings，只有候选建议不影响 `Clean`。独立使用时直接返回调用方，不修改代码或决定任务推进。
+
+当前职责见 [task-steward](../skills/task-steward/SKILL.md)、[task-review](../skills/task-review/SKILL.md) 和 [项目总览](overview.md#先让任务有共同依据)。
+
+## 试用时关注什么
+
+应从实际入口和自然任务出发，确认审查职责能被可靠执行。比较共享方法的增量时，则在各组已承担相同职责的前提下，观察判断的一致性、可靠性、可复核性及重复维护成本。
+
+方法依据保留为研究参考：[Obra 的 Writing Good Tests](https://github.com/obra/superpowers/blob/22f0b463e7a5e579904dd6211a520321035526f7/skills/test-driven-development/writing-good-tests.md)，以及 Matt 的 [TDD](https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/tdd/SKILL.md)、[Tests](https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/tdd/tests.md) 和 [Mocking](https://github.com/mattpocock/skills/blob/5863806dd4e15c63174bee4e7515a4256792ecfa/skills/engineering/tdd/mocking.md)。

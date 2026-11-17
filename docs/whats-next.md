@@ -10,6 +10,8 @@
 
 例如，你说“这份需求太大了，想检查怎么拆、哪些先做”，可以直接推荐 [task-steward](task-steward.md)。如果只知道“需求已经写成 Spec”，则可以了解几个选择：需要生成分批交付的开发票并明确依赖时用 `to-tickets`，需要判断是否拆分或复核已有划分时用 `task-steward`，目标、范围与验收已明确，希望开始实现时用 [execute-task](execute-task.md)。
 
+任务已生成，想在人工 Review 前独立分析关键测试边界时，推荐 [test-analysis](test-analysis.md)。实现后只想审查测试保护与保留价值，也可单独使用它；需要同时审查任务实现、设计和测试质量时，推荐 [task-review](task-review.md)。
+
 导航默认使用已有上下文；具体材料的评审和执行准备检查由相应 skill 承担。
 
 ## 了解常见工作流
