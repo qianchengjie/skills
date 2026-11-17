@@ -30,6 +30,8 @@ Implementer 不得将本任务范围外的既有修改纳入本任务提交。
 
 Reviewer 的代码审查对象只包含已提交范围。Implementer 完成实现或返修并通过验证后提交本轮变更；一轮可包含多个 commits。无法继续时将原因返回 Controller。
 
+Controller 向 Task Reviewer 交接时，一并提供与被审状态对应的已有验证记录和覆盖率报告（如有），供审查复用。
+
 参与复审的 Reviewer 指当前任务中已经完成过审查的 Reviewer。
 
 ## 主流程
